@@ -34,8 +34,6 @@ function imageForm(file, opts = {}) {
   if (opts.stitchAngleDeg !== undefined) form.append('stitchAngleDeg', opts.stitchAngleDeg);
   if (opts.threshold)       form.append('threshold', opts.threshold);
   if (opts.whiteThreshold)  form.append('whiteThreshold', opts.whiteThreshold);
-  if (opts.blackThreshold)  form.append('blackThreshold', opts.blackThreshold);
-  if (opts.backgroundDistance) form.append('backgroundDistance', opts.backgroundDistance);
   if (opts.colors)          form.append('colors', JSON.stringify(opts.colors));
   return form;
 }

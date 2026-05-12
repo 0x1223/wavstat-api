@@ -53,9 +53,7 @@ function imageOptions(body) {
     targetWidthMm: parseFloat(body.widthMm) || 100,
     targetHeightMm: parseFloat(body.heightMm) || 100,
     stitchesPerMm: parseFloat(body.stitchesPerMm) || 4,
-    whiteThreshold: parseInt(body.whiteThreshold || body.threshold, 10) || 246,
-    blackThreshold: parseInt(body.blackThreshold, 10) || 18,
-    backgroundDistance: parseFloat(body.backgroundDistance) || 42,
+    whiteThreshold: parseInt(body.whiteThreshold || body.threshold, 10) || 128,
   };
 }
 
@@ -95,7 +93,7 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
 
     const stitchOpts = {
       stitchLengthMm: parseFloat(req.body.stitchLengthMm) || 3.0,
-      fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 1.2,
+      fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 0.5,
       underlaySpacingMm: parseFloat(req.body.underlaySpacingMm) || 2.0,
       satinWidthMm: parseFloat(req.body.satinWidthMm) || 1.8,
       stitchAngleDeg: parseFloat(req.body.stitchAngleDeg) || 35,

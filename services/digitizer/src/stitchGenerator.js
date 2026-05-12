@@ -5,7 +5,7 @@
 function generateStitches(bitmap, width, height, pixelsPerMm, options = {}) {
   const {
     stitchLengthMm = 3.0,
-    fillSpacingMm = 1.2,
+    fillSpacingMm = 0.5,
     satinWidthMm = 1.8,
     maxJumpMm = 20,
     stitchAngleDeg = 35,

@@ -12,7 +12,7 @@ async function processImage(buffer, options = {}) {
     threshold,
   } = options;
 
-  const t = whiteThreshold ?? threshold ?? 210;
+  const t = whiteThreshold ?? threshold ?? 128;
 
   let pipeline = sharp(buffer);
   const meta   = await pipeline.metadata();
@@ -56,7 +56,7 @@ async function previewMask(buffer, options = {}) {
     threshold,
   } = options;
 
-  const t = whiteThreshold ?? threshold ?? 210;
+  const t = whiteThreshold ?? threshold ?? 128;
 
   let pipeline = sharp(buffer);
   const meta   = await pipeline.metadata();

@@ -58,13 +58,11 @@ export default function DigitizerPage() {
     widthMm: 100,
     heightMm: 100,
     stitchesPerMm: 4,
-    fillSpacingMm: 1.2,
+    fillSpacingMm: 0.5,
     stitchLengthMm: 3,
     satinWidthMm: 1.8,
     stitchAngleDeg: 35,
-    threshold: 230,
-    blackThreshold: 18,
-    backgroundDistance: 42,
+    threshold: 128,
   });
   const set = (k) => (v) => setOpts(o => ({ ...o, [k]: v }));
 
@@ -83,7 +81,7 @@ export default function DigitizerPage() {
       .catch(e => { if (!cancelled) setError(e.message); })
       .finally(() => { if (!cancelled) setMaskLoading(false); });
     return () => { cancelled = true; };
-  }, [file, opts.widthMm, opts.heightMm, opts.stitchesPerMm, opts.threshold, opts.blackThreshold, opts.backgroundDistance]);
+  }, [file, opts.widthMm, opts.heightMm, opts.stitchesPerMm, opts.threshold]);
 
   const onDrop = (e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); };
 
@@ -165,9 +163,7 @@ export default function DigitizerPage() {
             <RangeRow label="Stitch angle" value={opts.stitchAngleDeg} onChange={set('stitchAngleDeg')} min={-75} max={75} step={5} unit="°" />
             <RangeRow label="Satin border" value={opts.satinWidthMm} onChange={set('satinWidthMm')} min={0.6} max={4} step={0.1} unit="mm" />
             <RangeRow label="Threshold" value={opts.threshold} onChange={set('threshold')} min={50} max={254} step={1} unit="" />
-            <RangeRow label="Black removal" value={opts.blackThreshold} onChange={set('blackThreshold')} min={0} max={80} step={1} unit="" />
-            <RangeRow label="BG tolerance" value={opts.backgroundDistance} onChange={set('backgroundDistance')} min={12} max={120} step={2} unit="" />
-            <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: -4 }}>Transparent, black, white, and sampled border-background pixels are removed before stitching.</div>
+            <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: -4 }}>Pixels where R, G, and B are all above this value are treated as background. Lower = keep more color. Default 128.</div>
           </div>
 
           {file && (
