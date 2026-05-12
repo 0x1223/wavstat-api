@@ -62,12 +62,17 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
 
     const stitchOpts = {
       stitchLengthMm: parseFloat(req.body.stitchLengthMm) || 3.0,
-      fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 0.5,
+      fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 1.2,
       underlaySpacingMm: parseFloat(req.body.underlaySpacingMm) || 2.0,
+      satinWidthMm: parseFloat(req.body.satinWidthMm) || 1.8,
+      stitchAngleDeg: parseFloat(req.body.stitchAngleDeg) || 35,
     };
 
     const { bitmap, width, height, pixelsPerMm } = await processImage(req.file.buffer, opts);
-    const stitches = generateStitches(bitmap, width, height, pixelsPerMm, stitchOpts);
+    const digitized = generateStitches(bitmap, width, height, pixelsPerMm, stitchOpts);
+    const stitches = Array.isArray(digitized) ? digitized : digitized.stitches;
+    const debugStitches = Array.isArray(digitized) ? [] : digitized.debugStitches;
+    const regions = Array.isArray(digitized) ? [] : digitized.regions;
 
     const stitchCount = stitches.filter(s => s.type === 'stitch').length;
     const jumpCount = stitches.filter(s => s.type === 'jump').length;
@@ -83,6 +88,8 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
       success: true,
       id: uuidv4(),
       stitches,
+      debugStitches,
+      regions,
       stitchCount,
       jumpCount,
       bounds: { minX, minY, maxX, maxY },
