@@ -57,7 +57,7 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
       targetWidthMm: parseFloat(req.body.widthMm) || 100,
       targetHeightMm: parseFloat(req.body.heightMm) || 100,
       stitchesPerMm: parseFloat(req.body.stitchesPerMm) || 4,
-      threshold: parseInt(req.body.threshold) || 128,
+      threshold: parseInt(req.body.threshold) || 230,
     };
 
     const stitchOpts = {

@@ -1,145 +1,189 @@
 import { useState, useRef, useCallback } from 'react';
-import { parseDST, parseSVGStitches } from '../utils/parseDST.js';
+import { parseDST, parseDSTHeader, parseSVGStitches, THREAD_PALETTE } from '../utils/parseDST.js';
 import StitchCanvas from '../components/StitchCanvas.jsx';
+
+function formatMm(units) { return (units / 10).toFixed(1) + ' mm'; }
 
 export default function ViewerPage() {
   const [dragging, setDragging] = useState(false);
   const [stitches, setStitches] = useState([]);
-  const [filename, setFilename] = useState(null);
+  const [meta, setMeta] = useState(null);
+  const [threads, setThreads] = useState([]);
   const [error, setError] = useState(null);
-  const [stats, setStats] = useState(null);
   const inputRef = useRef();
 
   const loadFile = useCallback(async (file) => {
     setError(null);
-    setFilename(file.name);
     const ext = file.name.split('.').pop().toLowerCase();
 
     try {
       const buf = await file.arrayBuffer();
-
       let parsed = [];
+      let header = null;
+
       if (ext === 'dst') {
+        header = parseDSTHeader(buf);
         parsed = parseDST(buf);
       } else if (ext === 'svg') {
-        const text = new TextDecoder().decode(buf);
-        parsed = parseSVGStitches(text);
+        parsed = parseSVGStitches(new TextDecoder().decode(buf));
       } else if (ext === 'json') {
-        const data = JSON.parse(new TextDecoder().decode(buf));
-        parsed = Array.isArray(data) ? data : data.stitches || [];
+        const d = JSON.parse(new TextDecoder().decode(buf));
+        parsed = Array.isArray(d) ? d : (d.stitches || []);
       } else {
-        setError(`Format .${ext} preview is not yet supported. Try DST, SVG, or JSON.`);
-        return;
+        throw new Error(`.${ext} is not supported. Use DST, SVG, or JSON.`);
       }
 
-      if (!parsed.length) { setError('No stitch data found in file.'); return; }
+      if (!parsed.length) throw new Error('No stitch data found in file.');
 
-      const stitchCount = parsed.filter(s => s.type === 'stitch').length;
-      const jumpCount = parsed.filter(s => s.type === 'jump').length;
+      // Compute stats
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const s of parsed) {
         if (s.type === 'end') continue;
         minX = Math.min(minX, s.x); minY = Math.min(minY, s.y);
         maxX = Math.max(maxX, s.x); maxY = Math.max(maxY, s.y);
       }
-      setStats({
-        stitchCount, jumpCount,
-        widthMm: ((maxX - minX) / 10).toFixed(1),
-        heightMm: ((maxY - minY) / 10).toFixed(1),
+
+      // Build thread list from color changes
+      const threadList = [];
+      let tIdx = 0;
+      threadList.push({ idx: 0, color: THREAD_PALETTE[0], count: 0 });
+      for (const s of parsed) {
+        if (s.type === 'color_change') {
+          tIdx++;
+          threadList.push({ idx: tIdx, color: THREAD_PALETTE[tIdx % THREAD_PALETTE.length], count: 0 });
+        } else if (s.type === 'stitch') {
+          if (threadList.length) threadList[threadList.length - 1].count++;
+        }
+      }
+
+      setMeta({
+        name: header?.name || file.name.replace(/\.[^.]+$/, ''),
+        filename: file.name,
+        ext: ext.toUpperCase(),
+        stitchCount: parsed.filter(s => s.type === 'stitch').length,
+        jumpCount: parsed.filter(s => s.type === 'jump').length,
+        colorChanges: parsed.filter(s => s.type === 'color_change').length,
+        widthUnits: maxX - minX,
+        heightUnits: maxY - minY,
+        totalPoints: parsed.length,
       });
+      setThreads(threadList);
       setStitches(parsed);
     } catch (e) {
       setError(e.message);
     }
   }, []);
 
-  const onDrop = e => {
+  const onDrop = useCallback((e) => {
     e.preventDefault(); setDragging(false);
     const f = e.dataTransfer.files[0];
     if (f) loadFile(f);
-  };
-
-  const panelStyle = { background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 12, padding: 20 };
+  }, [loadFile]);
 
   return (
-    <div style={{ display: 'flex', gap: 20, padding: 24, height: '100%', boxSizing: 'border-box' }}>
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
       {/* Left panel */}
-      <div style={{ width: 280, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 16, overflowY: 'auto' }}>
-        <div>
-          <h1 style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.3px' }}>Stitch Viewer</h1>
-          <p style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4 }}>Animated playback of DST, SVG, or JSON stitch files</p>
+      <div style={{ width: 260, minWidth: 260, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)' }}>
+        <div style={{ padding: '20px 18px 16px', borderBottom: '1px solid var(--border)' }}>
+          <h1 style={{ marginBottom: 3 }}>DST Viewer</h1>
+          <p style={{ fontSize: 12 }}>Load an embroidery file to animate playback</p>
         </div>
 
-        {/* Drop zone */}
-        <div
-          onDragOver={e => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-          onClick={() => inputRef.current.click()}
-          style={{
-            border: `2px dashed ${dragging ? 'var(--accent)' : stitches.length ? 'var(--primary)' : 'var(--border)'}`,
-            borderRadius: 12, padding: 32, textAlign: 'center', cursor: 'pointer',
-            background: dragging ? 'rgba(6,182,212,0.06)' : 'var(--surface-2)',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          <input ref={inputRef} type="file" hidden accept=".dst,.pes,.jef,.exp,.svg,.json" onChange={e => { if (e.target.files[0]) loadFile(e.target.files[0]); }} />
-          <div style={{ fontSize: 32, marginBottom: 8 }}>▶️</div>
-          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>Drop embroidery file here</div>
-          <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 6 }}>DST · SVG · JSON</div>
-        </div>
-        {filename && <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>{filename}</div>}
-
-        {error && (
-          <div style={{ padding: '10px 14px', borderRadius: 8, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', fontSize: 13, color: '#fca5a5' }}>
-            {error}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Drop zone */}
+          <div
+            className={`dropzone ${dragging ? 'dropzone--active' : ''} ${stitches.length ? 'dropzone--loaded' : ''}`}
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            onClick={() => inputRef.current.click()}
+            style={{ padding: '22px 14px' }}
+          >
+            <input ref={inputRef} type="file" hidden accept=".dst,.svg,.json" onChange={e => { if (e.target.files[0]) loadFile(e.target.files[0]); }} />
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: stitches.length ? 'var(--accent)' : 'var(--dim)' }}>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            {stitches.length ? (
+              <div style={{ fontSize: 12, color: 'var(--accent-light)', textAlign: 'center' }}>
+                <div style={{ fontWeight: 600 }}>{meta?.filename}</div>
+                <div style={{ color: 'var(--muted)', marginTop: 2 }}>Click to load another</div>
+              </div>
+            ) : (
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 13, color: 'var(--muted)' }}>Drop file or click to browse</div>
+                <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: 4 }}>DST · SVG · JSON</div>
+              </div>
+            )}
           </div>
-        )}
 
-        {/* Stats */}
-        {stats && (
-          <div style={panelStyle}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 12 }}>File Stats</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {[
-                ['Stitches', stats.stitchCount.toLocaleString(), 'var(--accent)'],
-                ['Jumps', stats.jumpCount.toLocaleString(), 'var(--text-muted)'],
-                ['Width', `${stats.widthMm} mm`, 'var(--primary-light)'],
-                ['Height', `${stats.heightMm} mm`, 'var(--primary-light)'],
-              ].map(([k, v, c]) => (
-                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{k}</span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: c }}>{v}</span>
+          {error && <div className="error-box">{error}</div>}
+
+          {/* File metadata */}
+          {meta && (
+            <div className="fade-up">
+              <div className="section-header">File Info</div>
+              <div style={{ background: 'var(--surface-2)', borderRadius: 8, padding: '12px 13px', marginBottom: 12 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4, color: 'var(--text)' }}>{meta.name}</div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, background: 'rgba(6,182,212,0.15)', color: 'var(--accent)', padding: '2px 7px', borderRadius: 4, fontFamily: 'var(--mono)' }}>{meta.ext}</span>
+                  <span style={{ fontSize: 11, color: 'var(--muted)' }}>{meta.filename}</span>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
+              </div>
 
-        {/* Supported formats info */}
-        <div style={{ ...panelStyle, background: 'var(--surface-2)' }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10, color: 'var(--text-muted)' }}>Supported Formats</div>
-          {[
-            ['DST', 'Tajima — full decode'],
-            ['SVG', 'Vector paths → stitches'],
-            ['JSON', 'Raw stitch array from /digitize'],
-          ].map(([f, d]) => (
-            <div key={f} style={{ display: 'flex', gap: 10, marginBottom: 8, alignItems: 'flex-start' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--accent)', background: 'rgba(6,182,212,0.1)', padding: '2px 7px', borderRadius: 4, whiteSpace: 'nowrap' }}>{f}</span>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{d}</span>
+              <div className="stat-grid">
+                {[
+                  ['Stitches', meta.stitchCount.toLocaleString()],
+                  ['Jumps', meta.jumpCount.toLocaleString()],
+                  ['Width', formatMm(meta.widthUnits)],
+                  ['Height', formatMm(meta.heightUnits)],
+                ].map(([k, v]) => (
+                  <div key={k} className="stat-cell">
+                    <div className="stat-cell__label">{k}</div>
+                    <div className="stat-cell__value" style={{ fontSize: 16 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
             </div>
-          ))}
+          )}
+
+          {/* Thread colors */}
+          {threads.length > 0 && (
+            <div className="fade-up">
+              <div className="section-header">Threads — {threads.length}</div>
+              <div className="thread-list">
+                {threads.slice(0, 12).map((t) => (
+                  <div key={t.idx} className="thread-item">
+                    <div className="thread-swatch" style={{ background: t.color, boxShadow: `0 0 6px ${t.color}60` }} />
+                    <span style={{ flex: 1 }}>Thread {t.idx + 1}</span>
+                    <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--dim)' }}>{t.count.toLocaleString()} st</span>
+                  </div>
+                ))}
+                {threads.length > 12 && (
+                  <div style={{ textAlign: 'center', fontSize: 11, color: 'var(--dim)', padding: '4px 0' }}>
+                    +{threads.length - 12} more threads
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Canvas */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 12 }}>
-          {stitches.length ? `${filename} — Press Play to animate` : 'Load a file to begin playback'}
-        </div>
-        <div style={{ flex: 1 }}>
+      {/* Canvas area */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 20, gap: 0, minWidth: 0, overflow: 'hidden' }}>
+        {!stitches.length ? (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, color: 'var(--muted)' }}>
+            <svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="0.8" style={{ opacity: 0.2 }}>
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>No file loaded</div>
+              <div style={{ fontSize: 13 }}>Drop a DST, SVG, or JSON file in the left panel</div>
+            </div>
+          </div>
+        ) : (
           <StitchCanvas stitches={stitches} autoPlay={false} />
-        </div>
+        )}
       </div>
     </div>
   );
