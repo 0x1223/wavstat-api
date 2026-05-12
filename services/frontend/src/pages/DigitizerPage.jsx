@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { digitizeImage, exportStitches, downloadBlob, previewArtworkMask } from '../api/client.js';
 import StitchCanvas from '../components/StitchCanvas.jsx';
+import LayeredArtworkPreview from '../components/LayeredArtworkPreview.jsx';
 
 const FORMATS = [
   { id: 'dst', name: 'DST', desc: 'Tajima' },
@@ -51,6 +52,7 @@ export default function DigitizerPage() {
   const [mask, setMask] = useState(null);
   const [maskLoading, setMaskLoading] = useState(false);
   const [maskConfirmed, setMaskConfirmed] = useState(false);
+  const [layers, setLayers] = useState({ original: true, mask: true, contours: true, stitches: true });
   const inputRef = useRef();
 
   const [opts, setOpts] = useState({
@@ -335,7 +337,23 @@ export default function DigitizerPage() {
           </div>
         )}
         {(result || loading) && (
-          <StitchCanvas stitches={result?.stitches || []} debugStitches={result?.debugStitches || []} autoPlay={!!result} />
+          <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateRows: 'minmax(0, 1fr) 220px', gap: 14 }}>
+            {result ? (
+              <LayeredArtworkPreview
+                originalSrc={preview}
+                maskSrc={mask?.maskPng}
+                stitches={result.stitches || []}
+                imageInfo={result.imageInfo}
+                layers={layers}
+                onLayerChange={(key, value) => setLayers(prev => ({ ...prev, [key]: value }))}
+              />
+            ) : (
+              <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
+                Generating contour paths and stitches…
+              </div>
+            )}
+            <StitchCanvas stitches={result?.stitches || []} debugStitches={result?.debugStitches || []} autoPlay={!!result} />
+          </div>
         )}
       </div>
     </div>
