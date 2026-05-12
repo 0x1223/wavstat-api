@@ -3,6 +3,13 @@ import { digitizeImage, exportStitches, downloadBlob } from '../api/client.js';
 
 const DEFAULT_THREAD_COLORS = ['#FFD700', '#8B4513', '#22d3ee', '#34d399', '#f87171', '#60a5fa'];
 
+const SIZE_PRESETS = [
+  { id: 'cap',    label: 'Cap',    desc: '2" × 3"',  widthMm: 41,  heightMm: 66  },
+  { id: 'hat',    label: 'Hat',    desc: '3" × 4"',  widthMm: 66,  heightMm: 91  },
+  { id: 'chest',  label: 'Chest',  desc: '4" × 5"',  widthMm: 91,  heightMm: 117 },
+  { id: 'banner', label: 'Banner', desc: 'Custom',   widthMm: null, heightMm: null },
+];
+
 function StitchSvgPreview({ stitches, colors = [] }) {
   if (!stitches?.length) return null;
 
@@ -99,19 +106,27 @@ export default function DigitizerPage() {
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
   const [exporting, setExporting] = useState(null);
+  const [preset, setPreset] = useState('cap');
   const inputRef = useRef();
 
   const [opts, setOpts] = useState({
-    widthMm: 100,
-    heightMm: 100,
+    widthMm: 41,
+    heightMm: 66,
     stitchesPerMm: 4,
-    fillSpacingMm: 0.3,
-    stitchLengthMm: 3,
-    satinWidthMm: 1.8,
+    fillSpacingMm: 0.2,
+    stitchLengthMm: 2.5,
+    satinWidthMm: 0.8,
+    satinStepMm: 0.4,
+    underlaySpacingMm: 1.0,
     stitchAngleDeg: 35,
     threshold: 128,
   });
   const set = (k) => (v) => setOpts(o => ({ ...o, [k]: v }));
+
+  const onPresetChange = (p) => {
+    setPreset(p.id);
+    if (p.widthMm && p.heightMm) setOpts(o => ({ ...o, widthMm: p.widthMm, heightMm: p.heightMm }));
+  };
 
   const handleFile = useCallback((f) => {
     if (!f) return;
@@ -185,6 +200,33 @@ export default function DigitizerPage() {
           {/* Options */}
           <div className="card" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div className="section-header" style={{ marginBottom: 2 }}>Design Options</div>
+
+            {/* Size presets */}
+            <div>
+              <label style={{ fontSize: 11, color: 'var(--dim)', display: 'block', marginBottom: 5 }}>Size preset</label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+                {SIZE_PRESETS.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => onPresetChange(p)}
+                    style={{
+                      padding: '5px 4px',
+                      border: `1px solid ${preset === p.id ? 'var(--accent)' : 'var(--border)'}`,
+                      background: preset === p.id ? 'rgba(6,182,212,0.12)' : 'var(--surface-2)',
+                      color: preset === p.id ? 'var(--accent)' : 'var(--muted)',
+                      borderRadius: 5,
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: 11 }}>{p.label}</div>
+                    <div style={{ fontSize: 9, opacity: 0.75 }}>{p.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <Field label="Width (mm)"><NumInput value={opts.widthMm} onChange={set('widthMm')} min={5} max={500} step={5} /></Field>
               <Field label="Height (mm)"><NumInput value={opts.heightMm} onChange={set('heightMm')} min={5} max={500} step={5} /></Field>
@@ -192,8 +234,8 @@ export default function DigitizerPage() {
               <Field label="Stitch len (mm)"><NumInput value={opts.stitchLengthMm} onChange={set('stitchLengthMm')} min={1} max={12} step={0.5} /></Field>
             </div>
             <RangeRow label="Fill spacing" value={opts.fillSpacingMm} onChange={set('fillSpacingMm')} min={0.2} max={3} step={0.1} unit="mm" />
-            <RangeRow label="Stitch angle" value={opts.stitchAngleDeg} onChange={set('stitchAngleDeg')} min={-75} max={75} step={5} unit="°" />
-            <RangeRow label="Satin border" value={opts.satinWidthMm} onChange={set('satinWidthMm')} min={0.6} max={4} step={0.1} unit="mm" />
+            <RangeRow label="Satin width" value={opts.satinWidthMm} onChange={set('satinWidthMm')} min={0.3} max={3} step={0.1} unit="mm" />
+            <RangeRow label="Satin step" value={opts.satinStepMm} onChange={set('satinStepMm')} min={0.2} max={1.5} step={0.1} unit="mm" />
             <RangeRow label="Threshold" value={opts.threshold} onChange={set('threshold')} min={50} max={254} step={1} unit="" />
             <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: -4 }}>For light-bg images: pixels above this brightness are treated as background. Dark-bg images are auto-detected and the threshold is ignored.</div>
           </div>

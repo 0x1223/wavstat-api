@@ -65,7 +65,9 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
       pixelsPerMm: opts.stitchesPerMm,
       stitchLengthMm: parseFloat(req.body.stitchLengthMm) || 2.5,
       fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 0.2,
-      underlaySpacingMm: parseFloat(req.body.underlaySpacingMm) || 2.0,
+      underlaySpacingMm: parseFloat(req.body.underlaySpacingMm) || 1.0,
+      satinWidthMm: parseFloat(req.body.satinWidthMm) || 0.8,
+      satinStepMm: parseFloat(req.body.satinStepMm) || 0.4,
     };
 
     const { regions, width, height, pixelsPerMm, imgW, imgH } = await processImage(req.file.buffer, opts);

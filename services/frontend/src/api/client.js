@@ -31,6 +31,8 @@ function imageForm(file, opts = {}) {
   if (opts.fillSpacingMm)   form.append('fillSpacingMm', opts.fillSpacingMm);
   if (opts.stitchLengthMm)  form.append('stitchLengthMm', opts.stitchLengthMm);
   if (opts.satinWidthMm)    form.append('satinWidthMm', opts.satinWidthMm);
+  if (opts.satinStepMm)     form.append('satinStepMm', opts.satinStepMm);
+  if (opts.underlaySpacingMm) form.append('underlaySpacingMm', opts.underlaySpacingMm);
   if (opts.stitchAngleDeg !== undefined) form.append('stitchAngleDeg', opts.stitchAngleDeg);
   if (opts.threshold)       form.append('threshold', opts.threshold);
   if (opts.whiteThreshold)  form.append('whiteThreshold', opts.whiteThreshold);

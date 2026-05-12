@@ -77,11 +77,24 @@ async function processImage(buffer, options = {}) {
   const stride = Math.max(1, Math.floor(fgPixels.length / 2000));
   const sample = fgPixels.filter((_, i) => i % stride === 0);
 
-  // Evenly-spaced deterministic init
+  // Deterministic farthest-first init (k-means++ style) — ensures good color spread
   const centroids = [];
-  for (let c = 0; c < k; c++) {
-    const s = sample[Math.floor((c / k) * sample.length)];
-    centroids.push({ r: s.r, g: s.g, b: s.b });
+  // First centroid: the darkest sample pixel
+  let anchor = sample[0];
+  for (const p of sample) if (p.lum < anchor.lum) anchor = p;
+  centroids.push({ r: anchor.r, g: anchor.g, b: anchor.b });
+  // Each subsequent centroid: the sample pixel farthest from all existing centroids
+  for (let c = 1; c < k; c++) {
+    let farthest = sample[0], farthestDist = -1;
+    for (const p of sample) {
+      let minDist = Infinity;
+      for (const cent of centroids) {
+        const dr = p.r - cent.r, dg = p.g - cent.g, db = p.b - cent.b;
+        minDist = Math.min(minDist, dr * dr + dg * dg + db * db);
+      }
+      if (minDist > farthestDist) { farthestDist = minDist; farthest = p; }
+    }
+    centroids.push({ r: farthest.r, g: farthest.g, b: farthest.b });
   }
 
   const assignments = new Int32Array(fgPixels.length);
@@ -132,6 +145,11 @@ async function processImage(buffer, options = {}) {
 
   regions.sort((a, b) => a.lum - b.lum);
   regions.forEach((r, i) => { r.label = `color_${i + 1}`; delete r.lum; });
+
+  // Retry with more colors if k-means collapsed to a single region
+  if (regions.length < 2 && numColors < 8) {
+    return processImage(buffer, { ...options, numColors: Math.min(numColors + 2, 8) });
+  }
 
   return { width, height, pixelsPerMm: stitchesPerMm, imgW: width, imgH: height, regions };
 }
