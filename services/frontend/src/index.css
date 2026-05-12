@@ -171,6 +171,40 @@ input[type="range"]::-webkit-slider-thumb {
   backdrop-filter: blur(10px);
 }
 
+.debug-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(5,5,15,0.72);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  user-select: none;
+  backdrop-filter: blur(10px);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.debug-toggle:hover {
+  border-color: var(--border-2);
+  color: var(--text);
+}
+.debug-toggle input {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.debug-toggle--on {
+  border-color: rgba(6,182,212,0.45);
+  background: rgba(6,182,212,0.10);
+  color: var(--accent-light);
+}
+
 /* Zoom button */
 .zoom-btn {
   width: 30px; height: 30px;

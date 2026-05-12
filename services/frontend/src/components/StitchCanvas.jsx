@@ -25,10 +25,23 @@ function calcTransform(b, zoom, panX, panY) {
   return { s, tx, ty };
 }
 
-function drawBackground(ctx) {
+function drawBackground(ctx, debugStitchGrid = false) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#060610';
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  const grd = ctx.createRadialGradient(
+    CANVAS_W * 0.5, CANVAS_H * 0.42, 120,
+    CANVAS_W * 0.5, CANVAS_H * 0.45, CANVAS_W * 0.72
+  );
+  grd.addColorStop(0, 'rgba(124,58,237,0.08)');
+  grd.addColorStop(0.45, 'rgba(6,182,212,0.035)');
+  grd.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grd;
+  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  if (!debugStitchGrid) return;
+
   ctx.strokeStyle = 'rgba(255,255,255,0.022)';
   ctx.lineWidth = 1;
   for (let x = 0; x < CANVAS_W; x += 80) {
@@ -39,8 +52,24 @@ function drawBackground(ctx) {
   }
 }
 
-function renderSeg(ctx, seg) {
+function isDenseHorizontalFill(seg) {
+  const dx = Math.abs(seg.x2 - seg.x1);
+  const dy = Math.abs(seg.y2 - seg.y1);
+  return dy <= 0.35 && dx > 0;
+}
+
+function renderCleanFillPoint(ctx, seg) {
+  ctx.beginPath();
+  ctx.arc(seg.x2, seg.y2, 1.15, 0, Math.PI * 2);
+  ctx.fillStyle = seg.color;
+  ctx.globalAlpha = 0.48;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+function renderSeg(ctx, seg, { debugStitchGrid = false } = {}) {
   if (seg.jump) {
+    if (!debugStitchGrid) return;
     ctx.beginPath();
     ctx.moveTo(seg.x1, seg.y1);
     ctx.lineTo(seg.x2, seg.y2);
@@ -50,6 +79,11 @@ function renderSeg(ctx, seg) {
     ctx.stroke();
     ctx.setLineDash([]);
   } else {
+    if (!debugStitchGrid && isDenseHorizontalFill(seg)) {
+      renderCleanFillPoint(ctx, seg);
+      return;
+    }
+
     ctx.beginPath();
     ctx.moveTo(seg.x1, seg.y1);
     ctx.lineTo(seg.x2, seg.y2);
@@ -80,6 +114,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
   const [speed, setSpeed] = useState(40);
   const [zoomPct, setZoomPct] = useState(100);
   const [stitchCount, setStitchCount] = useState(0);
+  const [debugStitchGrid, setDebugStitchGrid] = useState(false);
 
   const boundsRef = useRef({ minX: 0, minY: 0, maxX: 1000, maxY: 1000 });
 
@@ -96,12 +131,12 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    drawBackground(ctx);
+    drawBackground(ctx, debugStitchGrid);
     const { s, tx, ty } = getCtxTransform();
     ctx.setTransform(s, 0, 0, s, tx, ty);
-    for (const seg of animRef.current.drawn) renderSeg(ctx, seg);
+    for (const seg of animRef.current.drawn) renderSeg(ctx, seg, { debugStitchGrid });
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, [getCtxTransform]);
+  }, [getCtxTransform, debugStitchGrid]);
 
   const reset = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
@@ -109,8 +144,8 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
     setPlaying(false); setProgress(0); setStitchCount(0);
     const canvas = canvasRef.current;
     if (!canvas) return;
-    drawBackground(canvas.getContext('2d'));
-  }, [speed]);
+    drawBackground(canvas.getContext('2d'), debugStitchGrid);
+  }, [speed, debugStitchGrid]);
 
   useEffect(() => { reset(); }, [stitches]); // eslint-disable-line
 
@@ -136,7 +171,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
       if (anim.prevX !== null) {
         const seg = { x1: anim.prevX, y1: anim.prevY, x2: st.x, y2: st.y, color, jump: isJump };
         anim.drawn.push(seg);
-        renderSeg(ctx, seg);
+        renderSeg(ctx, seg, { debugStitchGrid });
       }
       anim.prevX = st.x; anim.prevY = st.y;
     }
@@ -149,7 +184,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
 
     if (anim.idx < stitches.length && anim.playing) rafRef.current = requestAnimationFrame(animate);
     else setPlaying(false);
-  }, [stitches, getCtxTransform, defaultColor]);
+  }, [stitches, getCtxTransform, defaultColor, debugStitchGrid]);
 
   const play = useCallback(() => {
     if (animRef.current.idx >= stitches.length) reset();
@@ -170,7 +205,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    drawBackground(ctx);
+    drawBackground(ctx, debugStitchGrid);
     const { s, tx, ty } = getCtxTransform();
     ctx.setTransform(s, 0, 0, s, tx, ty);
     animRef.current.drawn = [];
@@ -184,7 +219,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
       if (animRef.current.prevX !== null) {
         const seg = { x1: animRef.current.prevX, y1: animRef.current.prevY, x2: st.x, y2: st.y, color, jump: isJump };
         animRef.current.drawn.push(seg);
-        renderSeg(ctx, seg);
+        renderSeg(ctx, seg, { debugStitchGrid });
       }
       animRef.current.prevX = st.x; animRef.current.prevY = st.y;
       animRef.current.idx++;
@@ -192,7 +227,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     setStitchCount(animRef.current.drawn.filter(s => !s.jump).length);
     setProgress(1);
-  }, [stitches, pause, getCtxTransform, defaultColor]);
+  }, [stitches, pause, getCtxTransform, defaultColor, debugStitchGrid]);
 
   // Zoom helpers
   const applyZoom = useCallback((factor, clientX, clientY) => {
@@ -243,6 +278,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
   }, [redrawAll]);
 
   useEffect(() => { animRef.current.speed = speed; }, [speed]);
+  useEffect(() => { redrawAll(); }, [debugStitchGrid, redrawAll]);
   useEffect(() => { if (autoPlay && stitches.length > 0) play(); }, [autoPlay, stitches.length]); // eslint-disable-line
 
   const totalStitches = stitches.filter(s => s.type === 'stitch').length;
@@ -277,9 +313,19 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
         {/* HUD: stitch counter + zoom */}
         {stitches.length > 0 && (
           <div style={{ position: 'absolute', top: 12, left: 12, right: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', pointerEvents: 'none' }}>
-            <div className="hud-chip">
-              <span style={{ color: '#22d3ee', fontVariantNumeric: 'tabular-nums' }}>{stitchCount.toLocaleString()}</span>
-              <span style={{ color: 'var(--muted)' }}> / {totalStitches.toLocaleString()} st</span>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', pointerEvents: 'all' }}>
+              <div className="hud-chip">
+                <span style={{ color: '#22d3ee', fontVariantNumeric: 'tabular-nums' }}>{stitchCount.toLocaleString()}</span>
+                <span style={{ color: 'var(--muted)' }}> / {totalStitches.toLocaleString()} st</span>
+              </div>
+              <label className={`debug-toggle ${debugStitchGrid ? 'debug-toggle--on' : ''}`} title="Show every technical stitch segment and jump">
+                <input
+                  type="checkbox"
+                  checked={debugStitchGrid}
+                  onChange={e => setDebugStitchGrid(e.target.checked)}
+                />
+                <span>Debug stitch grid</span>
+              </label>
             </div>
             {/* Zoom controls (pointer-events re-enabled) */}
             <div style={{ display: 'flex', gap: 4, pointerEvents: 'all' }}>
