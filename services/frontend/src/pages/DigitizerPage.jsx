@@ -1,7 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { digitizeImage, exportStitches, downloadBlob, previewArtworkMask } from '../api/client.js';
-import StitchCanvas from '../components/StitchCanvas.jsx';
-import LayeredArtworkPreview from '../components/LayeredArtworkPreview.jsx';
 
 const FORMATS = [
   { id: 'dst', name: 'DST', desc: 'Tajima' },
@@ -51,8 +49,6 @@ export default function DigitizerPage() {
   const [exporting, setExporting] = useState(null);
   const [mask, setMask] = useState(null);
   const [maskLoading, setMaskLoading] = useState(false);
-  const [maskConfirmed, setMaskConfirmed] = useState(false);
-  const [layers, setLayers] = useState({ original: true, mask: true, contours: true, stitches: true });
   const inputRef = useRef();
 
   const [opts, setOpts] = useState({
@@ -71,14 +67,13 @@ export default function DigitizerPage() {
 
   const handleFile = useCallback((f) => {
     if (!f) return;
-    setFile(f); setResult(null); setError(null); setMask(null); setMaskConfirmed(false);
+    setFile(f); setResult(null); setError(null); setMask(null);
     setPreview(URL.createObjectURL(f));
   }, []);
 
   useEffect(() => {
     if (!file) return;
     let cancelled = false;
-    setMaskConfirmed(false);
     setMaskLoading(true);
     previewArtworkMask(file, opts)
       .then(data => { if (!cancelled) setMask(data); })
@@ -91,10 +86,6 @@ export default function DigitizerPage() {
 
   const onDigitize = async () => {
     if (!file) return;
-    if (!maskConfirmed) {
-      setError('Confirm the detected artwork mask before generating stitches.');
-      return;
-    }
     if (mask?.stats?.likelyRectangle) {
       setError(mask.warning || 'Detected artwork mask still looks rectangular. Fix the image background before generating stitches.');
       return;
@@ -207,16 +198,6 @@ export default function DigitizerPage() {
               {mask?.stats?.contourCount === 0 && (
                 <div className="error-box">{mask.stats.rejectionReason || 'No contours were detected from the foreground mask.'}</div>
               )}
-              {mask?.stats && !mask.stats.likelyRectangle && mask.stats.filledPixels > 0 && (
-                <button
-                  className={`btn ${maskConfirmed ? 'btn--secondary' : 'btn--primary'}`}
-                  onClick={() => { setMaskConfirmed(true); setError(null); }}
-                  type="button"
-                  style={{ width: '100%' }}
-                >
-                  {maskConfirmed ? 'Artwork mask confirmed' : 'Confirm artwork mask'}
-                </button>
-              )}
             </div>
           )}
 
@@ -224,7 +205,7 @@ export default function DigitizerPage() {
           <button
             className="btn btn--primary"
             onClick={onDigitize}
-            disabled={!file || loading || maskLoading || !maskConfirmed || mask?.stats?.likelyRectangle || !mask?.stats?.filledPixels}
+            disabled={!file || loading || maskLoading || mask?.stats?.likelyRectangle || !mask?.stats?.filledPixels}
             style={{ width: '100%', fontSize: 14, height: 40, borderRadius: 9 }}
           >
             {loading ? (
@@ -238,11 +219,6 @@ export default function DigitizerPage() {
               </>
             )}
           </button>
-          {file && !maskConfirmed && !mask?.stats?.likelyRectangle && (
-            <div style={{ fontSize: 11, color: 'var(--dim)', textAlign: 'center', marginTop: -6 }}>
-              Confirm the detected mask to unlock stitch generation.
-            </div>
-          )}
 
           {error && <div className="error-box">{error}</div>}
 
@@ -343,22 +319,25 @@ export default function DigitizerPage() {
           </div>
         )}
         {(result || loading) && (
-          <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateRows: 'minmax(0, 1fr) 220px', gap: 14 }}>
-            {result ? (
-              <LayeredArtworkPreview
-                originalSrc={preview}
-                maskSrc={mask?.maskPng}
-                stitches={result.stitches || []}
-                imageInfo={result.imageInfo}
-                layers={layers}
-                onLayerChange={(key, value) => setLayers(prev => ({ ...prev, [key]: value }))}
-              />
-            ) : (
-              <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
-                Generating contour paths and stitches…
+          <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', gap: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h1 style={{ marginBottom: 3 }}>Clean Preview</h1>
+                <p style={{ fontSize: 12 }}>Generated stitch files are ready for export. Visual preview stays on the original artwork.</p>
               </div>
-            )}
-            <StitchCanvas stitches={result?.stitches || []} debugStitches={result?.debugStitches || []} autoPlay={!!result} />
+              {result && (
+                <div className="hud-chip">
+                  <span style={{ color: 'var(--accent-light)' }}>{result.stitchCount?.toLocaleString()}</span>
+                  <span style={{ color: 'var(--muted)' }}> stitches</span>
+                </div>
+              )}
+            </div>
+            <div className="card" style={{ minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+              {loading && <span style={{ color: 'var(--muted)' }}>Preparing export stitch data…</span>}
+              {!loading && preview && (
+                <img src={preview} alt="Uploaded logo preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+              )}
+            </div>
           </div>
         )}
       </div>
