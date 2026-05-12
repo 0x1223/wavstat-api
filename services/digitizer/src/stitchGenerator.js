@@ -5,7 +5,7 @@
 function generateStitches(bitmap, width, height, pixelsPerMm, options = {}) {
   const {
     stitchLengthMm = 3.0,
-    fillSpacingMm = 0.5,
+    fillSpacingMm = 0.3,
     satinWidthMm = 1.8,
     maxJumpMm = 20,
     stitchAngleDeg = 35,
@@ -14,7 +14,7 @@ function generateStitches(bitmap, width, height, pixelsPerMm, options = {}) {
 
   const scale = 10 / pixelsPerMm;
   const stitchLenUnits = Math.max(8, Math.round(stitchLengthMm * 10));
-  const fillSpacingUnits = Math.max(8, Math.round(fillSpacingMm * 10));
+  const fillSpacingUnits = Math.max(2, Math.round(fillSpacingMm * 10));
   const satinWidthUnits = Math.max(8, Math.round(satinWidthMm * 10));
   const maxJumpUnits = maxJumpMm * 10;
 
@@ -42,7 +42,7 @@ function generateStitches(bitmap, width, height, pixelsPerMm, options = {}) {
     stitches,
     debugStitches: generateScanlineDebug(bitmap, width, height, pixelsPerMm, {
       stitchLengthMm,
-      fillSpacingMm: Math.max(0.35, options.fillSpacingMm || 0.5),
+      fillSpacingMm: Math.max(0.2, options.fillSpacingMm || 0.3),
       maxJumpMm,
     }),
     regions: regions.map(r => ({

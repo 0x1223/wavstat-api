@@ -93,7 +93,7 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
 
     const stitchOpts = {
       stitchLengthMm: parseFloat(req.body.stitchLengthMm) || 3.0,
-      fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 0.5,
+      fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 0.3,
       underlaySpacingMm: parseFloat(req.body.underlaySpacingMm) || 2.0,
       satinWidthMm: parseFloat(req.body.satinWidthMm) || 1.8,
       stitchAngleDeg: parseFloat(req.body.stitchAngleDeg) || 35,

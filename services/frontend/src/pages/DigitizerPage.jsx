@@ -1,6 +1,44 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { digitizeImage, exportStitches, downloadBlob, previewArtworkMask } from '../api/client.js';
 
+// Renders all stitch segments as SVG paths on a dark background
+function StitchSvgPreview({ stitches }) {
+  if (!stitches?.length) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const fillD = [], satinD = [];
+  let px = null, py = null;
+
+  for (const s of stitches) {
+    if (s.type === 'end') break;
+    if (s.type === 'color_change') { px = s.x; py = s.y; continue; }
+    if (s.type === 'jump' || s.type === 'trim') { px = s.x; py = s.y; continue; }
+    if (px !== null) {
+      minX = Math.min(minX, px, s.x); minY = Math.min(minY, py, s.y);
+      maxX = Math.max(maxX, px, s.x); maxY = Math.max(maxY, py, s.y);
+      const isSatin = s.role === 'satin' || s.role === 'contour';
+      (isSatin ? satinD : fillD).push(`M${px},${py}L${s.x},${s.y}`);
+    }
+    px = s.x; py = s.y;
+  }
+
+  if (!fillD.length && !satinD.length) return null;
+  const pad = 40;
+  const vw = maxX - minX + pad * 2, vh = maxY - minY + pad * 2;
+
+  return (
+    <svg viewBox={`${minX - pad} ${minY - pad} ${vw} ${vh}`}
+      style={{ width: '100%', height: '100%', display: 'block', background: '#060610', borderRadius: 10 }}
+      preserveAspectRatio="xMidYMid meet">
+      {fillD.length > 0 && (
+        <path d={fillD.join('')} fill="none" stroke="#a78bfa" strokeWidth="1.4" strokeLinecap="round" opacity="0.82" />
+      )}
+      {satinD.length > 0 && (
+        <path d={satinD.join('')} fill="none" stroke="#22d3ee" strokeWidth="2.2" strokeLinecap="round" opacity="0.92" />
+      )}
+    </svg>
+  );
+}
+
 const FORMATS = [
   { id: 'dst', name: 'DST', desc: 'Tajima' },
   { id: 'pes', name: 'PES', desc: 'Brother' },
@@ -50,6 +88,7 @@ export default function DigitizerPage() {
   const [exporting, setExporting] = useState(null);
   const [mask, setMask] = useState(null);
   const [maskLoading, setMaskLoading] = useState(false);
+  const [previewMode, setPreviewMode] = useState('artwork');
   const inputRef = useRef();
 
   const maskConfirmed = mask?.stats?.filledPixels > 0 && !mask?.stats?.likelyRectangle;
@@ -58,7 +97,7 @@ export default function DigitizerPage() {
     widthMm: 100,
     heightMm: 100,
     stitchesPerMm: 4,
-    fillSpacingMm: 0.5,
+    fillSpacingMm: 0.3,
     stitchLengthMm: 3,
     satinWidthMm: 1.8,
     stitchAngleDeg: 35,
@@ -321,20 +360,41 @@ export default function DigitizerPage() {
           <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', gap: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <h1 style={{ marginBottom: 3 }}>Clean Preview</h1>
-                <p style={{ fontSize: 12 }}>Generated stitch files are ready for export. Visual preview stays on the original artwork.</p>
+                <h1 style={{ marginBottom: 3 }}>{previewMode === 'stitch' ? 'Stitch Preview' : 'Artwork Preview'}</h1>
+                <p style={{ fontSize: 12 }}>
+                  {previewMode === 'stitch'
+                    ? 'Actual stitch paths — purple = fill, cyan = satin border.'
+                    : 'Original artwork. Switch to Stitches to see generated paths.'}
+                </p>
               </div>
-              {result && (
-                <div className="hud-chip">
-                  <span style={{ color: 'var(--accent-light)' }}>{result.stitchCount?.toLocaleString()}</span>
-                  <span style={{ color: 'var(--muted)' }}> stitches</span>
-                </div>
-              )}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {result && (
+                  <div className="hud-chip">
+                    <span style={{ color: 'var(--accent-light)' }}>{result.stitchCount?.toLocaleString()}</span>
+                    <span style={{ color: 'var(--muted)' }}> st</span>
+                  </div>
+                )}
+                {result && (
+                  <div style={{ display: 'flex', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                    {[['artwork', 'Artwork'], ['stitch', 'Stitches']].map(([mode, label]) => (
+                      <button key={mode} onClick={() => setPreviewMode(mode)} style={{
+                        padding: '6px 13px', fontSize: 12, fontWeight: 500, border: 'none', cursor: 'pointer',
+                        background: previewMode === mode ? 'var(--primary)' : 'transparent',
+                        color: previewMode === mode ? '#fff' : 'var(--muted)',
+                        transition: 'all 0.15s',
+                      }}>{label}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="card" style={{ minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-              {loading && <span style={{ color: 'var(--muted)' }}>Preparing export stitch data…</span>}
-              {!loading && preview && (
-                <img src={preview} alt="Uploaded logo preview" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+            <div style={{ minHeight: 0, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: previewMode === 'stitch' ? '#060610' : 'var(--surface)' }}>
+              {loading && <span style={{ color: 'var(--muted)' }}>Generating stitches…</span>}
+              {!loading && previewMode === 'artwork' && preview && (
+                <img src={preview} alt="Uploaded logo" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', padding: 18 }} />
+              )}
+              {!loading && previewMode === 'stitch' && result && (
+                <StitchSvgPreview stitches={result.stitches} />
               )}
             </div>
           </div>
