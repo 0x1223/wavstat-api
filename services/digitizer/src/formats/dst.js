@@ -2,54 +2,69 @@
 
 // DST (Tajima) format encoder
 // Coordinates in 0.1mm units. Max single-record delta: ±121 units (±12.1mm)
+//
+// Each 3-byte record encodes a signed X and Y delta using balanced ternary:
+//   available values per axis: ±1, ±3, ±9, ±27, ±81  (max sum = 121)
+//   each "slot" contributes its value positively, negatively, or not at all
+//
+// Bit layout (matching parseDST.js decoder):
+//   b0: Y±1 (bits 7,6), X±1 (bits 5,4), Y±9 (bits 3,2), X±9 (bits 1,0)
+//   b1: Y±3 (bits 7,6), X±3 (bits 5,4), Y±27 (bits 3,2), X±27 (bits 1,0)
+//   b2: type flags (bits 7,6), Y±81 (bits 3,2), X±81 (bits 1,0)
+//
+// Type flags (bits 7-4 of b2, lower nibble reserved for ±81 movement):
+const STITCH       = 0x00; // b2 bits 7,6 = 00
+const JUMP         = 0x80; // b2 bit  7   = 10
+const COLOR_CHANGE = 0xC0; // b2 bits 7,6 = 11
+const END          = 0xF3; // special end-of-file marker
 
-// Flag bytes use only bits 6-7 so they don't collide with ±81 movement bits 0-3
-const STITCH = 0x00;
-const JUMP = 0x80;
-const COLOR_CHANGE = 0xC0;
-const END = 0xF3;
+// [power, byteIndex, posMask, negMask]
+//   byteIndex: 0=b0, 1=b1, 2=b2
+const X_CONFIG = [
+  [81, 2, 0x02, 0x01],
+  [27, 1, 0x02, 0x01],
+  [9,  0, 0x02, 0x01],
+  [3,  1, 0x20, 0x10],
+  [1,  0, 0x20, 0x10],
+];
+
+const Y_CONFIG = [
+  [81, 2, 0x08, 0x04],
+  [27, 1, 0x08, 0x04],
+  [9,  0, 0x08, 0x04],
+  [3,  1, 0x80, 0x40],
+  [1,  0, 0x80, 0x40],
+];
+
+// Balanced ternary encoder for one axis.
+// At each slot (from largest power to smallest), we use +p if remaining > tail,
+// −p if remaining < −tail, otherwise skip it. This guarantees remaining → 0
+// for any integer in [−121, +121].
+function encodeAxis(config, val, bytes) {
+  let remaining = Math.round(val);
+  for (let i = 0; i < 5; i++) {
+    const [p, bi, pm, nm] = config[i];
+    const tail = i < 4 ? config.slice(i + 1).reduce((s, [v]) => s + v, 0) : 0;
+    if (remaining > tail) {
+      bytes[bi] |= pm;
+      remaining -= p;
+    } else if (remaining < -tail) {
+      bytes[bi] |= nm;
+      remaining += p;
+    }
+  }
+}
 
 function encodeDSTRecord(dx, dy, flag) {
-  let b0 = 0, b1 = 0, b2 = flag & 0xF0;
-
-  let x = Math.round(dx);
-  if (x >= 0) {
-    if (x >= 81) { b2 |= 0x02; x -= 81; }
-    if (x >= 27) { b1 |= 0x02; x -= 27; }
-    if (x >= 9)  { b0 |= 0x02; x -= 9; }
-    if (x >= 3)  { b1 |= 0x20; x -= 3; }
-    if (x >= 1)  { b0 |= 0x20; x -= 1; }
-  } else {
-    x = -x;
-    if (x >= 81) { b2 |= 0x01; x -= 81; }
-    if (x >= 27) { b1 |= 0x01; x -= 27; }
-    if (x >= 9)  { b0 |= 0x01; x -= 9; }
-    if (x >= 3)  { b1 |= 0x10; x -= 3; }
-    if (x >= 1)  { b0 |= 0x10; x -= 1; }
-  }
-
-  let y = Math.round(dy);
-  if (y >= 0) {
-    if (y >= 81) { b2 |= 0x08; y -= 81; }
-    if (y >= 27) { b1 |= 0x08; y -= 27; }
-    if (y >= 9)  { b0 |= 0x08; y -= 9; }
-    if (y >= 3)  { b1 |= 0x80; y -= 3; }
-    if (y >= 1)  { b0 |= 0x80; y -= 1; }
-  } else {
-    y = -y;
-    if (y >= 81) { b2 |= 0x04; y -= 81; }
-    if (y >= 27) { b1 |= 0x04; y -= 27; }
-    if (y >= 9)  { b0 |= 0x04; y -= 9; }
-    if (y >= 3)  { b1 |= 0x40; y -= 3; }
-    if (y >= 1)  { b0 |= 0x40; y -= 1; }
-  }
-
-  b2 |= flag & 0x0F;
-  return [b0, b1, b2];
+  const bytes = [0, 0, flag & 0xF0];
+  encodeAxis(X_CONFIG, dx, bytes);
+  encodeAxis(Y_CONFIG, dy, bytes);
+  bytes[2] |= flag & 0x0F; // preserve lower nibble (e.g. END = 0xF3)
+  return bytes;
 }
 
 function splitDelta(dx, dy, flag) {
-  // Split movement > 121 units into multiple records (jump stitches)
+  // Split movement > 121 units into multiple JUMP records
   const MAX = 121;
   const records = [];
   let rx = dx, ry = dy;
@@ -88,7 +103,7 @@ function buildHeader(stitchCount, colorChanges, bounds, name) {
 
   const buf = Buffer.alloc(512, 0x20); // fill with spaces
   buf.write(header, 0, 'ascii');
-  buf[511] = 0x1A; // EOF marker
+  buf[511] = 0x1A; // SUB — Tajima header EOF marker
   return buf;
 }
 
@@ -108,24 +123,19 @@ function encode(stitches, options = {}) {
       records.push([0x00, 0x00, END]);
       break;
     } else if (s.type === 'jump' || s.type === 'trim') {
-      const recs = splitDelta(dx, dy, JUMP);
-      records.push(...recs);
+      records.push(...splitDelta(dx, dy, JUMP));
     } else if (s.type === 'color_change') {
       records.push(encodeDSTRecord(0, 0, COLOR_CHANGE));
       colorChanges++;
     } else {
-      // stitch
-      const recs = splitDelta(dx, dy, STITCH);
-      records.push(...recs);
+      // stitch (including role:'satin')
+      records.push(...splitDelta(dx, dy, STITCH));
       stitchCount++;
     }
 
-    cx = s.x;
-    cy = s.y;
-    minX = Math.min(minX, cx);
-    maxX = Math.max(maxX, cx);
-    minY = Math.min(minY, cy);
-    maxY = Math.max(maxY, cy);
+    cx = s.x; cy = s.y;
+    minX = Math.min(minX, cx); maxX = Math.max(maxX, cx);
+    minY = Math.min(minY, cy); maxY = Math.max(maxY, cy);
   }
 
   // Ensure end marker
@@ -135,6 +145,12 @@ function encode(stitches, options = {}) {
 
   const header = buildHeader(stitchCount, colorChanges, { minX, maxX, minY, maxY }, name);
   const stitchBuf = Buffer.from(records.flat());
+
+  // Debug: log first 6 records (18 bytes after header) and file stats
+  const sample = [...stitchBuf.slice(0, 18)].map(b => b.toString(16).padStart(2, '0')).join(' ');
+  console.log(`[DST] stitches=${stitchCount} jumps=${records.filter(r => (r[2] & 0xC0) === 0x80).length} colorChanges=${colorChanges} fileSize=${header.length + stitchBuf.length}B`);
+  console.log(`[DST] first 6 records: ${sample}`);
+
   return Buffer.concat([header, stitchBuf]);
 }
 
