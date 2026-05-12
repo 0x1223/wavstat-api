@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const { v4: uuidv4 } = require('uuid');
-const { processImage } = require('./src/imageProcessor');
+const { processImage, previewMask } = require('./src/imageProcessor');
 const { generateStitches } = require('./src/stitchGenerator');
 const { FORMATS, exportFormat, supportedFormats } = require('./src/formats/index');
 
@@ -48,17 +48,45 @@ app.get('/formats', (req, res) => {
   res.json({ inputFormats, outputFormats: formats });
 });
 
+function imageOptions(body) {
+  return {
+    targetWidthMm: parseFloat(body.widthMm) || 100,
+    targetHeightMm: parseFloat(body.heightMm) || 100,
+    stitchesPerMm: parseFloat(body.stitchesPerMm) || 4,
+    whiteThreshold: parseInt(body.whiteThreshold || body.threshold, 10) || 246,
+    blackThreshold: parseInt(body.blackThreshold, 10) || 18,
+    backgroundDistance: parseFloat(body.backgroundDistance) || 42,
+  };
+}
+
+// ── POST /mask ────────────────────────────────────────────────────────────────
+app.post('/mask', upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No image file provided. Use field name "image".' });
+
+    const { png, width, height, stats } = await previewMask(req.file.buffer, imageOptions(req.body));
+    res.json({
+      success: true,
+      width,
+      height,
+      stats,
+      maskPng: `data:image/png;base64,${png.toString('base64')}`,
+      warning: stats.likelyRectangle
+        ? 'Detected artwork mask still looks rectangular and touches image edges. The background may not be separable from the artwork.'
+        : null,
+    });
+  } catch (err) {
+    console.error('Mask preview error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /digitize ─────────────────────────────────────────────────────────────
 app.post('/digitize', upload.single('image'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No image file provided. Use field name "image".' });
 
-    const opts = {
-      targetWidthMm: parseFloat(req.body.widthMm) || 100,
-      targetHeightMm: parseFloat(req.body.heightMm) || 100,
-      stitchesPerMm: parseFloat(req.body.stitchesPerMm) || 4,
-      threshold: parseInt(req.body.threshold) || 230,
-    };
+    const opts = imageOptions(req.body);
 
     const stitchOpts = {
       stitchLengthMm: parseFloat(req.body.stitchLengthMm) || 3.0,
@@ -68,7 +96,20 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
       stitchAngleDeg: parseFloat(req.body.stitchAngleDeg) || 35,
     };
 
-    const { bitmap, width, height, pixelsPerMm } = await processImage(req.file.buffer, opts);
+    const { bitmap, width, height, pixelsPerMm, maskStats } = await processImage(req.file.buffer, opts);
+    if (maskStats.likelyRectangle) {
+      return res.status(422).json({
+        error: 'Detected artwork mask still looks like a rectangle. The image background/canvas is being selected as foreground, so stitch generation was stopped.',
+        maskStats,
+      });
+    }
+    if (maskStats.filledPixels === 0) {
+      return res.status(422).json({
+        error: 'No foreground artwork detected after removing transparent, black, white, and near-background pixels.',
+        maskStats,
+      });
+    }
+
     const digitized = generateStitches(bitmap, width, height, pixelsPerMm, stitchOpts);
     const stitches = Array.isArray(digitized) ? digitized : digitized.stitches;
     const debugStitches = Array.isArray(digitized) ? [] : digitized.debugStitches;
@@ -100,7 +141,7 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
         heightUnits: maxY - minY,
       },
       colors: req.body.colors ? JSON.parse(req.body.colors) : ['#000000'],
-      imageInfo: { width, height, pixelsPerMm },
+      imageInfo: { width, height, pixelsPerMm, maskStats },
     });
   } catch (err) {
     console.error('Digitize error:', err);

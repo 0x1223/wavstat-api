@@ -1,47 +1,276 @@
 'use strict';
 const sharp = require('sharp');
 
-async function processImage(buffer, options = {}) {
+function luminance(r, g, b) {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function saturation(r, g, b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return max === 0 ? 0 : (max - min) / max;
+}
+
+function colorDistance(a, b) {
+  const dr = a.r - b.r;
+  const dg = a.g - b.g;
+  const db = a.b - b.b;
+  return Math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+async function rasterize(buffer, options = {}) {
   const {
     targetWidthMm = 100,
     targetHeightMm = 100,
     stitchesPerMm = 4,
-    threshold = 230, // skip pixels with luminance >= this (white / near-white background removal)
   } = options;
 
   let pipeline = sharp(buffer);
-
   const meta = await pipeline.metadata();
-  if (meta.format === 'pdf') {
-    pipeline = sharp(buffer, { density: 150, page: 0 });
-  }
+  if (meta.format === 'pdf') pipeline = sharp(buffer, { density: 150, page: 0 });
 
-  // Keep RGB — we need per-channel values to compute proper luminance
-  const { data, info } = await pipeline
+  return pipeline
     .resize(Math.round(targetWidthMm * stitchesPerMm), Math.round(targetHeightMm * stitchesPerMm), {
       fit: 'contain',
-      background: { r: 255, g: 255, b: 255, alpha: 1 },
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
     })
-    .flatten({ background: { r: 255, g: 255, b: 255 } })
-    .removeAlpha()
+    .ensureAlpha()
     .toColorspace('srgb')
     .raw()
     .toBuffer({ resolveWithObject: true });
-
-  const { width, height, channels } = info;
-
-  // Binary bitmap: 1 = stitch this pixel, 0 = skip (background)
-  // Uses ITU-R BT.709 luminance so coloured logo elements are captured
-  // regardless of hue — only near-white pixels (lum >= threshold) are skipped.
-  const bitmap = new Uint8Array(width * height);
-  for (let i = 0; i < width * height; i++) {
-    const o = i * channels;
-    const r = data[o], g = data[o + 1] ?? r, b = data[o + 2] ?? r;
-    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    bitmap[i] = lum < threshold ? 1 : 0;
-  }
-
-  return { bitmap, width, height, pixelsPerMm: stitchesPerMm };
 }
 
-module.exports = { processImage };
+function sampleBackgroundColors(data, width, height, channels) {
+  const samples = [];
+  const seen = new Set();
+  const step = Math.max(1, Math.floor(Math.min(width, height) / 32));
+
+  function add(x, y) {
+    const i = (y * width + x) * channels;
+    const a = data[i + 3] ?? 255;
+    if (a < 24) return;
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    const key = `${Math.round(r / 12)},${Math.round(g / 12)},${Math.round(b / 12)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      samples.push({ r, g, b });
+    }
+  }
+
+  for (let x = 0; x < width; x += step) {
+    add(x, 0); add(x, height - 1);
+  }
+  for (let y = 0; y < height; y += step) {
+    add(0, y); add(width - 1, y);
+  }
+
+  const corners = [
+    [0, 0], [width - 1, 0], [0, height - 1], [width - 1, height - 1],
+    [Math.floor(width / 2), 0], [Math.floor(width / 2), height - 1],
+    [0, Math.floor(height / 2)], [width - 1, Math.floor(height / 2)],
+  ];
+  for (const [x, y] of corners) add(x, y);
+
+  return samples;
+}
+
+function closeMask(mask, width, height) {
+  const dilated = new Uint8Array(mask.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let hit = false;
+      for (let yy = Math.max(0, y - 1); yy <= Math.min(height - 1, y + 1) && !hit; yy++) {
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(width - 1, x + 1); xx++) {
+          if (mask[yy * width + xx]) { hit = true; break; }
+        }
+      }
+      dilated[y * width + x] = hit ? 1 : 0;
+    }
+  }
+
+  const eroded = new Uint8Array(mask.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let keep = true;
+      for (let yy = Math.max(0, y - 1); yy <= Math.min(height - 1, y + 1) && keep; yy++) {
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(width - 1, x + 1); xx++) {
+          if (!dilated[yy * width + xx]) { keep = false; break; }
+        }
+      }
+      eroded[y * width + x] = keep ? 1 : 0;
+    }
+  }
+  return eroded;
+}
+
+function removeBorderConnected(mask, width, height) {
+  const out = new Uint8Array(mask);
+  const seen = new Uint8Array(mask.length);
+  const q = [];
+
+  function push(x, y) {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const i = y * width + x;
+    if (seen[i] || out[i] !== 1) return;
+    seen[i] = 1;
+    q.push([x, y]);
+  }
+
+  for (let x = 0; x < width; x++) { push(x, 0); push(x, height - 1); }
+  for (let y = 0; y < height; y++) { push(0, y); push(width - 1, y); }
+
+  for (let head = 0; head < q.length; head++) {
+    const [x, y] = q[head];
+    out[y * width + x] = 0;
+    push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1);
+  }
+
+  return out;
+}
+
+function largestComponents(mask, width, height, minAreaPx) {
+  const seen = new Uint8Array(mask.length);
+  const comps = [];
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const start = y * width + x;
+      if (seen[start] || mask[start] !== 1) continue;
+      const q = [[x, y]];
+      const indices = [];
+      seen[start] = 1;
+      let minX = x, maxX = x, minY = y, maxY = y;
+
+      for (let head = 0; head < q.length; head++) {
+        const [px, py] = q[head];
+        const idx = py * width + px;
+        indices.push(idx);
+        if (px < minX) minX = px; if (px > maxX) maxX = px;
+        if (py < minY) minY = py; if (py > maxY) maxY = py;
+        for (const [nx, ny] of [[px + 1, py], [px - 1, py], [px, py + 1], [px, py - 1]]) {
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const ni = ny * width + nx;
+          if (!seen[ni] && mask[ni] === 1) {
+            seen[ni] = 1;
+            q.push([nx, ny]);
+          }
+        }
+      }
+
+      if (indices.length >= minAreaPx) comps.push({ indices, bounds: { minX, minY, maxX, maxY }, area: indices.length });
+    }
+  }
+
+  comps.sort((a, b) => b.area - a.area);
+  const keep = new Uint8Array(mask.length);
+  for (const comp of comps.slice(0, 12)) {
+    for (const idx of comp.indices) keep[idx] = 1;
+  }
+  return { mask: keep, components: comps.slice(0, 12) };
+}
+
+function buildForegroundMask(data, width, height, channels, options = {}) {
+  const {
+    alphaThreshold = 24,
+    whiteThreshold = 246,
+    blackThreshold = 18,
+    backgroundDistance = 42,
+    minSaturation = 0.06,
+    minComponentAreaPx = Math.max(16, Math.round(width * height * 0.00018)),
+  } = options;
+
+  const backgrounds = sampleBackgroundColors(data, width, height, channels);
+  let mask = new Uint8Array(width * height);
+
+  for (let i = 0; i < width * height; i++) {
+    const o = i * channels;
+    const r = data[o], g = data[o + 1], b = data[o + 2], a = data[o + 3] ?? 255;
+    const lum = luminance(r, g, b);
+    const sat = saturation(r, g, b);
+    const nearBackground = backgrounds.some(bg => colorDistance({ r, g, b }, bg) <= backgroundDistance);
+    const nearWhite = lum >= whiteThreshold;
+    const nearBlack = lum <= blackThreshold;
+    const lowInfoNeutral = sat < minSaturation && (nearWhite || nearBlack || nearBackground);
+    mask[i] = a >= alphaThreshold && !nearWhite && !nearBlack && !nearBackground && !lowInfoNeutral ? 1 : 0;
+  }
+
+  mask = removeBorderConnected(mask, width, height);
+  mask = closeMask(mask, width, height);
+  const { mask: componentMask, components } = largestComponents(mask, width, height, minComponentAreaPx);
+  mask = componentMask;
+
+  const stats = maskStats(mask, width, height, components, backgrounds);
+  return { bitmap: mask, stats };
+}
+
+function maskStats(mask, width, height, components = [], backgrounds = []) {
+  let filled = 0;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!mask[y * width + x]) continue;
+      filled++;
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+  }
+
+  const hasMask = filled > 0;
+  const bounds = hasMask ? { minX, minY, maxX, maxY } : null;
+  const boundsArea = hasMask ? (maxX - minX + 1) * (maxY - minY + 1) : 0;
+  const coverage = filled / (width * height);
+  const boundsCoverage = boundsArea ? filled / boundsArea : 0;
+  const touchesEdges = hasMask && (minX <= 1 || minY <= 1 || maxX >= width - 2 || maxY >= height - 2);
+  const likelyRectangle = hasMask && boundsCoverage > 0.92 && coverage > 0.42 && touchesEdges;
+
+  return {
+    filledPixels: filled,
+    totalPixels: width * height,
+    coverage,
+    bounds,
+    boundsCoverage,
+    touchesEdges,
+    likelyRectangle,
+    componentCount: components.length,
+    components: components.map(c => ({ area: c.area, bounds: c.bounds })).slice(0, 8),
+    sampledBackgrounds: backgrounds.slice(0, 8),
+  };
+}
+
+async function renderMaskPreview(data, width, height, channels, bitmap) {
+  const out = Buffer.alloc(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    const o = i * channels;
+    const oo = i * 4;
+    const r = data[o], g = data[o + 1], b = data[o + 2], a = data[o + 3] ?? 255;
+    if (bitmap[i]) {
+      out[oo] = 6; out[oo + 1] = 182; out[oo + 2] = 212; out[oo + 3] = 220;
+    } else {
+      out[oo] = Math.round(r * 0.22);
+      out[oo + 1] = Math.round(g * 0.22);
+      out[oo + 2] = Math.round(b * 0.22);
+      out[oo + 3] = Math.min(180, a);
+    }
+  }
+
+  return sharp(out, { raw: { width, height, channels: 4 } }).png().toBuffer();
+}
+
+async function processImage(buffer, options = {}) {
+  const { targetWidthMm = 100, targetHeightMm = 100, stitchesPerMm = 4 } = options;
+  const { data, info } = await rasterize(buffer, { targetWidthMm, targetHeightMm, stitchesPerMm });
+  const { width, height, channels } = info;
+  const { bitmap, stats } = buildForegroundMask(data, width, height, channels, options);
+  return { bitmap, width, height, pixelsPerMm: stitchesPerMm, maskStats: stats };
+}
+
+async function previewMask(buffer, options = {}) {
+  const { targetWidthMm = 100, targetHeightMm = 100, stitchesPerMm = 4 } = options;
+  const { data, info } = await rasterize(buffer, { targetWidthMm, targetHeightMm, stitchesPerMm });
+  const { width, height, channels } = info;
+  const { bitmap, stats } = buildForegroundMask(data, width, height, channels, options);
+  const png = await renderMaskPreview(data, width, height, channels, bitmap);
+  return { png, width, height, stats };
+}
+
+module.exports = { processImage, previewMask, buildForegroundMask, maskStats };

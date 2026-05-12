@@ -11,6 +11,16 @@ export async function getFormats() {
 }
 
 export async function digitizeImage(file, opts = {}) {
+  const form = imageForm(file, opts);
+  const r = await fetch(`${BASE}/digitize`, { method: 'POST', body: form });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ error: r.statusText }));
+    throw new Error(err.error || 'Digitize failed');
+  }
+  return r.json();
+}
+
+function imageForm(file, opts = {}) {
   const form = new FormData();
   form.append('image', file);
   if (opts.widthMm)         form.append('widthMm', opts.widthMm);
@@ -18,13 +28,21 @@ export async function digitizeImage(file, opts = {}) {
   if (opts.stitchesPerMm)   form.append('stitchesPerMm', opts.stitchesPerMm);
   if (opts.fillSpacingMm)   form.append('fillSpacingMm', opts.fillSpacingMm);
   if (opts.stitchLengthMm)  form.append('stitchLengthMm', opts.stitchLengthMm);
+  if (opts.satinWidthMm)    form.append('satinWidthMm', opts.satinWidthMm);
+  if (opts.stitchAngleDeg !== undefined) form.append('stitchAngleDeg', opts.stitchAngleDeg);
   if (opts.threshold)       form.append('threshold', opts.threshold);
+  if (opts.whiteThreshold)  form.append('whiteThreshold', opts.whiteThreshold);
+  if (opts.blackThreshold)  form.append('blackThreshold', opts.blackThreshold);
+  if (opts.backgroundDistance) form.append('backgroundDistance', opts.backgroundDistance);
   if (opts.colors)          form.append('colors', JSON.stringify(opts.colors));
+  return form;
+}
 
-  const r = await fetch(`${BASE}/digitize`, { method: 'POST', body: form });
+export async function previewArtworkMask(file, opts = {}) {
+  const r = await fetch(`${BASE}/mask`, { method: 'POST', body: imageForm(file, opts) });
   if (!r.ok) {
     const err = await r.json().catch(() => ({ error: r.statusText }));
-    throw new Error(err.error || 'Digitize failed');
+    throw new Error(err.error || 'Mask preview failed');
   }
   return r.json();
 }
