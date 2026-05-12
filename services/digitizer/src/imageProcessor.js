@@ -18,6 +18,17 @@ function colorDistance(a, b) {
   return Math.sqrt(dr * dr + dg * dg + db * db);
 }
 
+function isGoldPixel(r, g, b) {
+  const lum = luminance(r, g, b);
+  const sat = saturation(r, g, b);
+  return r >= 120 && g >= 75 && b <= 95 && r > b * 1.35 && g > b * 1.15 && lum >= 70 && sat >= 0.24;
+}
+
+function isWarmRedPixel(r, g, b) {
+  const sat = saturation(r, g, b);
+  return r >= 120 && g <= 105 && b <= 105 && r > g * 1.15 && r > b * 1.2 && sat >= 0.22;
+}
+
 async function rasterize(buffer, options = {}) {
   const {
     targetWidthMm = 100,
@@ -169,18 +180,22 @@ function largestComponents(mask, width, height, minAreaPx) {
   return { mask: keep, components: comps.slice(0, 12) };
 }
 
-function buildForegroundMask(data, width, height, channels, options = {}) {
+function buildRawForegroundMask(data, width, height, channels, backgrounds, options) {
   const {
     alphaThreshold = 24,
     whiteThreshold = 246,
     blackThreshold = 18,
     backgroundDistance = 42,
     minSaturation = 0.06,
-    minComponentAreaPx = Math.max(16, Math.round(width * height * 0.00018)),
   } = options;
 
-  const backgrounds = sampleBackgroundColors(data, width, height, channels);
-  let mask = new Uint8Array(width * height);
+  const mask = new Uint8Array(width * height);
+  const goldFallback = new Uint8Array(width * height);
+  let rejectedTransparent = 0;
+  let rejectedWhite = 0;
+  let rejectedBlack = 0;
+  let rejectedNearBackground = 0;
+  let acceptedGoldFallback = 0;
 
   for (let i = 0; i < width * height; i++) {
     const o = i * channels;
@@ -191,19 +206,90 @@ function buildForegroundMask(data, width, height, channels, options = {}) {
     const nearWhite = lum >= whiteThreshold;
     const nearBlack = lum <= blackThreshold;
     const lowInfoNeutral = sat < minSaturation && (nearWhite || nearBlack || nearBackground);
-    mask[i] = a >= alphaThreshold && !nearWhite && !nearBlack && !nearBackground && !lowInfoNeutral ? 1 : 0;
+    const transparent = a < alphaThreshold;
+    const gold = isGoldPixel(r, g, b) || isWarmRedPixel(r, g, b);
+
+    if (transparent) rejectedTransparent++;
+    else if (nearWhite) rejectedWhite++;
+    else if (nearBlack) rejectedBlack++;
+    else if (nearBackground && !gold) rejectedNearBackground++;
+
+    if (!transparent && gold && !nearWhite && !nearBlack) {
+      goldFallback[i] = 1;
+      acceptedGoldFallback++;
+    }
+
+    mask[i] = !transparent && !nearWhite && !nearBlack && !nearBackground && !lowInfoNeutral ? 1 : 0;
   }
 
-  mask = removeBorderConnected(mask, width, height);
-  mask = closeMask(mask, width, height);
-  const { mask: componentMask, components } = largestComponents(mask, width, height, minComponentAreaPx);
-  mask = componentMask;
+  return {
+    mask,
+    goldFallback,
+    diagnostics: {
+      rawForegroundPixels: countMask(mask),
+      goldFallbackPixels: acceptedGoldFallback,
+      rejectedTransparent,
+      rejectedWhite,
+      rejectedBlack,
+      rejectedNearBackground,
+    },
+  };
+}
 
-  const stats = maskStats(mask, width, height, components, backgrounds);
+function countMask(mask) {
+  let count = 0;
+  for (const v of mask) if (v) count++;
+  return count;
+}
+
+function mergeMasks(a, b) {
+  const out = new Uint8Array(a.length);
+  for (let i = 0; i < a.length; i++) out[i] = a[i] || b[i] ? 1 : 0;
+  return out;
+}
+
+function buildForegroundMask(data, width, height, channels, options = {}) {
+  const {
+    minComponentAreaPx = Math.max(16, Math.round(width * height * 0.00018)),
+  } = options;
+
+  const backgrounds = sampleBackgroundColors(data, width, height, channels);
+  const raw = buildRawForegroundMask(data, width, height, channels, backgrounds, options);
+  let mask = closeMask(raw.mask, width, height);
+
+  let result = largestComponents(mask, width, height, minComponentAreaPx);
+  let fallbackUsed = false;
+  let rejectionReason = null;
+
+  if (result.components.length === 0 && raw.diagnostics.goldFallbackPixels > 0) {
+    fallbackUsed = true;
+    mask = closeMask(raw.goldFallback, width, height);
+    result = largestComponents(mask, width, height, minComponentAreaPx);
+  }
+
+  if (result.components.length === 0) {
+    if (raw.diagnostics.rawForegroundPixels === 0 && raw.diagnostics.goldFallbackPixels === 0) {
+      rejectionReason = 'All pixels were classified as transparent, white, black, or sampled near-background. No foreground artwork survived segmentation.';
+    } else if (raw.diagnostics.rawForegroundPixels > 0) {
+      rejectionReason = `Foreground pixels were detected (${raw.diagnostics.rawForegroundPixels}) but all connected components were below the minimum area threshold (${minComponentAreaPx}px).`;
+    } else {
+      rejectionReason = 'Gold-on-black fallback found candidate pixels, but no connected component survived cleanup.';
+    }
+  }
+
+  mask = result.mask;
+
+  const stats = maskStats(mask, width, height, result.components, backgrounds, {
+    ...raw.diagnostics,
+    contourCount: result.components.length,
+    fallbackUsed,
+    rejectionReason,
+    minComponentAreaPx,
+  });
   return { bitmap: mask, stats };
 }
 
-function maskStats(mask, width, height, components = [], backgrounds = []) {
+function maskStats(mask, width, height, components = [], backgrounds = [], diagnostics = {}) {
   let filled = 0;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (let y = 0; y < height; y++) {
@@ -232,6 +318,18 @@ function maskStats(mask, width, height, components = [], backgrounds = []) {
     touchesEdges,
     likelyRectangle,
     componentCount: components.length,
+    contourCount: components.length,
+    rejectionReason: diagnostics.rejectionReason || null,
+    rawForegroundPixels: diagnostics.rawForegroundPixels || 0,
+    goldFallbackPixels: diagnostics.goldFallbackPixels || 0,
+    fallbackUsed: !!diagnostics.fallbackUsed,
+    rejected: {
+      transparent: diagnostics.rejectedTransparent || 0,
+      white: diagnostics.rejectedWhite || 0,
+      black: diagnostics.rejectedBlack || 0,
+      nearBackground: diagnostics.rejectedNearBackground || 0,
+    },
+    minComponentAreaPx: diagnostics.minComponentAreaPx || 0,
     components: components.map(c => ({ area: c.area, bounds: c.bounds })).slice(0, 8),
     sampledBackgrounds: backgrounds.slice(0, 8),
   };

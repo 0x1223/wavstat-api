@@ -70,9 +70,14 @@ app.post('/mask', upload.single('image'), async (req, res) => {
       width,
       height,
       stats,
+      foregroundPixels: stats.filledPixels,
+      contourCount: stats.contourCount,
+      rejectionReason: stats.rejectionReason,
       maskPng: `data:image/png;base64,${png.toString('base64')}`,
       warning: stats.likelyRectangle
         ? 'Detected artwork mask still looks rectangular and touches image edges. The background may not be separable from the artwork.'
+        : stats.contourCount === 0
+          ? stats.rejectionReason || 'No contours were detected from the foreground mask.'
         : null,
     });
   } catch (err) {
@@ -105,7 +110,7 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
     }
     if (maskStats.filledPixels === 0) {
       return res.status(422).json({
-        error: 'No foreground artwork detected after removing transparent, black, white, and near-background pixels.',
+        error: maskStats.rejectionReason || 'No foreground artwork detected after removing transparent, black, white, and near-background pixels.',
         maskStats,
       });
     }
@@ -114,6 +119,12 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
     const stitches = Array.isArray(digitized) ? digitized : digitized.stitches;
     const debugStitches = Array.isArray(digitized) ? [] : digitized.debugStitches;
     const regions = Array.isArray(digitized) ? [] : digitized.regions;
+    if (regions.length === 0) {
+      return res.status(422).json({
+        error: maskStats.rejectionReason || `Foreground pixels were detected (${maskStats.filledPixels}) but no contours/regions could be extracted.`,
+        maskStats,
+      });
+    }
 
     const stitchCount = stitches.filter(s => s.type === 'stitch').length;
     const jumpCount = stitches.filter(s => s.type === 'jump').length;

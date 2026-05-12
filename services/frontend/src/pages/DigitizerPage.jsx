@@ -198,10 +198,15 @@ export default function DigitizerPage() {
               {mask?.stats && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
                   <div style={{ color: 'var(--muted)' }}>Coverage <span style={{ color: 'var(--text)', fontFamily: 'var(--mono)' }}>{(mask.stats.coverage * 100).toFixed(1)}%</span></div>
-                  <div style={{ color: 'var(--muted)' }}>Regions <span style={{ color: 'var(--text)', fontFamily: 'var(--mono)' }}>{mask.stats.componentCount}</span></div>
+                  <div style={{ color: 'var(--muted)' }}>Foreground <span style={{ color: 'var(--text)', fontFamily: 'var(--mono)' }}>{mask.stats.filledPixels?.toLocaleString()}</span></div>
+                  <div style={{ color: 'var(--muted)' }}>Contours <span style={{ color: 'var(--text)', fontFamily: 'var(--mono)' }}>{mask.stats.contourCount ?? mask.stats.componentCount}</span></div>
+                  <div style={{ color: 'var(--muted)' }}>Fallback <span style={{ color: 'var(--text)', fontFamily: 'var(--mono)' }}>{mask.stats.fallbackUsed ? 'gold' : 'none'}</span></div>
                 </div>
               )}
               {mask?.warning && <div className="error-box">{mask.warning}</div>}
+              {mask?.stats?.contourCount === 0 && (
+                <div className="error-box">{mask.stats.rejectionReason || 'No contours were detected from the foreground mask.'}</div>
+              )}
               {mask?.stats && !mask.stats.likelyRectangle && mask.stats.filledPixels > 0 && (
                 <button
                   className={`btn ${maskConfirmed ? 'btn--secondary' : 'btn--primary'}`}
@@ -323,8 +328,9 @@ export default function DigitizerPage() {
                 {mask?.stats && (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <span className="hud-chip">coverage {(mask.stats.coverage * 100).toFixed(1)}%</span>
-                    <span className="hud-chip">regions {mask.stats.componentCount}</span>
                     <span className="hud-chip">pixels {mask.stats.filledPixels?.toLocaleString()}</span>
+                    <span className="hud-chip">contours {mask.stats.contourCount ?? mask.stats.componentCount}</span>
+                    <span className="hud-chip">fallback {mask.stats.fallbackUsed ? 'gold' : 'none'}</span>
                   </div>
                 )}
                 {mask?.stats?.likelyRectangle && (
