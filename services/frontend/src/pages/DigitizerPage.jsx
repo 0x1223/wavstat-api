@@ -8,6 +8,7 @@ const FORMATS = [
   { id: 'exp', name: 'EXP', desc: 'Melco' },
   { id: 'svg', name: 'SVG', desc: 'Vector' },
   { id: 'png', name: 'PNG', desc: 'Raster' },
+  { id: 'pdf', name: 'PDF', desc: 'Spec sheet' },
 ];
 
 function Field({ label, children }) {
@@ -50,6 +51,8 @@ export default function DigitizerPage() {
   const [mask, setMask] = useState(null);
   const [maskLoading, setMaskLoading] = useState(false);
   const inputRef = useRef();
+
+  const maskConfirmed = mask?.stats?.filledPixels > 0 && !mask?.stats?.likelyRectangle;
 
   const [opts, setOpts] = useState({
     widthMm: 100,

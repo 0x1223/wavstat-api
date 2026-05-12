@@ -6,6 +6,7 @@ const jef = require('./jef');
 const exp = require('./exp');
 const svg = require('./svg');
 const png = require('./png');
+const pdf = require('./pdf');
 
 const FORMATS = {
   dst: { encoder: dst, mime: 'application/octet-stream', ext: 'dst', binary: true },
@@ -14,6 +15,7 @@ const FORMATS = {
   exp: { encoder: exp, mime: 'application/octet-stream', ext: 'exp', binary: true },
   svg: { encoder: svg, mime: 'image/svg+xml', ext: 'svg', binary: false },
   png: { encoder: png, mime: 'image/png', ext: 'png', binary: true },
+  pdf: { encoder: pdf, mime: 'application/pdf', ext: 'pdf', binary: true },
 };
 
 async function exportFormat(format, stitches, options = {}) {
