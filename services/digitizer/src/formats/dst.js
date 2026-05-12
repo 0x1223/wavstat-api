@@ -3,9 +3,10 @@
 // DST (Tajima) format encoder
 // Coordinates in 0.1mm units. Max single-record delta: ±121 units (±12.1mm)
 
-const STITCH = 0x03;
-const JUMP = 0x83;
-const COLOR_CHANGE = 0xC3;
+// Flag bytes use only bits 6-7 so they don't collide with ±81 movement bits 0-3
+const STITCH = 0x00;
+const JUMP = 0x80;
+const COLOR_CHANGE = 0xC0;
 const END = 0xF3;
 
 function encodeDSTRecord(dx, dy, flag) {

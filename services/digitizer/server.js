@@ -57,17 +57,19 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
       targetWidthMm: parseFloat(req.body.widthMm) || 100,
       targetHeightMm: parseFloat(req.body.heightMm) || 100,
       stitchesPerMm: parseFloat(req.body.stitchesPerMm) || 4,
-      threshold: parseInt(req.body.threshold) || 230,
+      threshold: parseInt(req.body.threshold) || 128,
+      numColors: parseInt(req.body.numColors) || 4,
     };
 
     const stitchOpts = {
-      stitchLengthMm: parseFloat(req.body.stitchLengthMm) || 3.0,
-      fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 0.5,
+      pixelsPerMm: opts.stitchesPerMm,
+      stitchLengthMm: parseFloat(req.body.stitchLengthMm) || 2.5,
+      fillSpacingMm: parseFloat(req.body.fillSpacingMm) || 0.2,
       underlaySpacingMm: parseFloat(req.body.underlaySpacingMm) || 2.0,
     };
 
-    const { bitmap, width, height, pixelsPerMm } = await processImage(req.file.buffer, opts);
-    const stitches = generateStitches(bitmap, width, height, pixelsPerMm, stitchOpts);
+    const { regions, width, height, pixelsPerMm, imgW, imgH } = await processImage(req.file.buffer, opts);
+    const stitches = generateStitches(regions, stitchOpts);
 
     const stitchCount = stitches.filter(s => s.type === 'stitch').length;
     const jumpCount = stitches.filter(s => s.type === 'jump').length;
@@ -92,8 +94,8 @@ app.post('/digitize', upload.single('image'), async (req, res) => {
         widthUnits: maxX - minX,
         heightUnits: maxY - minY,
       },
-      colors: req.body.colors ? JSON.parse(req.body.colors) : ['#000000'],
-      imageInfo: { width, height, pixelsPerMm },
+      colors: regions.map(r => ({ hex: r.colorHex, label: r.label })),
+      imageInfo: { width, height, pixelsPerMm, imgW, imgH },
     });
   } catch (err) {
     console.error('Digitize error:', err);

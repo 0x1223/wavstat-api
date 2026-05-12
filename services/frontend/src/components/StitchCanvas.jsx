@@ -72,17 +72,17 @@ function renderSeg(ctx, seg, { debugStitchGrid = false } = {}) {
     ctx.lineJoin = 'round';
 
     if (debugStitchGrid) {
-      ctx.lineWidth = 0.85;
-      ctx.globalAlpha = 0.82;
+      ctx.lineWidth = 0.6;
+      ctx.globalAlpha = 0.75;
     } else if (seg.role === 'satin') {
-      ctx.lineWidth = 2.25;
+      ctx.lineWidth = 1.4;
       ctx.globalAlpha = 0.95;
     } else if (seg.role === 'contour') {
-      ctx.lineWidth = 1.45;
+      ctx.lineWidth = 0.9;
       ctx.globalAlpha = 0.78;
     } else {
-      ctx.lineWidth = 1.05;
-      ctx.globalAlpha = 0.58;
+      ctx.lineWidth = 0.55;
+      ctx.globalAlpha = 0.85;
     }
 
     ctx.stroke();

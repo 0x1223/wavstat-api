@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { parseDST, parseDSTHeader, parseSVGStitches, THREAD_PALETTE } from '../utils/parseDST.js';
+import { parseDST, parseDSTHeader, parsePES, parseJEF, parseEXP, parseSVGStitches, THREAD_PALETTE } from '../utils/parseDST.js';
 import StitchCanvas from '../components/StitchCanvas.jsx';
 
 function formatMm(units) { return (units / 10).toFixed(1) + ' mm'; }
@@ -24,13 +24,19 @@ export default function ViewerPage() {
       if (ext === 'dst') {
         header = parseDSTHeader(buf);
         parsed = parseDST(buf);
+      } else if (ext === 'pes') {
+        parsed = parsePES(buf);
+      } else if (ext === 'jef') {
+        parsed = parseJEF(buf);
+      } else if (ext === 'exp') {
+        parsed = parseEXP(buf);
       } else if (ext === 'svg') {
         parsed = parseSVGStitches(new TextDecoder().decode(buf));
       } else if (ext === 'json') {
         const d = JSON.parse(new TextDecoder().decode(buf));
         parsed = Array.isArray(d) ? d : (d.stitches || []);
       } else {
-        throw new Error(`.${ext} is not supported. Use DST, SVG, or JSON.`);
+        throw new Error(`.${ext} is not supported. Use DST, PES, JEF, EXP, SVG, or JSON.`);
       }
 
       if (!parsed.length) throw new Error('No stitch data found in file.');
@@ -85,7 +91,7 @@ export default function ViewerPage() {
       {/* Left panel */}
       <div style={{ width: 260, minWidth: 260, borderRight: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: 'var(--surface)' }}>
         <div style={{ padding: '20px 18px 16px', borderBottom: '1px solid var(--border)' }}>
-          <h1 style={{ marginBottom: 3 }}>DST Viewer</h1>
+          <h1 style={{ marginBottom: 3 }}>Stitch Viewer</h1>
           <p style={{ fontSize: 12 }}>Load an embroidery file to animate playback</p>
         </div>
 
@@ -99,7 +105,7 @@ export default function ViewerPage() {
             onClick={() => inputRef.current.click()}
             style={{ padding: '22px 14px' }}
           >
-            <input ref={inputRef} type="file" hidden accept=".dst,.svg,.json" onChange={e => { if (e.target.files[0]) loadFile(e.target.files[0]); }} />
+            <input ref={inputRef} type="file" hidden accept=".dst,.pes,.jef,.exp,.svg,.json" onChange={e => { if (e.target.files[0]) loadFile(e.target.files[0]); }} />
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ color: stitches.length ? 'var(--accent)' : 'var(--dim)' }}>
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
@@ -111,7 +117,7 @@ export default function ViewerPage() {
             ) : (
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 13, color: 'var(--muted)' }}>Drop file or click to browse</div>
-                <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: 4 }}>DST · SVG · JSON</div>
+                <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: 4 }}>DST · PES · JEF · EXP · SVG · JSON</div>
               </div>
             )}
           </div>
@@ -178,7 +184,7 @@ export default function ViewerPage() {
             </svg>
             <div style={{ textAlign: 'center' }}>
               <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>No file loaded</div>
-              <div style={{ fontSize: 13 }}>Drop a DST, SVG, or JSON file in the left panel</div>
+              <div style={{ fontSize: 13 }}>Drop a DST, PES, JEF, EXP, SVG, or JSON file in the left panel</div>
             </div>
           </div>
         ) : (

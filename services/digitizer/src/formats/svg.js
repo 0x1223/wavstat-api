@@ -1,5 +1,11 @@
 'use strict';
 
+function resolveColor(c, fallback = '#000000') {
+  if (!c) return fallback;
+  if (typeof c === 'string') return c;
+  return c.hex || fallback;
+}
+
 function encode(stitches, options = {}) {
   const { name = 'design', colors = ['#000000'], scale = 0.1 } = options;
 
@@ -25,15 +31,15 @@ function encode(stitches, options = {}) {
 
   for (const s of stitches) {
     if (s.type === 'end') {
-      if (currentSegment.length > 1) segments.push({ points: currentSegment, color: colors[colorIdx] || '#000000' });
+      if (currentSegment.length > 1) segments.push({ points: currentSegment, color: resolveColor(colors[colorIdx]) });
       currentSegment = [];
       break;
     }
     if (s.type === 'jump' || s.type === 'trim') {
-      if (currentSegment.length > 1) segments.push({ points: currentSegment, color: colors[colorIdx] || '#000000' });
+      if (currentSegment.length > 1) segments.push({ points: currentSegment, color: resolveColor(colors[colorIdx]) });
       currentSegment = [s];
     } else if (s.type === 'color_change') {
-      if (currentSegment.length > 1) segments.push({ points: currentSegment, color: colors[colorIdx] || '#000000' });
+      if (currentSegment.length > 1) segments.push({ points: currentSegment, color: resolveColor(colors[colorIdx]) });
       currentSegment = [];
       colorIdx = (colorIdx + 1) % colors.length;
     } else {
