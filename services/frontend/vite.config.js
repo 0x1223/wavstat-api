@@ -8,7 +8,11 @@ export default defineConfig({
   server: {
     proxy: {
       '/digitizer': {
-        target: process.env.VITE_API_URL || 'http://localhost:3000',
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+      '/spotify': {
+        target: 'http://localhost:3000',
         changeOrigin: true,
       },
     },
