@@ -50,7 +50,16 @@ export default function DigitizerPage() {
   const [exporting, setExporting] = useState(null);
   const inputRef = useRef();
 
-  const [opts, setOpts] = useState({ widthMm: 100, heightMm: 100, stitchesPerMm: 4, fillSpacingMm: 0.5, stitchLengthMm: 3, threshold: 230 });
+  const [opts, setOpts] = useState({
+    widthMm: 100,
+    heightMm: 100,
+    stitchesPerMm: 4,
+    fillSpacingMm: 1.2,
+    stitchLengthMm: 3,
+    satinWidthMm: 1.8,
+    stitchAngleDeg: 35,
+    threshold: 230,
+  });
   const set = (k) => (v) => setOpts(o => ({ ...o, [k]: v }));
 
   const handleFile = useCallback((f) => {
@@ -132,6 +141,8 @@ export default function DigitizerPage() {
               <Field label="Stitch len (mm)"><NumInput value={opts.stitchLengthMm} onChange={set('stitchLengthMm')} min={1} max={12} step={0.5} /></Field>
             </div>
             <RangeRow label="Fill spacing" value={opts.fillSpacingMm} onChange={set('fillSpacingMm')} min={0.2} max={3} step={0.1} unit="mm" />
+            <RangeRow label="Stitch angle" value={opts.stitchAngleDeg} onChange={set('stitchAngleDeg')} min={-75} max={75} step={5} unit="°" />
+            <RangeRow label="Satin border" value={opts.satinWidthMm} onChange={set('satinWidthMm')} min={0.6} max={4} step={0.1} unit="mm" />
             <RangeRow label="Threshold" value={opts.threshold} onChange={set('threshold')} min={50} max={254} step={1} unit="" />
             <div style={{ fontSize: 11, color: 'var(--dim)', marginTop: -4 }}>Pixels with luminance ≥ threshold are treated as background (default 230)</div>
           </div>
@@ -212,7 +223,7 @@ export default function DigitizerPage() {
           </div>
         )}
         {(result || loading) && (
-          <StitchCanvas stitches={result?.stitches || []} autoPlay={!!result} />
+          <StitchCanvas stitches={result?.stitches || []} debugStitches={result?.debugStitches || []} autoPlay={!!result} />
         )}
       </div>
     </div>

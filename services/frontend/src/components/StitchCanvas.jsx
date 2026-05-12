@@ -52,21 +52,6 @@ function drawBackground(ctx, debugStitchGrid = false) {
   }
 }
 
-function isDenseHorizontalFill(seg) {
-  const dx = Math.abs(seg.x2 - seg.x1);
-  const dy = Math.abs(seg.y2 - seg.y1);
-  return dy <= 0.35 && dx > 0;
-}
-
-function renderCleanFillPoint(ctx, seg) {
-  ctx.beginPath();
-  ctx.arc(seg.x2, seg.y2, 1.15, 0, Math.PI * 2);
-  ctx.fillStyle = seg.color;
-  ctx.globalAlpha = 0.48;
-  ctx.fill();
-  ctx.globalAlpha = 1;
-}
-
 function renderSeg(ctx, seg, { debugStitchGrid = false } = {}) {
   if (seg.jump) {
     if (!debugStitchGrid) return;
@@ -79,30 +64,42 @@ function renderSeg(ctx, seg, { debugStitchGrid = false } = {}) {
     ctx.stroke();
     ctx.setLineDash([]);
   } else {
-    if (!debugStitchGrid && isDenseHorizontalFill(seg)) {
-      renderCleanFillPoint(ctx, seg);
-      return;
-    }
-
     ctx.beginPath();
     ctx.moveTo(seg.x1, seg.y1);
     ctx.lineTo(seg.x2, seg.y2);
     ctx.strokeStyle = seg.color;
-    ctx.lineWidth = 1.1;
-    ctx.globalAlpha = 0.88;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    if (debugStitchGrid) {
+      ctx.lineWidth = 0.85;
+      ctx.globalAlpha = 0.82;
+    } else if (seg.role === 'satin') {
+      ctx.lineWidth = 2.25;
+      ctx.globalAlpha = 0.95;
+    } else if (seg.role === 'contour') {
+      ctx.lineWidth = 1.45;
+      ctx.globalAlpha = 0.78;
+    } else {
+      ctx.lineWidth = 1.05;
+      ctx.globalAlpha = 0.58;
+    }
+
     ctx.stroke();
     ctx.globalAlpha = 1;
-    // Needle head
-    ctx.beginPath();
-    ctx.arc(seg.x2, seg.y2, 1.4, 0, Math.PI * 2);
-    ctx.fillStyle = seg.color;
-    ctx.globalAlpha = 0.4;
-    ctx.fill();
-    ctx.globalAlpha = 1;
+
+    if (debugStitchGrid || seg.role === 'satin') {
+      ctx.beginPath();
+      ctx.arc(seg.x2, seg.y2, debugStitchGrid ? 1.05 : 1.35, 0, Math.PI * 2);
+      ctx.fillStyle = seg.color;
+      ctx.globalAlpha = debugStitchGrid ? 0.35 : 0.42;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   }
 }
 
-export default function StitchCanvas({ stitches = [], autoPlay = false, defaultColor = '#7c3aed' }) {
+export default function StitchCanvas({ stitches = [], debugStitches = [], autoPlay = false, defaultColor = '#7c3aed' }) {
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
   const animRef = useRef({ idx: 0, playing: false, speed: 40, prevX: null, prevY: null, drawn: [] });
@@ -118,9 +115,11 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
 
   const boundsRef = useRef({ minX: 0, minY: 0, maxX: 1000, maxY: 1000 });
 
+  const activeStitches = debugStitchGrid && debugStitches.length ? debugStitches : stitches;
+
   useEffect(() => {
-    if (stitches.length > 0) boundsRef.current = getBounds(stitches);
-  }, [stitches]);
+    if (activeStitches.length > 0) boundsRef.current = getBounds(activeStitches);
+  }, [activeStitches]);
 
   const getCtxTransform = useCallback(() => {
     const { zoom, panX, panY } = viewRef.current;
@@ -147,11 +146,9 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
     drawBackground(canvas.getContext('2d'), debugStitchGrid);
   }, [speed, debugStitchGrid]);
 
-  useEffect(() => { reset(); }, [stitches]); // eslint-disable-line
-
   const animate = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !stitches.length) return;
+    if (!canvas || !activeStitches.length) return;
     const ctx = canvas.getContext('2d');
     const anim = animRef.current;
     if (!anim.playing) return;
@@ -160,8 +157,8 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
     ctx.setTransform(s, 0, 0, s, tx, ty);
 
     const steps = Math.max(1, Math.round(anim.speed));
-    for (let i = 0; i < steps && anim.idx < stitches.length; i++, anim.idx++) {
-      const st = stitches[anim.idx];
+    for (let i = 0; i < steps && anim.idx < activeStitches.length; i++, anim.idx++) {
+      const st = activeStitches[anim.idx];
       if (st.type === 'end') { anim.playing = false; setPlaying(false); break; }
       if (st.type === 'color_change') { anim.prevX = st.x; anim.prevY = st.y; continue; }
 
@@ -169,7 +166,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
       const isJump = st.type === 'jump' || st.type === 'trim';
 
       if (anim.prevX !== null) {
-        const seg = { x1: anim.prevX, y1: anim.prevY, x2: st.x, y2: st.y, color, jump: isJump };
+        const seg = { x1: anim.prevX, y1: anim.prevY, x2: st.x, y2: st.y, color, jump: isJump, role: st.role || (isJump ? 'jump' : 'stitch') };
         anim.drawn.push(seg);
         renderSeg(ctx, seg, { debugStitchGrid });
       }
@@ -178,21 +175,20 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    const total = stitches.filter(s => s.type === 'stitch').length;
     setStitchCount(anim.drawn.filter(s => !s.jump).length);
-    setProgress(anim.idx / (stitches.length || 1));
+    setProgress(anim.idx / (activeStitches.length || 1));
 
-    if (anim.idx < stitches.length && anim.playing) rafRef.current = requestAnimationFrame(animate);
+    if (anim.idx < activeStitches.length && anim.playing) rafRef.current = requestAnimationFrame(animate);
     else setPlaying(false);
-  }, [stitches, getCtxTransform, defaultColor, debugStitchGrid]);
+  }, [activeStitches, getCtxTransform, defaultColor, debugStitchGrid]);
 
   const play = useCallback(() => {
-    if (animRef.current.idx >= stitches.length) reset();
+    if (animRef.current.idx >= activeStitches.length) reset();
     animRef.current.playing = true;
     animRef.current.speed = speed;
     setPlaying(true);
     rafRef.current = requestAnimationFrame(animate);
-  }, [stitches, speed, reset, animate]);
+  }, [activeStitches, speed, reset, animate]);
 
   const pause = useCallback(() => {
     animRef.current.playing = false;
@@ -211,13 +207,13 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
     animRef.current.drawn = [];
     animRef.current.idx = 0;
     animRef.current.prevX = null; animRef.current.prevY = null;
-    for (const st of stitches) {
+    for (const st of activeStitches) {
       if (st.type === 'end') break;
       if (st.type === 'color_change') { animRef.current.prevX = st.x; animRef.current.prevY = st.y; continue; }
       const color = st.color || defaultColor;
       const isJump = st.type === 'jump' || st.type === 'trim';
       if (animRef.current.prevX !== null) {
-        const seg = { x1: animRef.current.prevX, y1: animRef.current.prevY, x2: st.x, y2: st.y, color, jump: isJump };
+        const seg = { x1: animRef.current.prevX, y1: animRef.current.prevY, x2: st.x, y2: st.y, color, jump: isJump, role: st.role || (isJump ? 'jump' : 'stitch') };
         animRef.current.drawn.push(seg);
         renderSeg(ctx, seg, { debugStitchGrid });
       }
@@ -227,7 +223,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     setStitchCount(animRef.current.drawn.filter(s => !s.jump).length);
     setProgress(1);
-  }, [stitches, pause, getCtxTransform, defaultColor, debugStitchGrid]);
+  }, [activeStitches, pause, getCtxTransform, defaultColor, debugStitchGrid]);
 
   // Zoom helpers
   const applyZoom = useCallback((factor, clientX, clientY) => {
@@ -278,10 +274,16 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
   }, [redrawAll]);
 
   useEffect(() => { animRef.current.speed = speed; }, [speed]);
-  useEffect(() => { redrawAll(); }, [debugStitchGrid, redrawAll]);
-  useEffect(() => { if (autoPlay && stitches.length > 0) play(); }, [autoPlay, stitches.length]); // eslint-disable-line
+  useEffect(() => {
+    if (!activeStitches.length) {
+      reset();
+      return;
+    }
+    if (autoPlay) play();
+    else skipToEnd();
+  }, [activeStitches, debugStitchGrid]); // eslint-disable-line
 
-  const totalStitches = stitches.filter(s => s.type === 'stitch').length;
+  const totalStitches = activeStitches.filter(s => s.type === 'stitch').length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 8 }}>
@@ -301,7 +303,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
           style={{ width: '100%', height: '100%', display: 'block' }}
         />
 
-        {!stitches.length && (
+        {!activeStitches.length && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, pointerEvents: 'none' }}>
             <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="1">
               <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
@@ -311,7 +313,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
         )}
 
         {/* HUD: stitch counter + zoom */}
-        {stitches.length > 0 && (
+        {activeStitches.length > 0 && (
           <div style={{ position: 'absolute', top: 12, left: 12, right: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', pointerEvents: 'none' }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', pointerEvents: 'all' }}>
               <div className="hud-chip">
@@ -342,7 +344,7 @@ export default function StitchCanvas({ stitches = [], autoPlay = false, defaultC
       </div>
 
       {/* Playback bar */}
-      {stitches.length > 0 && (
+        {activeStitches.length > 0 && (
         <div className="playbar">
           <button className={`icon-btn ${playing ? '' : 'icon-btn--primary'}`} onClick={playing ? pause : play} title={playing ? 'Pause' : 'Play'}>
             {playing
