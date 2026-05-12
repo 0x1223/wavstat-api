@@ -1,4 +1,6 @@
-const BASE = (import.meta.env.VITE_API_URL || '') + '/digitizer';
+// In production VITE_API_URL points directly to the digitizer service root.
+// In local dev (no env var) fall back to /digitizer which the vite proxy forwards.
+const BASE = import.meta.env.VITE_API_URL || '/digitizer';
 
 export async function getHealth() {
   const r = await fetch(`${BASE}/health`);
