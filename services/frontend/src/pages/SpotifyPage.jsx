@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 const WAVSTAT_BASE = import.meta.env.VITE_WAVSTAT_API || 'https://wavstat-api-production.up.railway.app';
 
@@ -165,24 +166,39 @@ function TrackRow({ track, rank, feature }) {
   );
 }
 
+const PIE_COLORS = ['#7c3aed','#06b6d4','#f59e0b','#22c55e','#ef4444','#ec4899','#8b5cf6','#14b8a6','#f97316','#3b82f6','#a3e635','#e11d48'];
+
 function GenreChart({ genres }) {
   if (!genres.length) return null;
-  const max = genres[0][1];
-  const colors = ['#7c3aed','#6d28d9','#5b21b6','#4c1d95','#3730a3','#1d4ed8','#1e40af','#0369a1','#0e7490','#0f766e','#047857','#065f46'];
+  const data = genres.map(([name, value]) => ({ name, value }));
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {genres.map(([genre, count], i) => (
-        <div key={genre} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 130, fontSize: 12, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={genre}>
-            {genre}
-          </div>
-          <div style={{ flex: 1, height: 7, background: 'var(--surface-3)', borderRadius: 4 }}>
-            <div style={{ height: '100%', width: `${(count / max) * 100}%`, background: colors[i % colors.length], borderRadius: 4, transition: 'width 0.5s ease' }} />
-          </div>
-          <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)', width: 20, textAlign: 'right' }}>{count}</span>
-        </div>
-      ))}
-    </div>
+    <ResponsiveContainer width="100%" height={280}>
+      <PieChart>
+        <Pie
+          data={data}
+          cx="50%"
+          cy="45%"
+          innerRadius={55}
+          outerRadius={95}
+          paddingAngle={2}
+          dataKey="value"
+        >
+          {data.map((_, i) => (
+            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+          ))}
+        </Pie>
+        <Tooltip
+          contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12 }}
+          formatter={(value, name) => [value, name]}
+        />
+        <Legend
+          iconType="circle"
+          iconSize={8}
+          wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+          formatter={(value) => <span style={{ color: 'var(--muted)' }}>{value}</span>}
+        />
+      </PieChart>
+    </ResponsiveContainer>
   );
 }
 
@@ -407,8 +423,8 @@ export default function SpotifyPage() {
           {/* Top Artists */}
           <Section title="Top Artists" icon="🎤" loading={loading && !d.artists}>
             {(d.artists || []).length > 0 ? (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                {d.artists.slice(0, 10).map((a, i) => (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                {d.artists.slice(0, 12).map((a, i) => (
                   <ArtistCard key={a.id} artist={a} rank={i + 1} />
                 ))}
               </div>
