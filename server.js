@@ -3,7 +3,11 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
-import spotifyRouter from './routes/spotify.js';
+import spotifyRouter  from './routes/spotify.js';
+import lastfmRouter   from './routes/lastfm.js';
+import youtubeRouter  from './routes/youtube.js';
+import soundcloudRouter from './routes/soundcloud.js';
+import artistRouter   from './routes/artist.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -13,8 +17,8 @@ const DIGITIZER_URL = process.env.DIGITIZER_URL || 'http://localhost:3001';
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// ── CORS for Spotify routes ────────────────────────────────────────────────────
-app.use('/spotify', (req, res, next) => {
+// ── CORS ──────────────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -22,7 +26,11 @@ app.use('/spotify', (req, res, next) => {
   next();
 });
 
-app.use('/spotify', spotifyRouter);
+app.use('/spotify',    spotifyRouter);
+app.use('/api/lastfm', lastfmRouter);
+app.use('/api/youtube', youtubeRouter);
+app.use('/api/soundcloud', soundcloudRouter);
+app.use('/api/artist', artistRouter);
 
 // ── Proxy /digitizer/* → digitizer microservice ───────────────────────────────
 app.use('/digitizer', createProxyMiddleware({
