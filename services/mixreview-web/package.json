@@ -1,0 +1,23 @@
+{
+  "name": "mixreview-web",
+  "version": "0.1.0",
+  "description": "React/Vite frontend for the MixReview music review workspace.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 4300",
+    "build": "vite build",
+    "start": "serve -s dist -l ${PORT:-4300}",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "serve": "^14.2.6",
+    "vite": "^8.0.10",
+    "wavesurfer.js": "^7.12.1"
+  }
+}
