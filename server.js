@@ -3,11 +3,12 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
-import spotifyRouter  from './routes/spotify.js';
-import lastfmRouter   from './routes/lastfm.js';
-import youtubeRouter  from './routes/youtube.js';
+import spotifyRouter    from './routes/spotify.js';
+import lastfmRouter     from './routes/lastfm.js';
+import youtubeRouter    from './routes/youtube.js';
 import soundcloudRouter from './routes/soundcloud.js';
-import artistRouter   from './routes/artist.js';
+import artistRouter     from './routes/artist.js';
+import chartsRouter     from './routes/charts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -26,11 +27,12 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use('/spotify',    spotifyRouter);
-app.use('/api/lastfm', lastfmRouter);
-app.use('/api/youtube', youtubeRouter);
-app.use('/api/soundcloud', soundcloudRouter);
-app.use('/api/artist', artistRouter);
+app.use('/spotify',         spotifyRouter);
+app.use('/api/lastfm',      lastfmRouter);
+app.use('/api/youtube',     youtubeRouter);
+app.use('/api/soundcloud',  soundcloudRouter);
+app.use('/api/artist',      artistRouter);
+app.use('/api/charts',      chartsRouter);
 
 // ── Proxy /digitizer/* → digitizer microservice ───────────────────────────────
 app.use('/digitizer', createProxyMiddleware({
