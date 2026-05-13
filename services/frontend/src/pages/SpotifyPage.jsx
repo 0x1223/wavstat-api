@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
 const WAVSTAT_BASE = import.meta.env.VITE_WAVSTAT_API || 'https://wavstat-api-production.up.railway.app';
-const SP = 'https://api.spotify.com/v1';
 
 // ── Token helpers ──────────────────────────────────────────────────────────────
 function getToken()    { return localStorage.getItem('sp_token'); }
@@ -39,10 +38,13 @@ async function freshToken() {
   return null;
 }
 
+// Routes through WAVSTAT backend proxy — token forwarded as Bearer header
 async function spFetch(path) {
   const token = await freshToken();
   if (!token) throw new Error('Not authenticated');
-  const r = await fetch(`${SP}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  const r = await fetch(`${WAVSTAT_BASE}/spotify${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   if (r.status === 204) return null;
   if (r.status === 401) throw new Error('Token expired — please reconnect');
   if (!r.ok) throw new Error(`Spotify ${r.status}`);
@@ -293,7 +295,7 @@ export default function SpotifyPage() {
         setAuthenticated(false);
       }
     });
-    spFetch('/me/player/recently-played?limit=30').then(d => setRecent(d?.items || [])).catch(() => {});
+    spFetch('/recently-played?limit=30').then(d => setRecent(d?.items || [])).catch(() => {});
   }, [authenticated]);
 
   // Load time-range data when range changes or authenticated
@@ -305,23 +307,17 @@ export default function SpotifyPage() {
     setLoadError(null);
 
     Promise.all([
-      spFetch(`/me/top/artists?time_range=${timeRange}&limit=20`),
-      spFetch(`/me/top/tracks?time_range=${timeRange}&limit=20`),
+      spFetch(`/top-artists?time_range=${timeRange}&limit=20`),
+      spFetch(`/top-tracks?time_range=${timeRange}&limit=20`),
     ])
-      .then(async ([artists, tracks]) => {
+      .then(([artists, tracks]) => {
         const artistItems = artists?.items || [];
         const trackItems  = tracks?.items  || [];
 
-        // Batch fetch audio features
-        let features = {};
-        const ids = trackItems.map(t => t.id).filter(Boolean).join(',');
-        if (ids) {
-          try {
-            const fd = await spFetch(`/audio-features?ids=${ids}`);
-            for (const f of (fd?.audio_features || [])) {
-              if (f) features[f.id] = f;
-            }
-          } catch {}
+        // audio_features are embedded per-track by the backend proxy
+        const features = {};
+        for (const t of trackItems) {
+          if (t.audio_features) features[t.id] = t.audio_features;
         }
 
         setData(prev => ({ ...prev, [timeRange]: { artists: artistItems, tracks: trackItems, features } }));
