@@ -24,7 +24,7 @@ import {
 const versionLabels = ["V1", "V2", "Master", "Radio Edit"];
 const approvalStates = [
   "Pending Review",
-  "Needs Changes",
+  "Needs Review",
   "Approved"
 ];
 const reviewerIdentities = ["Artist", "Engineer", "Manager", "Label"];
@@ -35,15 +35,28 @@ const ADMIN_UNLOCK_SESSION_KEY = "mixreview.engineerUnlocked";
 
 const emptyProjectName = "Untitled MixReview Session";
 
+const routeParams = new URLSearchParams(window.location.search);
 const shareRoute = getShareRoute();
-const forceStartScreen = new URLSearchParams(window.location.search).has("start");
+const routeMode = routeParams.get("mode");
+const routeVersionId = routeParams.get("version");
+const forceStartScreen = routeParams.has("start");
+const latestSession = loadLatestSession();
 const restoredSession = shareRoute
   ? loadSharedSession(shareRoute.shareId) || loadLatestSession()
   : forceStartScreen
     ? null
-    : loadLatestSession();
+    : routeMode
+      ? latestSession
+      : hasPersistedRealAudio(latestSession)
+        ? latestSession
+        : null;
 const initialVersions = buildInitialVersions(restoredSession);
 const initialReviewer =
+  routeMode === "reviewer"
+    ? "Artist"
+    : routeMode === "admin" && window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true"
+      ? "Engineer"
+      :
   restoredSession?.currentReviewer === "Engineer" &&
   window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) !== "true"
     ? "Artist"
@@ -62,14 +75,14 @@ export default function App() {
     initialReviewer,
   );
   const [activeVersionId, setActiveVersionId] = useState(
-    restoredSession?.activeVersionId || initialVersions[0].id,
+    routeVersionId || restoredSession?.activeVersionId || initialVersions[0].id,
   );
   const [uploadError, setUploadError] = useState("");
   const [sessionMessage, setSessionMessage] = useState("");
   const [shareId, setShareId] = useState(shareRoute?.shareId || restoredSession?.shareId || null);
   const [isSharePanelOpen, setIsSharePanelOpen] = useState(false);
   const [hasStarted, setHasStarted] = useState(
-    Boolean(shareRoute && !forceStartScreen),
+    Boolean(!forceStartScreen && (shareRoute || restoredSession || routeMode)),
   );
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -80,6 +93,7 @@ export default function App() {
   const [isAdminUnlockOpen, setIsAdminUnlockOpen] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
   const [adminUnlockError, setAdminUnlockError] = useState("");
+  const [pendingAdminAction, setPendingAdminAction] = useState(null);
   const activeMarkerRef = useRef(null);
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
@@ -132,6 +146,10 @@ export default function App() {
     () => comments.filter((comment) => !comment.resolved).length,
     [comments],
   );
+  const statusState = useMemo(
+    () => getReviewStatusState(activeVersion),
+    [activeVersion],
+  );
 
   const sessionSnapshot = useMemo(
     () => ({
@@ -139,11 +157,12 @@ export default function App() {
       projectName,
       shareId,
       activeVersionId,
+      hasStarted,
       currentReviewer,
       versions: versions.map(toStoredVersion),
       updatedAt: new Date().toISOString()
     }),
-    [activeVersionId, currentReviewer, projectName, sessionId, shareId, versions],
+    [activeVersionId, currentReviewer, hasStarted, projectName, sessionId, shareId, versions],
   );
 
   useEffect(() => {
@@ -217,7 +236,6 @@ export default function App() {
       return {
         ...version,
         audioSource: nextAudioSource,
-        allowMockAudio: false,
         comments: [],
         activity: [
           makeActivity("Version audio replaced", `${currentReviewer} uploaded ${file.name}`),
@@ -230,14 +248,11 @@ export default function App() {
     });
   }, [currentReviewer, permissions.canEdit, updateActiveVersion]);
 
-  const startNewSession = useCallback(() => {
-    if (!permissions.canEdit && hasStarted) {
-      return;
-    }
-
+  const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
     const nextVersions = createEmptyVersions();
-    setSessionId(createSessionId());
+    const nextSessionId = createSessionId();
+    setSessionId(nextSessionId);
     setProjectTitle(emptyProjectName);
     setVersions(nextVersions);
     setCurrentReviewer(isEngineerUnlocked ? "Engineer" : "Artist");
@@ -246,15 +261,28 @@ export default function App() {
     setSessionMessage("");
     setShareId(null);
     setHasStarted(true);
+    setReviewRoute("admin", nextVersions[0].id, nextSessionId);
+    clearStartRouteFlag();
     setCurrentTime(0);
     setIsPlaying(false);
     playerRef.current = null;
+  }, [isEngineerUnlocked]);
+
+  const startNewSession = useCallback(() => {
+    if (!permissions.canEdit && hasStarted) {
+      return;
+    }
+
     if (!isEngineerUnlocked) {
       setAdminPassword("");
       setAdminUnlockError("");
+      setPendingAdminAction("create-session");
       setIsAdminUnlockOpen(true);
+      return;
     }
-  }, [hasStarted, isEngineerUnlocked, permissions.canEdit]);
+
+    beginNewSession();
+  }, [beginNewSession, hasStarted, isEngineerUnlocked, permissions.canEdit]);
 
   const clearSession = useCallback(() => {
     clearLatestSession();
@@ -275,30 +303,34 @@ export default function App() {
     setSessionMessage("Session exported as JSON.");
   }, [projectName, sessionSnapshot]);
 
-  const openDemoSession = useCallback(() => {
+  const openReviewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
-    const demoSession = createDemoSession();
-    setSessionId(demoSession.id);
-    setProjectTitle(demoSession.projectName);
-    setVersions(demoSession.versions.map(hydrateStoredVersion));
-    setCurrentReviewer(isEngineerUnlocked ? demoSession.currentReviewer : "Artist");
-    setActiveVersionId(demoSession.activeVersionId);
+    const nextVersions = createEmptyVersions();
+    const nextSessionId = createSessionId();
+    setSessionId(nextSessionId);
+    setProjectTitle(emptyProjectName);
+    setVersions(nextVersions);
+    setCurrentReviewer("Artist");
+    setActiveVersionId(nextVersions[0].id);
     setShareId(null);
     setUploadError("");
-    setSessionMessage("Demo session loaded.");
+    setSessionMessage("");
     setCurrentTime(0);
     setIsPlaying(false);
     setHasStarted(true);
+    setReviewRoute("reviewer", nextVersions[0].id, nextSessionId);
+    clearStartRouteFlag();
     playerRef.current = null;
-  }, [isEngineerUnlocked]);
+  }, []);
 
   const switchVersion = useCallback((versionId) => {
     setActiveVersionId(versionId);
+    setReviewRoute(isEngineerMode ? "admin" : "reviewer", versionId, sessionId);
     setCurrentTime(0);
     setIsPlaying(false);
     activeMarkerRef.current = null;
     playerRef.current = null;
-  }, []);
+  }, [isEngineerMode, sessionId]);
 
   const shareSession = useCallback(() => {
     if (!permissions.canShare) {
@@ -337,9 +369,6 @@ export default function App() {
 
     updateActiveVersion((version) => ({
       ...version,
-      approvalStatus: clientReviewerIdentities.includes(author)
-        ? "Needs Changes"
-        : version.approvalStatus,
       selectedTime: time,
       selectedCommentId: commentId,
       comments: [...version.comments, newComment].sort((a, b) => a.time - b.time),
@@ -355,14 +384,19 @@ export default function App() {
       return;
     }
 
-    updateActiveVersion((version) => ({
-      ...version,
-      comments: version.comments.map((comment) =>
+    updateActiveVersion((version) => {
+      const nextComments = version.comments.map((comment) =>
         comment.id === commentId
           ? { ...comment, resolved: !comment.resolved }
           : comment,
-      )
-    }));
+      );
+
+      return {
+        ...version,
+        comments: nextComments,
+        approvalStatus: deriveReviewStatus({ ...version, comments: nextComments })
+      };
+    });
   }, [permissions.canReview, updateActiveVersion]);
 
   const editComment = useCallback((commentId, nextText) => {
@@ -497,6 +531,11 @@ export default function App() {
       return;
     }
 
+    const nextStatusState = getReviewStatusState(activeVersion);
+    if (!nextStatusState[nextStatus].enabled) {
+      return;
+    }
+
     updateActiveVersion((version) => ({
       ...version,
       approvalStatus: nextStatus,
@@ -517,7 +556,7 @@ export default function App() {
         ...version.activity
       ]
     }));
-  }, [currentReviewer, permissions.canReview, updateActiveVersion]);
+  }, [activeVersion, currentReviewer, permissions.canReview, updateActiveVersion]);
 
   const submitFeedback = useCallback(() => {
     if (!permissions.canSubmit) {
@@ -535,15 +574,16 @@ export default function App() {
       }
 
       setSessionMessage(`${currentReviewer} feedback submitted.`);
+      const nextComments = version.comments.map((comment) =>
+        comment.author === currentReviewer && comment.submitted === false
+          ? { ...comment, submitted: true }
+          : comment,
+      );
+
       return {
         ...version,
-        approvalStatus:
-          version.approvalStatus === "Approved" ? "Approved" : "Needs Changes",
-        comments: version.comments.map((comment) =>
-          comment.author === currentReviewer && comment.submitted === false
-            ? { ...comment, submitted: true }
-            : comment,
-        ),
+        approvalStatus: deriveReviewStatus({ ...version, comments: nextComments }),
+        comments: nextComments,
         activity: [
           makeActivity(
             "Feedback submitted",
@@ -568,7 +608,8 @@ export default function App() {
     }
 
     setCurrentReviewer(reviewer);
-  }, [isEngineerUnlocked]);
+    setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", activeVersionId, sessionId);
+  }, [activeVersionId, isEngineerUnlocked, sessionId]);
 
   const unlockEngineerMode = useCallback((event) => {
     event.preventDefault();
@@ -584,8 +625,12 @@ export default function App() {
     setIsAdminUnlockOpen(false);
     setAdminPassword("");
     setAdminUnlockError("");
+    if (pendingAdminAction === "create-session") {
+      beginNewSession();
+    }
+    setPendingAdminAction(null);
     setSessionMessage("Engineer mode unlocked for this browser session.");
-  }, [adminPassword]);
+  }, [adminPassword, beginNewSession, pendingAdminAction]);
 
   const lockEngineerMode = useCallback(() => {
     window.sessionStorage.removeItem(ADMIN_UNLOCK_SESSION_KEY);
@@ -599,11 +644,27 @@ export default function App() {
 
   if (!hasStarted) {
     return (
-      <StartScreen
-        onCreate={startNewSession}
-        onDemo={openDemoSession}
-        message={sessionMessage}
-      />
+      <>
+          <StartScreen
+            onCreate={startNewSession}
+          onDemo={openReviewSession}
+          message={sessionMessage}
+        />
+        {isAdminUnlockOpen && (
+          <EngineerUnlockModal
+            password={adminPassword}
+            error={adminUnlockError}
+            onPasswordChange={setAdminPassword}
+            onCancel={() => {
+              setIsAdminUnlockOpen(false);
+              setAdminPassword("");
+              setAdminUnlockError("");
+              setPendingAdminAction(null);
+            }}
+            onSubmit={unlockEngineerMode}
+          />
+        )}
+      </>
     );
   }
 
@@ -617,6 +678,7 @@ export default function App() {
           versions={versions}
           activeVersionId={activeVersionId}
           onStatusChange={updateApprovalStatus}
+          statusState={statusState}
           onVersionChange={switchVersion}
           onShareSession={shareSession}
           onBackToStart={returnToStart}
@@ -654,7 +716,6 @@ export default function App() {
           <WaveformReview
             key={activeVersionId}
             audioSource={audioSource}
-            allowMockAudio={Boolean(activeVersion.allowMockAudio)}
             comments={comments}
             selectedCommentId={selectedCommentId}
             selectedTime={selectedTime}
@@ -676,6 +737,7 @@ export default function App() {
             onReviewerChange={updateReviewer}
             onApprovalChange={updateApprovalStatus}
             onSubmitFeedback={submitFeedback}
+            statusState={statusState}
             canApprove={permissions.canReview}
             canSubmit={permissions.canSubmit}
             canChooseReviewer={permissions.canChooseReviewer}
@@ -690,7 +752,7 @@ export default function App() {
             onToggleResolved={toggleResolved}
             currentReviewer={currentReviewer}
             canModifyComment={(comment) => canEditComment(comment, currentReviewer, permissions)}
-            canResolve={permissions.canEdit}
+            canResolve={permissions.canReview}
           />
         </div>
       </section>
@@ -713,6 +775,7 @@ export default function App() {
             setIsAdminUnlockOpen(false);
             setAdminPassword("");
             setAdminUnlockError("");
+            setPendingAdminAction(null);
           }}
           onSubmit={unlockEngineerMode}
         />
@@ -769,150 +832,12 @@ function createVersion(label, comments = []) {
     label,
     audioSource: null,
     comments,
-    approvalStatus: comments.some((comment) => clientReviewerIdentities.includes(comment.author))
-      ? "Needs Changes"
-      : "Pending Review",
+    approvalStatus: deriveReviewStatus({ comments }),
     approvalHistory: [],
     activity: [],
     selectedCommentId: comments[0]?.id || null,
     selectedTime: comments[0]?.time || 0,
     duration: 0
-  };
-}
-
-function createDemoSession() {
-  const now = new Date().toISOString();
-  return {
-    id: createSessionId(),
-    projectName: "Midnight Circuit - Client Review",
-    currentReviewer: "Engineer",
-    activeVersionId: "version-v2",
-    versions: [
-      {
-        id: "version-v1",
-        label: "V1",
-        audioMetadata: null,
-        comments: [
-          {
-            id: "demo-v1-1",
-            time: 9.8,
-            author: "Artist",
-            text: "Hook vocal needs more air before the chorus lands.",
-            resolved: true
-          },
-          {
-            id: "demo-v1-2",
-            time: 31.4,
-            author: "Manager",
-            text: "Kick feels a touch loud on smaller speakers.",
-            resolved: true
-          }
-        ],
-        approvalStatus: "Needs Changes",
-        approvalHistory: [
-          {
-            id: "demo-a1",
-            status: "Needs Changes",
-            reviewer: "Manager",
-            createdAt: now
-          }
-        ],
-        activity: [
-          makeActivity("Approval changed", "Manager requested changes on V1"),
-          makeActivity("Comment added", "Artist added a marker at 00:09")
-        ],
-        selectedCommentId: "demo-v1-1",
-        selectedTime: 9.8,
-        duration: 48,
-        allowMockAudio: true
-      },
-      {
-        id: "version-v2",
-        label: "V2",
-        audioMetadata: null,
-        comments: [
-          {
-            id: "demo-v2-1",
-            time: 12.2,
-            author: "Engineer",
-            text: "Automation fixed. Vocal now sits forward without getting sharp.",
-            resolved: true
-          },
-          {
-            id: "demo-v2-2",
-            time: 27.6,
-            author: "Label",
-            text: "This drop is reading much better. Keep the extra width here.",
-            resolved: false
-          },
-          {
-            id: "demo-v2-3",
-            time: 40.1,
-            author: "Artist",
-            text: "Bridge reverb tail feels emotional. Approved from my side.",
-            resolved: true
-          }
-        ],
-        approvalStatus: "Approved",
-        approvalHistory: [
-          {
-            id: "demo-a2",
-            status: "Approved",
-            reviewer: "Artist",
-            createdAt: now
-          },
-          {
-            id: "demo-a3",
-            status: "Needs Changes",
-            reviewer: "Manager",
-            createdAt: now
-          }
-        ],
-        activity: [
-          makeActivity("Approval changed", "Artist approved V2"),
-          makeActivity("Comment added", "Label added a marker at 00:27"),
-          makeActivity("Version updated", "V2 prepared for client review")
-        ],
-        selectedCommentId: "demo-v2-2",
-        selectedTime: 27.6,
-        duration: 48,
-        allowMockAudio: true
-      },
-      {
-        id: "version-master",
-        label: "Master",
-        audioMetadata: null,
-        comments: [
-          {
-            id: "demo-master-1",
-            time: 18.4,
-            author: "Engineer",
-            text: "Limiter pass is clean. No audible pump on the final chorus.",
-            resolved: false
-          }
-        ],
-        approvalStatus: "Pending Review",
-        approvalHistory: [],
-        activity: [makeActivity("Version updated", "Master pass prepared for review")],
-        selectedCommentId: "demo-master-1",
-        selectedTime: 18.4,
-        duration: 48,
-        allowMockAudio: true
-      },
-      {
-        id: "version-radio-edit",
-        label: "Radio Edit",
-        audioMetadata: null,
-        comments: [],
-        approvalStatus: "Pending Review",
-        approvalHistory: [],
-        activity: [],
-        selectedCommentId: null,
-        selectedTime: 0,
-        duration: 48,
-        allowMockAudio: true
-      }
-    ]
   };
 }
 
@@ -927,7 +852,11 @@ function buildInitialVersions(session) {
     {
       ...createVersion("V1", legacyComments),
       audioSource: session?.audioMetadata
-        ? { ...session.audioMetadata, url: null, needsRelink: true }
+        ? {
+            ...session.audioMetadata,
+            url: session.audioMetadata.url || null,
+            needsRelink: !session.audioMetadata.url
+          }
         : null,
       approvalStatus: resolveApprovalStatus(
         normalizeApprovalStatus(session?.approvalStatus || session?.mixStatus),
@@ -958,7 +887,11 @@ function hydrateStoredVersion(version) {
     id: version.id || versionIdFromLabel(version.label || "V1"),
     label: version.label || "V1",
     audioSource: version.audioMetadata
-      ? { ...version.audioMetadata, url: null, needsRelink: true }
+      ? {
+          ...version.audioMetadata,
+          url: version.audioMetadata.url || null,
+          needsRelink: !version.audioMetadata.url
+        }
       : null,
     comments,
     approvalStatus: resolveApprovalStatus(
@@ -970,8 +903,7 @@ function hydrateStoredVersion(version) {
     activity: version.activity || [],
     selectedCommentId: version.selectedCommentId || version.comments?.[0]?.id || null,
     selectedTime: version.selectedTime ?? version.comments?.[0]?.time ?? 0,
-    duration: version.duration || 0,
-    allowMockAudio: Boolean(version.allowMockAudio)
+    duration: version.duration || 0
   };
 }
 
@@ -986,8 +918,7 @@ function toStoredVersion(version) {
     activity: version.activity,
     selectedCommentId: version.selectedCommentId,
     selectedTime: version.selectedTime,
-    duration: version.duration,
-    allowMockAudio: Boolean(version.allowMockAudio)
+    duration: version.duration
   };
 }
 
@@ -1033,14 +964,14 @@ function normalizeApprovalStatus(status) {
   }
 
   if (status === "Needs Revision" || status === "Needs Changes") {
-    return "Needs Changes";
+    return "Needs Review";
   }
 
   return approvalStates.includes(status) ? status : "Pending Review";
 }
 
 function resolveApprovalStatus(status, comments, approvalHistory) {
-  if (["Needs Changes", "Approved"].includes(status)) {
+  if (status === "Approved") {
     return status;
   }
 
@@ -1052,11 +983,56 @@ function resolveApprovalStatus(status, comments, approvalHistory) {
     return "Approved";
   }
 
-  if (comments.some((comment) => clientReviewerIdentities.includes(comment.author))) {
-    return "Needs Changes";
+  return deriveReviewStatus({ comments, approvalStatus: status });
+}
+
+function getReviewStatusState(version) {
+  const submittedReviewComments = getSubmittedReviewComments(version.comments);
+  const hasSubmittedReview = submittedReviewComments.length > 0;
+  const allReviewItemsResolved =
+    hasSubmittedReview && submittedReviewComments.every((comment) => comment.resolved);
+  const activeStatus = deriveReviewStatus(version);
+
+  return approvalStates.reduce((states, state) => {
+    states[state] = {
+      active: state === activeStatus,
+      enabled:
+        state === "Pending Review"
+          ? !hasSubmittedReview
+          : state === "Needs Review"
+            ? hasSubmittedReview && !allReviewItemsResolved
+            : allReviewItemsResolved,
+      tone:
+        state === "Approved"
+          ? "approved"
+          : state === "Pending Review" || state === "Needs Review"
+            ? "attention"
+            : "neutral"
+    };
+    return states;
+  }, {});
+}
+
+function deriveReviewStatus(version) {
+  const submittedReviewComments = getSubmittedReviewComments(version.comments);
+
+  if (submittedReviewComments.length === 0) {
+    return "Pending Review";
   }
 
-  return status || "Pending Review";
+  if (submittedReviewComments.every((comment) => comment.resolved)) {
+    return "Approved";
+  }
+
+  return "Needs Review";
+}
+
+function getSubmittedReviewComments(comments = []) {
+  return comments.filter(
+    (comment) =>
+      clientReviewerIdentities.includes(comment.author) &&
+      comment.submitted !== false,
+  );
 }
 
 function canEditComment(comment, reviewer, permissions) {
@@ -1096,5 +1072,30 @@ function slugify(value) {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "") || "mixreview-session"
+  );
+}
+
+function clearStartRouteFlag() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has("start")) {
+    return;
+  }
+
+  url.searchParams.delete("start");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function setReviewRoute(mode, versionId, sessionId) {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("start");
+  url.searchParams.set("mode", mode);
+  url.searchParams.set("version", versionId);
+  url.searchParams.set("session", sessionId);
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function hasPersistedRealAudio(session) {
+  return Boolean(
+    session?.versions?.some((version) => version.audioMetadata?.url),
   );
 }

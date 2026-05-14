@@ -681,7 +681,15 @@ h2 {
   background: #d7ad62;
 }
 
-.status-switch button.approved {
+.status-switch button.active.attention,
+.approval-state-grid button.active.attention {
+  color: #fff3ea;
+  border-color: rgba(255, 109, 85, 0.54);
+  background: linear-gradient(180deg, #c44833, #8f241f);
+}
+
+.status-switch button.active.approved,
+.approval-state-grid button.active.approved {
   color: #07160f;
   background: #79d28d;
 }
@@ -901,6 +909,18 @@ h2 {
   color: #151006;
   border-color: rgba(215, 173, 98, 0.62);
   background: linear-gradient(180deg, #f2c875, #d4a14d);
+}
+
+.approval-state-grid button.active.attention {
+  color: #fff3ea;
+  border-color: rgba(255, 109, 85, 0.54);
+  background: linear-gradient(180deg, #c44833, #8f241f);
+}
+
+.approval-state-grid button.active.approved {
+  color: #07160f;
+  border-color: rgba(127, 210, 145, 0.5);
+  background: linear-gradient(180deg, #91dea2, #63bd79);
 }
 
 .dashboard-lists {

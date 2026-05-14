@@ -5,6 +5,7 @@ export function Header({
   versions,
   activeVersionId,
   onStatusChange,
+  statusState,
   onVersionChange,
   onShareSession,
   onBackToStart,
@@ -17,7 +18,7 @@ export function Header({
 }) {
   const approvalStates = [
     "Pending Review",
-    "Needs Changes",
+    "Needs Review",
     "Approved"
   ];
 
@@ -83,9 +84,8 @@ export function Header({
             {approvalStates.map((state) => (
               <button
                 type="button"
-                className={`${state === approvalStatus ? "active" : ""}${
-                  state.includes("Approved") ? " approved" : ""
-                }`}
+                disabled={!statusState?.[state]?.enabled}
+                className={`${statusState?.[state]?.active || state === approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}`}
                 key={state}
                 onClick={() => onStatusChange(state)}
               >

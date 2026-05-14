@@ -4,7 +4,7 @@ export const EXPORT_SCHEMA_VERSION = 1;
 const VERSION_LABELS = ["V1", "V2", "Master", "Radio Edit"];
 const APPROVAL_STATES = [
   "Pending Review",
-  "Needs Changes",
+  "Needs Review",
   "Approved"
 ];
 const REVIEWERS = ["Artist", "Engineer", "Manager", "Label"];
@@ -86,7 +86,8 @@ export function toStoredAudioMetadata(audioSource) {
     fileName: audioSource.fileName,
     title: audioSource.title,
     size: audioSource.size,
-    type: audioSource.type
+    type: audioSource.type,
+    url: audioSource.url?.startsWith("blob:") ? null : audioSource.url || null
   };
 }
 
@@ -255,7 +256,8 @@ function normalizeAudioMetadata(audioMetadata) {
     fileName: normalizeString(audioMetadata.fileName, "Restored audio file"),
     title: normalizeString(audioMetadata.title, "Imported MixReview Session"),
     size: normalizeNumber(audioMetadata.size, 0),
-    type: normalizeString(audioMetadata.type, "audio file")
+    type: normalizeString(audioMetadata.type, "audio file"),
+    url: typeof audioMetadata.url === "string" && audioMetadata.url ? audioMetadata.url : null
   };
 }
 
@@ -268,15 +270,15 @@ function normalizeApprovalStatus(status) {
     return "Pending Review";
   }
 
-  if (status === "Needs Revision") {
-    return "Needs Changes";
+  if (status === "Needs Revision" || status === "Needs Changes") {
+    return "Needs Review";
   }
 
   return APPROVAL_STATES.includes(status) ? status : null;
 }
 
 function resolveApprovalStatus(status, comments, approvalHistory) {
-  if (["Needs Changes", "Approved"].includes(status)) {
+  if (status === "Approved") {
     return status;
   }
 
@@ -288,11 +290,19 @@ function resolveApprovalStatus(status, comments, approvalHistory) {
     return "Approved";
   }
 
-  if (comments.some((comment) => CLIENT_REVIEWERS.includes(comment.author))) {
-    return "Needs Changes";
+  const submittedReviewComments = comments.filter(
+    (comment) => CLIENT_REVIEWERS.includes(comment.author) && comment.submitted !== false,
+  );
+
+  if (submittedReviewComments.length === 0) {
+    return status || "Pending Review";
   }
 
-  return status || "Pending Review";
+  if (submittedReviewComments.every((comment) => comment.resolved)) {
+    return "Approved";
+  }
+
+  return "Needs Review";
 }
 
 function normalizeApprovalHistory(history) {

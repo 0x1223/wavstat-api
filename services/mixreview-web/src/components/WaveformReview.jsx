@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
-import { createMockAudioUrl } from "../lib/mockAudio.js";
 import { formatTimecode } from "../lib/time.js";
 
 export function WaveformReview({
   audioSource,
-  allowMockAudio = false,
   comments,
   selectedCommentId,
   selectedTime,
@@ -59,17 +57,15 @@ export function WaveformReview({
 
     let isDisposed = false;
     let hasLoaded = false;
-    if (!audioSource && !allowMockAudio) {
+    if (!audioSource?.url) {
       setIsLoading(false);
       callbacksRef.current.onReady(null);
       return undefined;
     }
 
-    const mockAudioUrl = audioSource ? null : createMockAudioUrl();
-    const audioUrl = audioSource?.url || mockAudioUrl;
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
-      url: audioUrl,
+      url: audioSource.url,
       waveColor: "#6d6457",
       progressColor: "#d6a354",
       cursorColor: "#f5efe3",
@@ -141,11 +137,8 @@ export function WaveformReview({
       isDisposed = true;
       wavesurfer.destroy();
       resizeObserver.disconnect();
-      if (mockAudioUrl) {
-        URL.revokeObjectURL(mockAudioUrl);
-      }
     };
-  }, [allowMockAudio, audioSource]);
+  }, [audioSource]);
 
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
@@ -195,7 +188,7 @@ export function WaveformReview({
       <div className="mix-strip">
         <div>
           <p className="eyebrow">Stereo Mix</p>
-          <h2>{audioSource ? "Uploaded audio review pass" : allowMockAudio ? "Demo audio review pass" : "Choose audio to begin"}</h2>
+          <h2>{audioSource ? "Uploaded audio review pass" : "Choose audio to begin"}</h2>
         </div>
         <span className="selected-time">{formatTimecode(selectedTime)}</span>
       </div>

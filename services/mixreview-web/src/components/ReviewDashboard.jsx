@@ -1,6 +1,6 @@
 const approvalStates = [
   "Pending Review",
-  "Needs Changes",
+  "Needs Review",
   "Approved"
 ];
 
@@ -13,6 +13,7 @@ export function ReviewDashboard({
   onReviewerChange,
   onApprovalChange,
   onSubmitFeedback,
+  statusState,
   canApprove,
   canSubmit,
   canChooseReviewer
@@ -60,8 +61,8 @@ export function ReviewDashboard({
           {approvalStates.map((state) => (
             <button
               type="button"
-              disabled={!canApprove}
-              className={state === activeVersion.approvalStatus ? "active" : ""}
+              disabled={!canApprove || !statusState?.[state]?.enabled}
+              className={`${statusState?.[state]?.active || state === activeVersion.approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}`}
               key={state}
               onClick={() => onApprovalChange(state)}
             >
