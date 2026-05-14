@@ -3,8 +3,8 @@ export function SharePanel({ links, onClose }) {
     <section className="share-panel" aria-label="Share session links">
       <div>
         <p className="eyebrow">Share Session</p>
-        <h2>Local review links</h2>
-        <p>Links use this browser's local share registry until backend sync is added.</p>
+        <h2>Client review links</h2>
+        <p>Links open the matching persistent review session.</p>
       </div>
 
       <ShareLink label="Reviewer link" value={links.reviewer} />

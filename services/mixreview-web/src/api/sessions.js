@@ -17,6 +17,16 @@ export async function loadSessionFromApi(sessionId) {
   return payload.session || null;
 }
 
+export async function listSessionsFromApi() {
+  const response = await fetch(apiUrl("/api/sessions"));
+  if (!response.ok) {
+    throw new Error("Sessions could not be loaded.");
+  }
+
+  const payload = await response.json();
+  return Array.isArray(payload.sessions) ? payload.sessions : [];
+}
+
 export async function saveSessionToApi(session) {
   if (!session?.id) {
     return null;

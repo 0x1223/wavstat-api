@@ -4,6 +4,7 @@ export function Header({
   unresolvedCount,
   versions,
   activeVersionId,
+  backLabel = "Back to Start",
   onStatusChange,
   statusState,
   onVersionChange,
@@ -12,15 +13,25 @@ export function Header({
   onNewSession,
   onClearSession,
   onExportSession,
-  onLockEngineerMode,
   permissions,
-  isEngineerUnlocked
 }) {
   const approvalStates = [
     "Pending Review",
     "Needs Review",
     "Approved"
   ];
+  const isBackToStart = backLabel === "Back to Start";
+
+  function handleBackClick() {
+    if (isBackToStart) {
+      window.localStorage.removeItem("mixreview.latestSession");
+      window.localStorage.removeItem("mixreview.accessState");
+      window.sessionStorage.removeItem("mixreview.engineerUnlocked");
+      window.history.replaceState(null, "", "/");
+    }
+
+    onBackToStart();
+  }
 
   return (
     <header className="topbar">
@@ -53,8 +64,8 @@ export function Header({
         )}
 
         <div className="session-actions">
-          <button type="button" onClick={onBackToStart}>
-            Back to Start
+          <button type="button" onClick={handleBackClick}>
+            {backLabel}
           </button>
           {permissions.canEdit && (
             <>
@@ -71,11 +82,6 @@ export function Header({
                 Export
               </button>
             </>
-          )}
-          {isEngineerUnlocked && (
-            <button type="button" onClick={onLockEngineerMode}>
-              Lock Engineer Mode
-            </button>
           )}
         </div>
 

@@ -164,6 +164,43 @@ body {
   box-shadow: 0 14px 36px rgba(215, 173, 98, 0.24);
 }
 
+.access-form {
+  display: grid;
+  gap: 14px;
+  max-width: 520px;
+}
+
+.access-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--soft);
+  font-size: 0.74rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.access-form input {
+  min-height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 7px;
+  padding: 0 13px;
+  color: #fff6e8;
+  background: rgba(5, 5, 5, 0.52);
+  font: inherit;
+  text-transform: none;
+}
+
+.access-form .primary-action {
+  min-height: 46px;
+  border: 1px solid rgba(215, 173, 98, 0.55);
+  border-radius: 7px;
+  color: #130d04;
+  background: linear-gradient(180deg, #ffd889, #d6a354);
+  cursor: pointer;
+  font-weight: 850;
+  box-shadow: 0 14px 36px rgba(215, 173, 98, 0.24);
+}
+
 .start-import input {
   position: absolute;
   inset: 0;
@@ -815,6 +852,48 @@ h2 {
 
 .review-dashboard {
   padding: 20px;
+}
+
+.admin-shell {
+  min-height: 100vh;
+}
+
+.admin-dashboard {
+  display: grid;
+  gap: 18px;
+  min-height: 0;
+}
+
+.admin-dashboard .summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.admin-session-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+    rgba(15, 15, 15, 0.84);
+}
+
+.admin-session-row h2 {
+  font-size: 1.05rem;
+}
+
+.admin-session-row p:not(.eyebrow) {
+  margin: 5px 0 0;
+  color: var(--soft);
+  font-size: 0.85rem;
 }
 
 .dashboard-header {

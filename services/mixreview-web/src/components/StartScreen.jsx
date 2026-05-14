@@ -1,21 +1,49 @@
-export function StartScreen({ onCreate, onDemo, message }) {
+export function StartScreen({
+  loginName,
+  loginPassword,
+  loginError,
+  onLoginNameChange,
+  onLoginPasswordChange,
+  onLoginSubmit,
+  message
+}) {
   return (
     <main className="start-screen">
       <section className="start-hero">
         <div className="start-copy">
           <p className="eyebrow">MixReview</p>
-          <h1>Create Review Session</h1>
-          <p className="start-role">For engineers and producers</p>
+          <h1>MixReview Access</h1>
+          <p className="start-role">Engineer admin or client reviewer</p>
           <p className="start-purpose">
-            Upload a mix, create versions, add timestamp notes, and send a review link
-            when the pass is ready.
+            Sign in with your engineer credentials, client ID, or review link token
+            to open the right workspace.
           </p>
 
-          <div className="start-actions">
-            <button type="button" className="primary-action" onClick={onCreate}>
-              Create Review Session
+          <form className="access-form" onSubmit={onLoginSubmit}>
+            <label>
+              <span>Name / Client ID</span>
+              <input
+                autoComplete="username"
+                value={loginName}
+                onChange={(event) => onLoginNameChange(event.target.value)}
+                placeholder="Engineer, Admin, or client session ID"
+              />
+            </label>
+            <label>
+              <span>Password</span>
+              <input
+                autoComplete="current-password"
+                type="password"
+                value={loginPassword}
+                onChange={(event) => onLoginPasswordChange(event.target.value)}
+                placeholder="Password or review token"
+              />
+            </label>
+            {loginError && <p className="upload-error">{loginError}</p>}
+            <button type="submit" className="primary-action">
+              Enter MixReview
             </button>
-          </div>
+          </form>
           {message && <div className="session-message">{message}</div>}
         </div>
 
@@ -32,9 +60,6 @@ export function StartScreen({ onCreate, onDemo, message }) {
               Open a review link, listen in context, comment at exact timestamps,
               approve the version, or request changes.
             </p>
-            <button type="button" onClick={onDemo}>
-              Open Review Session
-            </button>
           </div>
           <div className="preview-wave">
             {Array.from({ length: 48 }, (_, index) => (

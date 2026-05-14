@@ -269,10 +269,6 @@ function normalizeAudioMetadata(audioMetadata) {
 }
 
 function normalizeApprovalStatus(status) {
-  if (status === "Final Master Approved") {
-    return "Approved";
-  }
-
   if (status === "Pending") {
     return "Pending Review";
   }
@@ -287,10 +283,6 @@ function normalizeApprovalStatus(status) {
 function resolveApprovalStatus(status, comments, approvalHistory) {
   if (status === "Approved") {
     return status;
-  }
-
-  if (approvalHistory.some((event) => event.status === "Final Master Approved")) {
-    return "Approved";
   }
 
   if (approvalHistory.some((event) => event.status === "Approved")) {

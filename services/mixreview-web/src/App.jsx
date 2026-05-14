@@ -9,6 +9,7 @@ import { StartScreen } from "./components/StartScreen.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
 import { WaveformReview } from "./components/WaveformReview.jsx";
 import {
+  listSessionsFromApi,
   loadSessionFromApi,
   saveSessionToApi,
   uploadSessionAudio
@@ -37,6 +38,7 @@ const clientReviewerIdentities = ["Artist", "Manager", "Label"];
 // TODO: Real production admin auth, password handling, and 2FA must be backend-based later.
 const MIXREVIEW_ADMIN_DEV_PASSWORD = "kingzreview";
 const ADMIN_UNLOCK_SESSION_KEY = "mixreview.engineerUnlocked";
+const ACCESS_STORAGE_KEY = "mixreview.accessState";
 
 const emptyProjectName = "Untitled MixReview Session";
 
@@ -44,8 +46,12 @@ const routeParams = new URLSearchParams(window.location.search);
 const shareRoute = getShareRoute();
 const routeMode = routeParams.get("mode");
 const routeVersionId = routeParams.get("version");
-const routeSessionId = routeParams.get("session") || shareRoute?.shareId || null;
 const forceStartScreen = routeParams.has("start");
+const savedAccessState = forceStartScreen ? null : loadAccessState();
+const routeSessionId =
+  routeParams.get("session") ||
+  shareRoute?.shareId ||
+  (savedAccessState?.mode === "reviewer" ? savedAccessState.sessionId : null);
 const latestSession = loadLatestSession();
 const routeCachedSession =
   routeSessionId && latestSession?.id === routeSessionId ? latestSession : null;
@@ -55,12 +61,16 @@ const restoredSession = shareRoute
     ? null
     : routeMode
       ? routeCachedSession || latestSession
-      : hasPersistedRealAudio(latestSession)
-        ? latestSession
-        : null;
+      : savedAccessState?.mode === "reviewer"
+        ? routeCachedSession || latestSession
+        : hasPersistedRealAudio(latestSession)
+          ? latestSession
+          : null;
 const initialVersions = buildInitialVersions(restoredSession);
 const initialReviewer =
-  routeMode === "reviewer"
+  savedAccessState?.mode === "admin"
+    ? "Engineer"
+    : routeMode === "reviewer"
     ? "Artist"
     : routeMode === "admin" && window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true"
       ? "Engineer"
@@ -87,10 +97,26 @@ export default function App() {
   );
   const [uploadError, setUploadError] = useState("");
   const [sessionMessage, setSessionMessage] = useState("");
+  const [loginName, setLoginName] = useState(
+    savedAccessState?.mode === "reviewer" ? savedAccessState.sessionId || "" : "",
+  );
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [appView, setAppView] = useState(
+    !forceStartScreen && (routeSessionId || routeMode || shareRoute || restoredSession)
+      ? "workspace"
+      : !forceStartScreen && savedAccessState?.mode === "admin"
+      ? "admin"
+      : Boolean(!forceStartScreen && savedAccessState?.mode === "reviewer")
+        ? "workspace"
+        : "start",
+  );
+  const [adminSessions, setAdminSessions] = useState([]);
+  const [isAdminSessionsLoading, setIsAdminSessionsLoading] = useState(false);
   const [shareId, setShareId] = useState(shareRoute?.shareId || restoredSession?.shareId || null);
   const [isSharePanelOpen, setIsSharePanelOpen] = useState(false);
   const [hasStarted, setHasStarted] = useState(
-    Boolean(!forceStartScreen && (shareRoute || restoredSession || routeMode)),
+    Boolean(!forceStartScreen && (shareRoute || restoredSession || routeMode || savedAccessState?.mode === "reviewer")),
   );
   const [isSessionHydrating, setIsSessionHydrating] = useState(
     Boolean(!forceStartScreen && routeSessionId && !restoredSession),
@@ -99,12 +125,10 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [mediaElement, setMediaElement] = useState(null);
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
-    () => window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true",
+    () =>
+      window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
+      savedAccessState?.mode === "admin",
   );
-  const [isAdminUnlockOpen, setIsAdminUnlockOpen] = useState(false);
-  const [adminPassword, setAdminPassword] = useState("");
-  const [adminUnlockError, setAdminUnlockError] = useState("");
-  const [pendingAdminAction, setPendingAdminAction] = useState(null);
   const activeMarkerRef = useRef(null);
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
@@ -143,7 +167,7 @@ export default function App() {
         canReview: !isEngineerSelected || isEngineerUnlocked,
         canShare: isEngineerMode,
         canSubmit: !isEngineerSelected,
-        canChooseReviewer: true,
+        canChooseReviewer: false,
         label: isEngineerSelected
           ? isEngineerUnlocked
             ? "Admin / Owner"
@@ -163,7 +187,7 @@ export default function App() {
     [activeVersion],
   );
 
-  const applyStoredSession = useCallback((session) => {
+  const applyStoredSession = useCallback((session, reviewerOverride = null) => {
     if (!session) {
       return;
     }
@@ -179,9 +203,10 @@ export default function App() {
         : session.activeVersionId || nextVersions[0].id,
     );
     setCurrentReviewer(
-      session.currentReviewer === "Engineer" && !isEngineerUnlocked
+      reviewerOverride ||
+      (session.currentReviewer === "Engineer" && !isEngineerUnlocked
         ? "Artist"
-        : session.currentReviewer || "Artist",
+        : session.currentReviewer || "Artist"),
     );
     setShareId(session.shareId || session.id || null);
     setCurrentTime(0);
@@ -233,7 +258,10 @@ export default function App() {
         }
 
         if (storedSession) {
-          applyStoredSession(storedSession);
+          applyStoredSession(
+            storedSession,
+            routeMode === "admin" && isEngineerUnlocked ? "Engineer" : routeMode === "reviewer" ? "Artist" : null,
+          );
           saveLatestSession(storedSession);
         } else {
           setSessionMessage("Session was not found in persistent storage.");
@@ -253,7 +281,7 @@ export default function App() {
     return () => {
       isCancelled = true;
     };
-  }, [applyStoredSession]);
+  }, [applyStoredSession, forceStartScreen, isEngineerUnlocked, routeMode, routeSessionId]);
 
   useEffect(() => {
     if (!hasStarted || isSessionHydrating) {
@@ -279,6 +307,22 @@ export default function App() {
 
     return () => window.clearTimeout(timeoutId);
   }, [hasStarted, isSessionHydrating, sessionSnapshot, shareId]);
+
+  const refreshAdminSessions = useCallback(() => {
+    setIsAdminSessionsLoading(true);
+    listSessionsFromApi()
+      .then(setAdminSessions)
+      .catch(() => {
+        setSessionMessage("Admin sessions could not be loaded.");
+      })
+      .finally(() => setIsAdminSessionsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (appView === "admin" && isEngineerUnlocked) {
+      refreshAdminSessions();
+    }
+  }, [appView, isEngineerUnlocked, refreshAdminSessions]);
 
   const updateActiveVersion = useCallback((updater) => {
     setVersions((currentVersions) =>
@@ -348,39 +392,119 @@ export default function App() {
     setSessionId(nextSessionId);
     setProjectTitle(emptyProjectName);
     setVersions(nextVersions);
-    setCurrentReviewer(isEngineerUnlocked ? "Engineer" : "Artist");
+    setCurrentReviewer("Engineer");
     setActiveVersionId(nextVersions[0].id);
     setUploadError("");
     setSessionMessage("");
     setShareId(null);
     setHasStarted(true);
+    setAppView("workspace");
+    saveAccessState({ mode: "admin", sessionId: nextSessionId });
     setReviewRoute("admin", nextVersions[0].id, nextSessionId);
     clearStartRouteFlag();
     setCurrentTime(0);
     setIsPlaying(false);
     playerRef.current = null;
-  }, [isEngineerUnlocked]);
+  }, []);
 
   const startNewSession = useCallback(() => {
-    if (!permissions.canEdit && hasStarted) {
-      return;
-    }
-
     if (!isEngineerUnlocked) {
-      setAdminPassword("");
-      setAdminUnlockError("");
-      setPendingAdminAction("create-session");
-      setIsAdminUnlockOpen(true);
+      setLoginError("Engineer password is required before creating sessions.");
+      setAppView("start");
       return;
     }
 
     beginNewSession();
-  }, [beginNewSession, hasStarted, isEngineerUnlocked, permissions.canEdit]);
+  }, [beginNewSession, isEngineerUnlocked]);
 
   const clearSession = useCallback(() => {
     clearLatestSession();
     startNewSession();
   }, [startNewSession]);
+
+  const openAdminDashboard = useCallback(() => {
+    playerRef.current?.pause();
+    setIsPlaying(false);
+    setHasStarted(false);
+    setAppView("admin");
+    setIsSharePanelOpen(false);
+    saveAccessState({ mode: "admin", sessionId });
+    clearWorkspaceRoute();
+    refreshAdminSessions();
+  }, [refreshAdminSessions, sessionId]);
+
+  const openStoredSession = useCallback(async (targetSessionId, reviewer = "Engineer") => {
+    const storedSession = await loadSessionFromApi(targetSessionId);
+    if (!storedSession) {
+      throw new Error("Session was not found.");
+    }
+
+    applyStoredSession(storedSession, reviewer);
+    setAppView("workspace");
+    setHasStarted(true);
+    saveLatestSession(storedSession);
+    saveAccessState({
+      mode: reviewer === "Engineer" ? "admin" : "reviewer",
+      sessionId: storedSession.id,
+      role: reviewer
+    });
+    setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", storedSession.activeVersionId || "version-v1", storedSession.id);
+  }, [applyStoredSession]);
+
+  const handleAccessLogin = useCallback(async (event) => {
+    event.preventDefault();
+    const name = loginName.trim();
+    const password = loginPassword.trim();
+    setLoginError("");
+    setSessionMessage("");
+
+    if (!name || !password) {
+      setLoginError("Enter a name/client ID and password.");
+      return;
+    }
+
+    if (isAdminLoginName(name)) {
+      if (password !== MIXREVIEW_ADMIN_DEV_PASSWORD) {
+        setLoginError("Incorrect engineer password.");
+        return;
+      }
+
+      window.sessionStorage.setItem(ADMIN_UNLOCK_SESSION_KEY, "true");
+      setIsEngineerUnlocked(true);
+      setCurrentReviewer("Engineer");
+      setLoginPassword("");
+      setHasStarted(false);
+      setAppView("admin");
+      saveAccessState({ mode: "admin", sessionId });
+      clearWorkspaceRoute();
+      refreshAdminSessions();
+      return;
+    }
+
+    try {
+      const storedSession = await loadSessionFromApi(name);
+      if (!storedSession) {
+        setLoginError("No review session matches that client ID.");
+        return;
+      }
+
+      const validToken = password === storedSession.shareId || password === storedSession.id;
+      if (!validToken) {
+        setLoginError("Invalid review password or link token.");
+        return;
+      }
+
+      setIsEngineerUnlocked(false);
+      setLoginPassword("");
+      applyStoredSession(storedSession, "Artist");
+      setAppView("workspace");
+      saveLatestSession(storedSession);
+      saveAccessState({ mode: "reviewer", sessionId: storedSession.id, role: "Artist" });
+      setReviewRoute("reviewer", storedSession.activeVersionId || "version-v1", storedSession.id);
+    } catch (error) {
+      setLoginError(error.message || "Unable to open that review session.");
+    }
+  }, [applyStoredSession, loginName, loginPassword, refreshAdminSessions, sessionId]);
 
   const exportSession = useCallback(() => {
     const exportPayload = createExportSession(sessionSnapshot);
@@ -396,34 +520,19 @@ export default function App() {
     setSessionMessage("Session exported as JSON.");
   }, [projectName, sessionSnapshot]);
 
-  const openReviewSession = useCallback(() => {
-    revokeVersionUrls(versionsRef.current);
-    const nextVersions = createEmptyVersions();
-    const nextSessionId = createSessionId();
-    setSessionId(nextSessionId);
-    setProjectTitle(emptyProjectName);
-    setVersions(nextVersions);
-    setCurrentReviewer("Artist");
-    setActiveVersionId(nextVersions[0].id);
-    setShareId(null);
-    setUploadError("");
-    setSessionMessage("");
-    setCurrentTime(0);
-    setIsPlaying(false);
-    setHasStarted(true);
-    setReviewRoute("reviewer", nextVersions[0].id, nextSessionId);
-    clearStartRouteFlag();
-    playerRef.current = null;
-  }, []);
-
   const switchVersion = useCallback((versionId) => {
     setActiveVersionId(versionId);
     setReviewRoute(isEngineerMode ? "admin" : "reviewer", versionId, sessionId);
+    saveAccessState({
+      mode: isEngineerMode ? "admin" : "reviewer",
+      sessionId,
+      role: isEngineerMode ? "Engineer" : currentReviewer
+    });
     setCurrentTime(0);
     setIsPlaying(false);
     activeMarkerRef.current = null;
     playerRef.current = null;
-  }, [isEngineerMode, sessionId]);
+  }, [currentReviewer, isEngineerMode, sessionId]);
 
   const shareSession = useCallback(() => {
     if (!permissions.canShare) {
@@ -441,11 +550,41 @@ export default function App() {
     setSessionMessage("Share links generated for this persistent session.");
   }, [permissions.canShare, sessionId, sessionSnapshot, shareId]);
 
+  const copyClientReviewLink = useCallback((session) => {
+    const token = session.shareId || session.id;
+    const link = createShareLink(token, "reviewer");
+    navigator.clipboard?.writeText(link).catch(() => {});
+    setSessionMessage(`Client review link copied for ${session.projectName || session.id}.`);
+  }, []);
+
+  const openAdminSession = useCallback((targetSessionId) => {
+    openStoredSession(targetSessionId, "Engineer").catch((error) => {
+      setSessionMessage(error.message || "Session could not be opened.");
+    });
+  }, [openStoredSession]);
+
   const returnToStart = useCallback(() => {
     playerRef.current?.pause();
     setIsPlaying(false);
+    setCurrentTime(0);
     setHasStarted(false);
+    setAppView("start");
+    clearLatestSession();
+    clearAccessState();
+    window.sessionStorage.removeItem(ADMIN_UNLOCK_SESSION_KEY);
+    setIsEngineerUnlocked(false);
+    setCurrentReviewer("Artist");
+    setSessionId(createSessionId());
+    setProjectTitle(emptyProjectName);
+    setVersions(createEmptyVersions());
+    setActiveVersionId("version-v1");
+    setShareId(null);
+    setUploadError("");
+    setSessionMessage("");
     setIsSharePanelOpen(false);
+    activeMarkerRef.current = null;
+    playerRef.current = null;
+    replaceWithLandingRoute();
   }, []);
 
   const handleWaveformTimestamp = useCallback((time) => {
@@ -697,71 +836,50 @@ export default function App() {
       return;
     }
 
-    if (reviewer === "Engineer" && !isEngineerUnlocked) {
-      setAdminPassword("");
-      setAdminUnlockError("");
-      setIsAdminUnlockOpen(true);
-      return;
-    }
-
     setCurrentReviewer(reviewer);
     setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", activeVersionId, sessionId);
-  }, [activeVersionId, isEngineerUnlocked, sessionId]);
+  }, [activeVersionId, sessionId]);
 
-  const unlockEngineerMode = useCallback((event) => {
-    event.preventDefault();
-
-    if (adminPassword !== MIXREVIEW_ADMIN_DEV_PASSWORD) {
-      setAdminUnlockError("Incorrect engineer password.");
-      return;
-    }
-
-    window.sessionStorage.setItem(ADMIN_UNLOCK_SESSION_KEY, "true");
-    setIsEngineerUnlocked(true);
-    setCurrentReviewer("Engineer");
-    setIsAdminUnlockOpen(false);
-    setAdminPassword("");
-    setAdminUnlockError("");
-    if (pendingAdminAction === "create-session") {
-      beginNewSession();
-    }
-    setPendingAdminAction(null);
-    setSessionMessage("Engineer mode unlocked for this browser session.");
-  }, [adminPassword, beginNewSession, pendingAdminAction]);
-
-  const lockEngineerMode = useCallback(() => {
-    window.sessionStorage.removeItem(ADMIN_UNLOCK_SESSION_KEY);
-    setIsEngineerUnlocked(false);
-    setCurrentReviewer("Artist");
-    setIsAdminUnlockOpen(false);
-    setAdminPassword("");
-    setAdminUnlockError("");
-    setSessionMessage("Engineer mode locked.");
-  }, []);
-
-  if (!hasStarted) {
+  if (appView === "start") {
     return (
-      <>
-          <StartScreen
-            onCreate={startNewSession}
-          onDemo={openReviewSession}
-          message={sessionMessage}
-        />
-        {isAdminUnlockOpen && (
-          <EngineerUnlockModal
-            password={adminPassword}
-            error={adminUnlockError}
-            onPasswordChange={setAdminPassword}
-            onCancel={() => {
-              setIsAdminUnlockOpen(false);
-              setAdminPassword("");
-              setAdminUnlockError("");
-              setPendingAdminAction(null);
-            }}
-            onSubmit={unlockEngineerMode}
-          />
-        )}
-      </>
+      <StartScreen
+        loginName={loginName}
+        loginPassword={loginPassword}
+        loginError={loginError}
+        onLoginNameChange={setLoginName}
+        onLoginPasswordChange={setLoginPassword}
+        onLoginSubmit={handleAccessLogin}
+        message={sessionMessage}
+      />
+    );
+  }
+
+  if (appView === "admin" && isEngineerUnlocked) {
+    return (
+      <AdminDashboard
+        sessions={adminSessions}
+        isLoading={isAdminSessionsLoading}
+        message={sessionMessage}
+        onCreateSession={startNewSession}
+        onOpenSession={openAdminSession}
+        onCopyClientLink={copyClientReviewLink}
+        onRefresh={refreshAdminSessions}
+        onLogout={returnToStart}
+      />
+    );
+  }
+
+  if (appView === "admin") {
+    return (
+      <StartScreen
+        loginName={loginName}
+        loginPassword={loginPassword}
+        loginError={loginError || "Engineer password is required."}
+        onLoginNameChange={setLoginName}
+        onLoginPasswordChange={setLoginPassword}
+        onLoginSubmit={handleAccessLogin}
+        message={sessionMessage}
+      />
     );
   }
 
@@ -774,17 +892,16 @@ export default function App() {
           unresolvedCount={unresolvedCount}
           versions={versions}
           activeVersionId={activeVersionId}
+          backLabel={isEngineerMode ? "Admin Dashboard" : "Back to Start"}
           onStatusChange={updateApprovalStatus}
           statusState={statusState}
           onVersionChange={switchVersion}
           onShareSession={shareSession}
-          onBackToStart={returnToStart}
+          onBackToStart={isEngineerMode ? openAdminDashboard : returnToStart}
           onNewSession={startNewSession}
           onClearSession={clearSession}
           onExportSession={exportSession}
-          onLockEngineerMode={lockEngineerMode}
           permissions={permissions}
-          isEngineerUnlocked={isEngineerUnlocked}
         />
         {sessionMessage && <div className="session-message">{sessionMessage}</div>}
         {isSharePanelOpen && shareId && (
@@ -863,20 +980,6 @@ export default function App() {
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}
       />
-      {isAdminUnlockOpen && (
-        <EngineerUnlockModal
-          password={adminPassword}
-          error={adminUnlockError}
-          onPasswordChange={setAdminPassword}
-          onCancel={() => {
-            setIsAdminUnlockOpen(false);
-            setAdminPassword("");
-            setAdminUnlockError("");
-            setPendingAdminAction(null);
-          }}
-          onSubmit={unlockEngineerMode}
-        />
-      )}
     </main>
   );
 }
@@ -885,40 +988,104 @@ function createEmptyVersions() {
   return versionLabels.map((label) => createVersion(label, []));
 }
 
-function EngineerUnlockModal({
-  password,
-  error,
-  onPasswordChange,
-  onCancel,
-  onSubmit
+function AdminDashboard({
+  sessions,
+  isLoading,
+  message,
+  onCreateSession,
+  onOpenSession,
+  onCopyClientLink,
+  onRefresh,
+  onLogout
 }) {
+  const buckets = approvalStates.reduce((groups, status) => {
+    groups[status] = sessions.filter((session) => session.status === status);
+    return groups;
+  }, {});
+  const pendingSessions = buckets["Pending Review"] || [];
+  const needsReviewSessions = buckets["Needs Review"] || [];
+  const approvedSessions = buckets.Approved || [];
+
   return (
-    <div className="admin-modal-backdrop" role="presentation">
-      <form className="admin-modal" aria-label="Unlock Engineer mode" onSubmit={onSubmit}>
+    <main className="app-shell admin-shell">
+      <header className="topbar">
         <div>
-          <p className="eyebrow">Protected Access</p>
-          <h2>Unlock Engineer Mode</h2>
-          <p>Enter the engineer password to show admin controls for this session.</p>
+          <p className="eyebrow">MixReview</p>
+          <h1>Admin Dashboard</h1>
         </div>
-        <label>
-          <span>Password</span>
-          <input
-            autoFocus
-            type="password"
-            value={password}
-            onChange={(event) => onPasswordChange(event.target.value)}
-          />
-        </label>
-        {error && <p className="upload-error">{error}</p>}
-        <div className="admin-modal-actions">
-          <button type="button" onClick={onCancel}>
-            Cancel
+        <div className="session-actions">
+          <button type="button" onClick={onCreateSession}>
+            Create Review Session
           </button>
-          <button type="submit">
-            Unlock Engineer
+          <button type="button" onClick={onRefresh}>
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              window.localStorage.removeItem("mixreview.latestSession");
+              window.localStorage.removeItem("mixreview.accessState");
+              window.sessionStorage.removeItem("mixreview.engineerUnlocked");
+              window.history.replaceState(null, "", "/");
+              onLogout();
+            }}
+          >
+            Back to Start
           </button>
         </div>
-      </form>
+      </header>
+
+      {message && <div className="session-message">{message}</div>}
+
+      <section className="admin-dashboard" aria-label="Admin dashboard">
+        <div className="summary-grid">
+          <SummaryTile label="Pending Reviews" value={pendingSessions.length} />
+          <SummaryTile label="Needs Review" value={needsReviewSessions.length} />
+          <SummaryTile label="Approved" value={approvedSessions.length} />
+          <SummaryTile label="All Sessions" value={sessions.length} />
+        </div>
+
+        {isLoading ? (
+          <div className="empty-state">
+            <strong>Loading sessions...</strong>
+            <p>Pulling the latest review workspace list.</p>
+          </div>
+        ) : sessions.length === 0 ? (
+          <div className="empty-state">
+            <strong>No review sessions yet.</strong>
+            <p>Create a review session to upload audio and send a client review link.</p>
+          </div>
+        ) : (
+          <div className="admin-session-list">
+            {sessions.map((session) => (
+              <article className="admin-session-row" key={session.id}>
+                <div>
+                  <p className="eyebrow">{session.status || "Pending Review"}</p>
+                  <h2>{session.projectName || "Untitled MixReview Session"}</h2>
+                  <p>{session.id}</p>
+                </div>
+                <div className="session-actions">
+                  <button type="button" onClick={() => onOpenSession(session.id)}>
+                    Open Session
+                  </button>
+                  <button type="button" onClick={() => onCopyClientLink(session)}>
+                    Copy Client Review Link
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function SummaryTile({ label, value }) {
+  return (
+    <div className="summary-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }
@@ -1048,10 +1215,6 @@ function versionIdFromLabel(label) {
 }
 
 function normalizeApprovalStatus(status) {
-  if (status === "Final Master Approved") {
-    return "Approved";
-  }
-
   if (status === "Pending") {
     return "Pending Review";
   }
@@ -1070,10 +1233,6 @@ function normalizeApprovalStatus(status) {
 function resolveApprovalStatus(status, comments, approvalHistory) {
   if (status === "Approved") {
     return status;
-  }
-
-  if (approvalHistory.some((event) => event.status === "Final Master Approved")) {
-    return "Approved";
   }
 
   if (approvalHistory.some((event) => event.status === "Approved")) {
@@ -1182,6 +1341,21 @@ function clearStartRouteFlag() {
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
+function clearWorkspaceRoute() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("start");
+  url.searchParams.delete("mode");
+  url.searchParams.delete("version");
+  url.searchParams.delete("session");
+  url.searchParams.delete("share");
+  url.searchParams.delete("role");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function replaceWithLandingRoute() {
+  window.history.replaceState(null, "", "/");
+}
+
 function setReviewRoute(mode, versionId, sessionId) {
   const url = new URL(window.location.href);
   url.searchParams.delete("start");
@@ -1195,4 +1369,33 @@ function hasPersistedRealAudio(session) {
   return Boolean(
     session?.versions?.some((version) => version.audioMetadata?.url),
   );
+}
+
+function isAdminLoginName(name) {
+  return ["admin", "engineer"].includes(name.trim().toLowerCase());
+}
+
+function loadAccessState() {
+  try {
+    const rawState = window.localStorage.getItem(ACCESS_STORAGE_KEY);
+    return rawState ? JSON.parse(rawState) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveAccessState(state) {
+  try {
+    window.localStorage.setItem(ACCESS_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Access persistence is best-effort; the session remains stored server-side.
+  }
+}
+
+function clearAccessState() {
+  try {
+    window.localStorage.removeItem(ACCESS_STORAGE_KEY);
+  } catch {
+    // Access persistence is best-effort; the session remains stored server-side.
+  }
 }
