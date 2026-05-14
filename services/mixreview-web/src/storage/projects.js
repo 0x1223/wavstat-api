@@ -73,6 +73,7 @@ export function getShareRoute() {
 export function createShareLink(shareId, role) {
   const url = new URL(window.location.href);
   url.searchParams.set("share", shareId);
+  url.searchParams.set("session", shareId);
   url.searchParams.set("role", normalizeRole(role));
   return url.toString();
 }
@@ -87,7 +88,10 @@ export function toStoredAudioMetadata(audioSource) {
     title: audioSource.title,
     size: audioSource.size,
     type: audioSource.type,
-    url: audioSource.url?.startsWith("blob:") ? null : audioSource.url || null
+    url: audioSource.url?.startsWith("blob:") ? null : audioSource.url || null,
+    key: audioSource.key || null,
+    storage: audioSource.storage || null,
+    uploadedAt: audioSource.uploadedAt || null
   };
 }
 
@@ -257,7 +261,10 @@ function normalizeAudioMetadata(audioMetadata) {
     title: normalizeString(audioMetadata.title, "Imported MixReview Session"),
     size: normalizeNumber(audioMetadata.size, 0),
     type: normalizeString(audioMetadata.type, "audio file"),
-    url: typeof audioMetadata.url === "string" && audioMetadata.url ? audioMetadata.url : null
+    url: typeof audioMetadata.url === "string" && audioMetadata.url ? audioMetadata.url : null,
+    key: typeof audioMetadata.key === "string" && audioMetadata.key ? audioMetadata.key : null,
+    storage: typeof audioMetadata.storage === "string" && audioMetadata.storage ? audioMetadata.storage : null,
+    uploadedAt: typeof audioMetadata.uploadedAt === "string" && audioMetadata.uploadedAt ? audioMetadata.uploadedAt : null
   };
 }
 

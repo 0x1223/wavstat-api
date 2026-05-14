@@ -1168,32 +1168,28 @@ h2 {
 }
 
 .review-console {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 12px;
-}
-
-.review-console > div {
-  min-height: 82px;
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   padding-top: 14px;
 }
 
-.review-console span {
-  color: #fffaf0;
-  font-weight: 750;
-}
-
 .marker-tool-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
   min-height: 36px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
-  padding: 0 12px;
+  padding: 0;
   color: #cfc6b6;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
     #121212;
   cursor: pointer;
+  font-size: 1.2rem;
   font-weight: 800;
 }
 
@@ -1201,12 +1197,6 @@ h2 {
   color: #130d04;
   border-color: rgba(215, 173, 98, 0.55);
   background: linear-gradient(180deg, #ffd889, #d6a354);
-}
-
-.review-console p {
-  margin: 6px 0 0;
-  color: #9e9588;
-  line-height: 1.45;
 }
 
 .comment-sidebar {

@@ -27,7 +27,6 @@ export function WaveformReview({
   const [waveformWidth, setWaveformWidth] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [debugTimes, setDebugTimes] = useState({ clicked: null, marker: null });
   const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
 
   useEffect(() => {
@@ -49,7 +48,6 @@ export function WaveformReview({
     setLoadError("");
     setDuration(0);
     setWaveformWidth(getWaveformMetrics(containerRef.current).width);
-    setDebugTimes({ clicked: null, marker: null });
     callbacksRef.current.onReady(null);
     callbacksRef.current.onTimeUpdate(0);
     callbacksRef.current.onDurationChange(0);
@@ -163,94 +161,87 @@ export function WaveformReview({
 
     const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
     const clickedTime = clickRatio * duration;
-    setDebugTimes((current) => ({
-      clicked: clickedTime,
-      marker: isMarkerToolActive ? clickedTime : current.marker
-    }));
     seekToTime(clickedTime);
     if (isMarkerToolActive) {
       callbacksRef.current.onTimestampCreate(clickedTime);
     }
   }
 
-  const markerItems = comments.map((comment) => ({
+  const hasAudio = Boolean(audioSource?.url);
+  const markerItems = duration > 0 ? comments.map((comment) => ({
     ...comment,
     left:
       duration > 0 && waveformWidth > 0
         ? `${Math.min(waveformWidth, Math.max(0, (comment.time / duration) * waveformWidth))}px`
         : "0px"
-  }));
+  })) : [];
 
-  const timelineLabels = getTimelineLabels(duration);
+  const timelineLabels = duration > 0 ? getTimelineLabels(duration) : [];
 
   return (
     <section className="waveform-panel" aria-label="Waveform review">
-      <div className="mix-strip">
-        <div>
-          <p className="eyebrow">Stereo Mix</p>
-          <h2>{audioSource ? "Uploaded audio review pass" : "Choose audio to begin"}</h2>
+      {hasAudio && (
+        <div className="mix-strip">
+          <div>
+            <p className="eyebrow">Stereo Mix</p>
+            <h2>Uploaded audio review pass</h2>
+          </div>
+          <span className="selected-time">{formatTimecode(selectedTime)}</span>
         </div>
-        <span className="selected-time">{formatTimecode(selectedTime)}</span>
-      </div>
+      )}
 
-      <div className="timeline">
-        {timelineLabels.map((label) => (
-          <span key={label}>{label}</span>
-        ))}
-      </div>
-
-      <div className="waveform-stage">
-        {isLoading && <div className="loading-waveform">Preparing waveform</div>}
-        {loadError && <div className="waveform-error">{loadError}</div>}
-        <div ref={containerRef} className="waveform" onClick={handleWaveformClick} />
-
-        <div className="marker-layer">
-          {markerItems.map((comment) => (
-            <button
-              type="button"
-              className={`wave-marker${comment.resolved ? " resolved" : ""}${
-                comment.id === selectedCommentId ? " selected" : ""
-              }`}
-              key={comment.id}
-              data-time={formatTimecode(comment.time)}
-              style={{ left: comment.left }}
-              aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                setDebugTimes((current) => ({ ...current, marker: comment.time }));
-                seekToTime(comment.time);
-                onMarkerSelect(comment, { autoplay: true });
-              }}
-            />
+      {timelineLabels.length > 0 && (
+        <div className="timeline">
+          {timelineLabels.map((label) => (
+            <span key={label}>{label}</span>
           ))}
         </div>
+      )}
+
+      <div className="waveform-stage">
+        {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
+        {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
+        <div ref={containerRef} className="waveform" onClick={handleWaveformClick} />
+
+        {duration > 0 && (
+          <div className="marker-layer">
+            {markerItems.map((comment) => (
+              <button
+                type="button"
+                className={`wave-marker${comment.resolved ? " resolved" : ""}${
+                  comment.id === selectedCommentId ? " selected" : ""
+                }`}
+                key={comment.id}
+                data-time={formatTimecode(comment.time)}
+                style={{ left: comment.left }}
+                aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  seekToTime(comment.time);
+                  onMarkerSelect(comment, { autoplay: true });
+                }}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="review-console">
-        <div>
+      {duration > 0 && (
+        <div className="review-console">
           <button
             type="button"
             className={`marker-tool-toggle${isMarkerToolActive ? " active" : ""}`}
             aria-pressed={isMarkerToolActive}
+            aria-label="Add timestamp note mode"
+            title="Add timestamp note mode"
             onClick={() => setIsMarkerToolActive((current) => !current)}
           >
-            Marker Tool
+            <span aria-hidden="true">+</span>
           </button>
-          <p>{isMarkerToolActive ? "Click waveform to add timestamp notes." : "Click waveform to seek playback."}</p>
         </div>
-        <div>
-          <span>Debug time</span>
-          <p>
-            Click {formatDebugTime(debugTimes.clicked)} · Marker {formatDebugTime(debugTimes.marker)}
-          </p>
-        </div>
-      </div>
+      )}
     </section>
   );
-}
-
-function formatDebugTime(time) {
-  return typeof time === "number" ? formatTimecode(time) : "--:--";
 }
 
 function getWaveformMetrics(element) {

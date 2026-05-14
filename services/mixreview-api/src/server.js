@@ -3,7 +3,7 @@ import cors from "cors";
 import "dotenv/config";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -15,6 +15,7 @@ const isProduction = process.env.NODE_ENV === "production";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serviceRoot = path.resolve(__dirname, "..");
 const uploadRoot = path.join(serviceRoot, "storage", "uploads");
+const sessionRoot = path.join(serviceRoot, "storage", "sessions");
 const frontendProductionOrigin = "https://mixreview.kingzbreadent.com";
 const defaultDevOrigins = ["http://localhost:4300", "http://localhost:4301", "http://localhost:4302"];
 const allowedOrigins = parseAllowedOrigins(
@@ -62,7 +63,7 @@ if (isProduction && !hasR2Config) {
 
 app.set("trust proxy", 1);
 app.use(cors(buildCorsOptions()));
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(uploadRoot));
 
 app.get("/health", (_req, res) => {
@@ -81,6 +82,7 @@ const sessionRouter = express.Router();
 sessionRouter.get("/", listSessions);
 sessionRouter.post("/", createSession);
 sessionRouter.get("/:sessionId", getSession);
+sessionRouter.put("/:sessionId", saveSession);
 sessionRouter.post("/:sessionId/audio", upload.single("audio"), handleAudioUpload);
 
 app.use("/api/sessions", sessionRouter);
@@ -92,7 +94,9 @@ app.use((error, _req, res, _next) => {
   }
 
   console.error(error);
-  return res.status(500).json({ error: "Audio upload failed." });
+  return res.status(error.status || 500).json({
+    error: error.expose ? error.message : "MixReview API request failed."
+  });
 });
 
 app.listen(port, () => {
@@ -111,7 +115,12 @@ async function handleAudioUpload(req, res, next) {
       return res.status(415).json({ error: validation.error });
     }
 
-    const objectKey = buildAudioObjectKey(audioFile.originalname, validation.extension);
+    const sessionId = sanitizeSessionId(req.params.sessionId);
+    const versionId = sanitizePathSegment(req.body?.versionId || "version-v1");
+    const objectKey = buildAudioObjectKey(audioFile.originalname, validation.extension, {
+      sessionId,
+      versionId
+    });
     const storageResult = hasR2Config
       ? await uploadAudioToR2(objectKey, audioFile, validation.contentType)
       : await saveAudioLocally(objectKey, audioFile, req);
@@ -125,8 +134,8 @@ async function handleAudioUpload(req, res, next) {
       uploadedAt: new Date().toISOString()
     };
 
-    if (req.params.sessionId) {
-      await attachAudioToSession(req.params.sessionId, audioPayload);
+    if (sessionId) {
+      await attachAudioToSession(sessionId, audioPayload, versionId);
     }
 
     return res.status(201).json({
@@ -135,7 +144,8 @@ async function handleAudioUpload(req, res, next) {
       key: objectKey,
       playbackUrl: storageResult.playbackUrl,
       fileName: audioFile.originalname,
-      sessionId: req.params.sessionId || null,
+      sessionId: sessionId || null,
+      versionId,
       contentType: validation.contentType,
       size: audioFile.size
     });
@@ -261,12 +271,17 @@ function readSynchsafeInt(buffer, offset) {
   );
 }
 
-function buildAudioObjectKey(originalName, extension) {
+function buildAudioObjectKey(originalName, extension, { sessionId, versionId } = {}) {
   const safeBaseName = path
     .basename(originalName, path.extname(originalName))
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "mixreview-audio";
+
+  if (sessionId) {
+    const safeVersionId = sanitizePathSegment(versionId || "version-v1");
+    return `sessions/${sessionId}/audio/${safeVersionId}/${randomUUID()}-${safeBaseName}${extension}`;
+  }
 
   return `${new Date().toISOString().slice(0, 10)}/${randomUUID()}-${safeBaseName}${extension}`;
 }
@@ -277,56 +292,109 @@ async function listSessions(_req, res) {
 }
 
 async function createSession(req, res) {
-  const database = await readDatabase();
   const now = new Date().toISOString();
   const session = {
-    id: req.body?.id || `session-${randomUUID()}`,
-    projectName: req.body?.projectName || "Untitled MixReview Session",
-    audio: null,
+    ...(isPlainObject(req.body?.session) ? req.body.session : {}),
+    id: sanitizeSessionId(req.body?.id || req.body?.session?.id) || `session-${randomUUID()}`,
+    projectName: req.body?.projectName || req.body?.session?.projectName || "Untitled MixReview Session",
     createdAt: now,
     updatedAt: now
   };
 
-  database.sessions.unshift(session);
-  await writeDatabase(database);
+  await writeSessionDocument(session.id, session);
+  await upsertSessionIndex(session);
   res.status(201).json({ session });
 }
 
 async function getSession(req, res) {
-  const database = await readDatabase();
-  const session = database.sessions.find((candidate) => candidate.id === req.params.sessionId);
+  const sessionId = sanitizeSessionId(req.params.sessionId);
+  const session = sessionId ? await readSessionDocument(sessionId) : null;
   if (!session) {
     return res.status(404).json({ error: "Session not found." });
   }
 
+  return res.json({ session: await refreshSessionPlaybackUrls(session) });
+}
+
+async function saveSession(req, res) {
+  const sessionId = sanitizeSessionId(req.params.sessionId);
+  if (!sessionId) {
+    return res.status(400).json({ error: "Valid session id is required." });
+  }
+
+  const now = new Date().toISOString();
+  const incomingSession = isPlainObject(req.body?.session) ? req.body.session : req.body;
+  const session = normalizeSessionDocument({
+    ...incomingSession,
+    id: sessionId,
+    updatedAt: now
+  });
+
+  if (!session) {
+    return res.status(400).json({ error: "Invalid session payload." });
+  }
+
+  await writeSessionDocument(sessionId, session);
+  await upsertSessionIndex(session);
   return res.json({ session });
 }
 
-async function attachAudioToSession(sessionId, audio) {
-  const database = await readDatabase();
+async function attachAudioToSession(sessionId, audio, versionId) {
   const now = new Date().toISOString();
-  const session = database.sessions.find((candidate) => candidate.id === sessionId);
+  const existingSession = await readSessionDocument(sessionId);
+  const session = existingSession || {
+    id: sessionId,
+    projectName: path.basename(audio.fileName, path.extname(audio.fileName)) || "Untitled MixReview Session",
+    versions: [],
+    createdAt: now
+  };
 
-  if (session) {
-    session.audio = audio;
-    session.updatedAt = now;
+  const versions = Array.isArray(session.versions) ? session.versions : [];
+  const targetVersionId = versionId || "version-v1";
+  const versionIndex = versions.findIndex((version) => version.id === targetVersionId);
+  const audioMetadata = {
+    fileName: audio.fileName,
+    title: path.basename(audio.fileName, path.extname(audio.fileName)) || audio.fileName,
+    size: audio.size,
+    type: audio.contentType,
+    url: audio.playbackUrl,
+    key: audio.key,
+    storage: audio.storage,
+    uploadedAt: audio.uploadedAt
+  };
+
+  if (versionIndex >= 0) {
+    versions[versionIndex] = {
+      ...versions[versionIndex],
+      audioMetadata
+    };
   } else {
-    database.sessions.unshift({
-      id: sessionId,
-      projectName: path.basename(audio.fileName, path.extname(audio.fileName)) || "Untitled MixReview Session",
-      audio,
-      createdAt: now,
-      updatedAt: now
+    versions.unshift({
+      id: targetVersionId,
+      label: labelFromVersionId(targetVersionId),
+      audioMetadata,
+      comments: [],
+      approvalStatus: "Pending Review",
+      approvalHistory: [],
+      activity: [],
+      selectedCommentId: null,
+      selectedTime: 0,
+      duration: 0
     });
   }
 
-  await writeDatabase(database);
+  const nextSession = normalizeSessionDocument({
+    ...session,
+    versions,
+    updatedAt: now
+  });
+  await writeSessionDocument(sessionId, nextSession);
+  await upsertSessionIndex(nextSession);
 }
 
 async function readDatabase() {
   const databasePath = path.join(serviceRoot, "data", "db.json");
   try {
-    const { readFile } = await import("node:fs/promises");
     return JSON.parse(await readFile(databasePath, "utf8"));
   } catch {
     return { sessions: [] };
@@ -335,9 +403,168 @@ async function readDatabase() {
 
 async function writeDatabase(database) {
   const databasePath = path.join(serviceRoot, "data", "db.json");
-  const { writeFile: writeDatabaseFile } = await import("node:fs/promises");
   await mkdir(path.dirname(databasePath), { recursive: true });
-  await writeDatabaseFile(databasePath, `${JSON.stringify(database, null, 2)}\n`);
+  await writeFile(databasePath, `${JSON.stringify(database, null, 2)}\n`);
+}
+
+async function readSessionDocument(sessionId) {
+  const safeSessionId = sanitizeSessionId(sessionId);
+  if (!safeSessionId) {
+    return null;
+  }
+
+  if (hasR2Config) {
+    try {
+      const response = await r2Client.send(
+        new GetObjectCommand({
+          Bucket: r2Config.bucketName,
+          Key: buildSessionObjectKey(safeSessionId)
+        }),
+      );
+      const body = await response.Body.transformToString();
+      return normalizeSessionDocument(JSON.parse(body));
+    } catch (error) {
+      if (error?.name !== "NoSuchKey" && error?.$metadata?.httpStatusCode !== 404) {
+        throw error;
+      }
+    }
+  }
+
+  try {
+    const body = await readFile(buildLocalSessionPath(safeSessionId), "utf8");
+    return normalizeSessionDocument(JSON.parse(body));
+  } catch {
+    const database = await readDatabase();
+    const legacySession = database.sessions.find((candidate) => candidate.id === safeSessionId);
+    return legacySession ? normalizeSessionDocument(legacySession) : null;
+  }
+}
+
+async function writeSessionDocument(sessionId, session) {
+  const safeSessionId = sanitizeSessionId(sessionId);
+  const nextSession = normalizeSessionDocument({ ...session, id: safeSessionId });
+  if (!safeSessionId || !nextSession) {
+    throw new Error("Cannot store invalid MixReview session.");
+  }
+
+  const body = `${JSON.stringify(nextSession, null, 2)}\n`;
+  if (hasR2Config) {
+    await r2Client.send(
+      new PutObjectCommand({
+        Bucket: r2Config.bucketName,
+        Key: buildSessionObjectKey(safeSessionId),
+        Body: body,
+        ContentType: "application/json"
+      }),
+    );
+  }
+
+  const localPath = buildLocalSessionPath(safeSessionId);
+  await mkdir(path.dirname(localPath), { recursive: true });
+  await writeFile(localPath, body);
+}
+
+async function upsertSessionIndex(session) {
+  const database = await readDatabase();
+  const summary = {
+    id: session.id,
+    projectName: session.projectName || "Untitled MixReview Session",
+    shareId: session.shareId || session.id,
+    updatedAt: session.updatedAt || new Date().toISOString(),
+    storageKey: buildSessionObjectKey(session.id)
+  };
+  database.sessions = [
+    summary,
+    ...database.sessions.filter((candidate) => candidate.id !== session.id)
+  ];
+  await writeDatabase(database);
+}
+
+function buildSessionObjectKey(sessionId) {
+  return `sessions/${sessionId}/session.json`;
+}
+
+function buildLocalSessionPath(sessionId) {
+  return path.join(sessionRoot, sessionId, "session.json");
+}
+
+function normalizeSessionDocument(session) {
+  if (!isPlainObject(session)) {
+    return null;
+  }
+
+  const id = sanitizeSessionId(session.id);
+  if (!id) {
+    return null;
+  }
+
+  return {
+    ...session,
+    id,
+    projectName:
+      typeof session.projectName === "string" && session.projectName.trim()
+        ? session.projectName.trim()
+        : "Untitled MixReview Session",
+    shareId: typeof session.shareId === "string" && session.shareId.trim() ? session.shareId.trim() : id,
+    versions: Array.isArray(session.versions) ? session.versions : [],
+    createdAt: session.createdAt || new Date().toISOString(),
+    updatedAt: session.updatedAt || new Date().toISOString()
+  };
+}
+
+async function refreshSessionPlaybackUrls(session) {
+  if (!hasR2Config || !Array.isArray(session.versions)) {
+    return session;
+  }
+
+  return {
+    ...session,
+    versions: await Promise.all(
+      session.versions.map(async (version) => {
+        const key = version?.audioMetadata?.key;
+        if (!key) {
+          return version;
+        }
+
+        return {
+          ...version,
+          audioMetadata: {
+            ...version.audioMetadata,
+            url: await buildR2PlaybackUrl(key)
+          }
+        };
+      }),
+    )
+  };
+}
+
+function sanitizeSessionId(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 96);
+}
+
+function sanitizePathSegment(value) {
+  if (typeof value !== "string") {
+    return "version-v1";
+  }
+
+  return value.trim().replace(/[^a-zA-Z0-9_-]/g, "-").replace(/^-|-$/g, "").slice(0, 96) || "version-v1";
+}
+
+function labelFromVersionId(versionId) {
+  const label = versionId
+    .replace(/^version-/, "")
+    .split("-")
+    .map((part) => part ? `${part[0].toUpperCase()}${part.slice(1)}` : "")
+    .join(" ");
+  return label || "V1";
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 async function buildR2PlaybackUrl(objectKey) {

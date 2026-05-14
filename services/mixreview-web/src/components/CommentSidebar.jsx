@@ -51,7 +51,7 @@ export function CommentSidebar({
         {comments.length === 0 && (
           <div className="empty-state">
             <strong>No notes on this version yet.</strong>
-            <p>Click the waveform to place the first timestamp comment.</p>
+            <p>Timestamp review notes will appear here.</p>
           </div>
         )}
 

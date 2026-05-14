@@ -9,6 +9,11 @@ import { StartScreen } from "./components/StartScreen.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
 import { WaveformReview } from "./components/WaveformReview.jsx";
 import {
+  loadSessionFromApi,
+  saveSessionToApi,
+  uploadSessionAudio
+} from "./api/sessions.js";
+import {
   clearLatestSession,
   createShareId,
   createShareLink,
@@ -39,14 +44,17 @@ const routeParams = new URLSearchParams(window.location.search);
 const shareRoute = getShareRoute();
 const routeMode = routeParams.get("mode");
 const routeVersionId = routeParams.get("version");
+const routeSessionId = routeParams.get("session") || shareRoute?.shareId || null;
 const forceStartScreen = routeParams.has("start");
 const latestSession = loadLatestSession();
+const routeCachedSession =
+  routeSessionId && latestSession?.id === routeSessionId ? latestSession : null;
 const restoredSession = shareRoute
-  ? loadSharedSession(shareRoute.shareId) || loadLatestSession()
+  ? loadSharedSession(shareRoute.shareId) || routeCachedSession
   : forceStartScreen
     ? null
     : routeMode
-      ? latestSession
+      ? routeCachedSession || latestSession
       : hasPersistedRealAudio(latestSession)
         ? latestSession
         : null;
@@ -84,6 +92,9 @@ export default function App() {
   const [hasStarted, setHasStarted] = useState(
     Boolean(!forceStartScreen && (shareRoute || restoredSession || routeMode)),
   );
+  const [isSessionHydrating, setIsSessionHydrating] = useState(
+    Boolean(!forceStartScreen && routeSessionId && !restoredSession),
+  );
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [mediaElement, setMediaElement] = useState(null);
@@ -97,6 +108,7 @@ export default function App() {
   const activeMarkerRef = useRef(null);
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
+  const lastSavedSessionRef = useRef("");
 
   const activeVersion = useMemo(
     () => versions.find((version) => version.id === activeVersionId) || versions[0],
@@ -151,6 +163,33 @@ export default function App() {
     [activeVersion],
   );
 
+  const applyStoredSession = useCallback((session) => {
+    if (!session) {
+      return;
+    }
+
+    const nextVersions = buildInitialVersions(session);
+    revokeVersionUrls(versionsRef.current);
+    setSessionId(session.id || createSessionId());
+    setProjectTitle(session.projectName || emptyProjectName);
+    setVersions(nextVersions);
+    setActiveVersionId(
+      routeVersionId && nextVersions.some((version) => version.id === routeVersionId)
+        ? routeVersionId
+        : session.activeVersionId || nextVersions[0].id,
+    );
+    setCurrentReviewer(
+      session.currentReviewer === "Engineer" && !isEngineerUnlocked
+        ? "Artist"
+        : session.currentReviewer || "Artist",
+    );
+    setShareId(session.shareId || session.id || null);
+    setCurrentTime(0);
+    setIsPlaying(false);
+    setHasStarted(true);
+    playerRef.current = null;
+  }, [isEngineerUnlocked]);
+
   const sessionSnapshot = useMemo(
     () => ({
       id: sessionId,
@@ -172,7 +211,7 @@ export default function App() {
   useEffect(() => {
     return () => {
       versionsRef.current.forEach((version) => {
-        if (version.audioSource?.url) {
+        if (version.audioSource?.url?.startsWith("blob:")) {
           URL.revokeObjectURL(version.audioSource.url);
         }
       });
@@ -180,7 +219,44 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!hasStarted) {
+    if (!routeSessionId || forceStartScreen) {
+      setIsSessionHydrating(false);
+      return undefined;
+    }
+
+    let isCancelled = false;
+    setIsSessionHydrating(true);
+    loadSessionFromApi(routeSessionId)
+      .then((storedSession) => {
+        if (isCancelled) {
+          return;
+        }
+
+        if (storedSession) {
+          applyStoredSession(storedSession);
+          saveLatestSession(storedSession);
+        } else {
+          setSessionMessage("Session was not found in persistent storage.");
+        }
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setSessionMessage("Session could not be loaded from persistent storage.");
+        }
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsSessionHydrating(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [applyStoredSession]);
+
+  useEffect(() => {
+    if (!hasStarted || isSessionHydrating) {
       return;
     }
 
@@ -188,7 +264,21 @@ export default function App() {
     if (shareId) {
       saveSharedSession(shareId, sessionSnapshot);
     }
-  }, [hasStarted, sessionSnapshot, shareId]);
+
+    const serializedSession = JSON.stringify(sessionSnapshot);
+    if (serializedSession === lastSavedSessionRef.current) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      lastSavedSessionRef.current = serializedSession;
+      saveSessionToApi(sessionSnapshot).catch(() => {
+        setSessionMessage("Session changes are cached locally but could not sync to storage.");
+      });
+    }, 450);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [hasStarted, isSessionHydrating, sessionSnapshot, shareId]);
 
   const updateActiveVersion = useCallback((updater) => {
     setVersions((currentVersions) =>
@@ -198,7 +288,7 @@ export default function App() {
     );
   }, [activeVersionId]);
 
-  const handleAudioUpload = useCallback((file) => {
+  const handleAudioUpload = useCallback(async (file) => {
     if (!permissions.canEdit) {
       return;
     }
@@ -213,27 +303,28 @@ export default function App() {
     }
 
     const title = deriveProjectTitle(file.name);
-    const nextAudioSource = {
-      url: URL.createObjectURL(file),
-      fileName: file.name,
-      title,
-      size: file.size,
-      type: file.type || "audio file"
-    };
-
-    setUploadError("");
+    setUploadError("Uploading audio to session storage...");
     setSessionMessage("");
-    setProjectTitle(title);
-    setCurrentTime(0);
-    setIsPlaying(false);
-    playerRef.current = null;
 
-    updateActiveVersion((version) => {
-      if (version.audioSource?.url) {
-        URL.revokeObjectURL(version.audioSource.url);
-      }
+    try {
+      const uploadResult = await uploadSessionAudio(sessionId, activeVersionId, file);
+      const nextAudioSource = {
+        url: uploadResult.playbackUrl,
+        key: uploadResult.key,
+        storage: uploadResult.storage,
+        fileName: uploadResult.fileName || file.name,
+        title,
+        size: uploadResult.size || file.size,
+        type: uploadResult.contentType || file.type || "audio file"
+      };
 
-      return {
+      setUploadError("");
+      setProjectTitle(title);
+      setCurrentTime(0);
+      setIsPlaying(false);
+      playerRef.current = null;
+
+      updateActiveVersion((version) => ({
         ...version,
         audioSource: nextAudioSource,
         comments: [],
@@ -244,9 +335,11 @@ export default function App() {
         selectedCommentId: null,
         selectedTime: 0,
         duration: 0
-      };
-    });
-  }, [currentReviewer, permissions.canEdit, updateActiveVersion]);
+      }));
+    } catch (error) {
+      setUploadError(error.message || "Audio upload failed.");
+    }
+  }, [activeVersionId, currentReviewer, permissions.canEdit, sessionId, updateActiveVersion]);
 
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
@@ -337,12 +430,16 @@ export default function App() {
       return;
     }
 
-    const nextShareId = shareId || createShareId();
+    const nextShareId = shareId || sessionId || createShareId();
+    const nextSessionSnapshot = { ...sessionSnapshot, id: sessionId, shareId: nextShareId };
     setShareId(nextShareId);
-    saveSharedSession(nextShareId, { ...sessionSnapshot, shareId: nextShareId });
+    saveSharedSession(nextShareId, nextSessionSnapshot);
+    saveSessionToApi(nextSessionSnapshot).catch(() => {
+      setSessionMessage("Share link created, but the session could not sync to storage.");
+    });
     setIsSharePanelOpen(true);
-    setSessionMessage("Share links generated locally.");
-  }, [permissions.canShare, sessionSnapshot, shareId]);
+    setSessionMessage("Share links generated for this persistent session.");
+  }, [permissions.canShare, sessionId, sessionSnapshot, shareId]);
 
   const returnToStart = useCallback(() => {
     playerRef.current?.pause();
@@ -924,7 +1021,7 @@ function toStoredVersion(version) {
 
 function revokeVersionUrls(versions) {
   versions.forEach((version) => {
-    if (version.audioSource?.url) {
+    if (version.audioSource?.url?.startsWith("blob:")) {
       URL.revokeObjectURL(version.audioSource.url);
     }
   });
