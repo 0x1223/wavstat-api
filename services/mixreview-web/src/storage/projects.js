@@ -83,12 +83,18 @@ export function toStoredAudioMetadata(audioSource) {
     return null;
   }
 
+  const rawUrl = audioSource.playbackUrl || audioSource.audioUrl || audioSource.url || audioSource.objectUrl || null;
+  const url = rawUrl?.startsWith("blob:") ? null : rawUrl;
+
   return {
     fileName: audioSource.fileName,
     title: audioSource.title,
     size: audioSource.size,
     type: audioSource.type,
-    url: audioSource.url?.startsWith("blob:") ? null : audioSource.url || null,
+    url,
+    playbackUrl: url,
+    audioUrl: url,
+    objectUrl: audioSource.objectUrl || null,
     key: audioSource.key || null,
     storage: audioSource.storage || null,
     uploadedAt: audioSource.uploadedAt || null

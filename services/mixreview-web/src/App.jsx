@@ -42,6 +42,16 @@ const ADMIN_UNLOCK_SESSION_KEY = "mixreview.engineerUnlocked";
 const ACCESS_STORAGE_KEY = "mixreview.accessState";
 
 const emptyProjectName = "Untitled MixReview Session";
+const emptySessionDetails = {
+  sessionName: "",
+  artistName: "",
+  reviewerName: "",
+  reviewerClientId: "",
+  reviewerToken: "",
+  notes: "",
+  isPriority: false,
+  status: "Draft"
+};
 
 const routeParams = new URLSearchParams(window.location.search);
 const shareRoute = getShareRoute();
@@ -94,6 +104,7 @@ export default function App() {
   const [projectTitle, setProjectTitle] = useState(
     restoredSession?.projectName || emptyProjectName,
   );
+  const [sessionDetails, setSessionDetails] = useState(buildSessionDetails(restoredSession));
   const [versions, setVersions] = useState(initialVersions);
   const [tracks, setTracks] = useState(initialTracks);
   const [activeTrackId, setActiveTrackId] = useState(initialActiveTrackId);
@@ -105,6 +116,7 @@ export default function App() {
   );
   const [uploadError, setUploadError] = useState("");
   const [sessionMessage, setSessionMessage] = useState("");
+  const [setupError, setSetupError] = useState("");
   const [loginName, setLoginName] = useState(
     savedAccessState?.mode === "reviewer" ? savedAccessState.sessionId || "" : "",
   );
@@ -150,9 +162,16 @@ export default function App() {
     () => versions.find((version) => version.id === activeVersionId) || versions[0],
     [activeVersionId, versions],
   );
+  const activeAudioUrl = normalizeAudioUrl(activeVersion?.audioSource);
 
   const comments = activeVersion?.comments || [];
-  const audioSource = activeVersion?.audioSource || null;
+  const audioSource = useMemo(
+    () =>
+      activeVersion?.audioSource
+        ? normalizeAudioSource(activeVersion.audioSource)
+        : null,
+    [activeVersion?.audioSource],
+  );
   const duration = activeVersion?.duration || 0;
   const approvalStatus = activeVersion?.approvalStatus || "Pending Review";
   const selectedCommentId = activeVersion?.selectedCommentId || null;
@@ -203,6 +222,24 @@ export default function App() {
     [activeTrackId, activeVersionId, tracks, versions],
   );
 
+  useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
+    console.debug("MixReview selected track audio", {
+      selectedTrackExists: Boolean(activeTrack),
+      selectedTrackId: activeTrack?.id || null,
+      selectedTrackTitle: activeTrack?.title || null,
+      selectedVersionExists: Boolean(activeVersion),
+      selectedVersionId: activeVersion?.id || null,
+      playbackUrl: activeVersion?.audioSource?.playbackUrl || null,
+      audioUrl: activeVersion?.audioSource?.audioUrl || null,
+      url: activeVersion?.audioSource?.url || null,
+      normalizedUrl: activeAudioUrl || null
+    });
+  }, [activeAudioUrl, activeTrack, activeVersion]);
+
   const applyStoredSession = useCallback((session, reviewerOverride = null) => {
     if (!session) {
       return;
@@ -218,6 +255,7 @@ export default function App() {
     revokeVersionUrls(versionsRef.current);
     setSessionId(session.id || createSessionId());
     setProjectTitle(session.projectName || emptyProjectName);
+    setSessionDetails(buildSessionDetails(session));
     setTracks(nextTracks);
     setActiveTrackId(nextActiveTrackId);
     setVersions(nextVersions);
@@ -246,6 +284,8 @@ export default function App() {
       return {
         id: sessionId,
         projectName,
+        ...sessionDetails,
+        status: deriveSessionStatus(sessionDetails, nextTracks),
         shareId,
         activeTrackId,
         activeVersionId,
@@ -256,7 +296,7 @@ export default function App() {
         updatedAt: new Date().toISOString()
       };
     },
-    [activeTrackId, activeVersionId, currentReviewer, hasStarted, projectName, sessionId, shareId, tracks, versions],
+    [activeTrackId, activeVersionId, currentReviewer, hasStarted, projectName, sessionDetails, sessionId, shareId, tracks, versions],
   );
 
   useEffect(() => {
@@ -288,7 +328,7 @@ export default function App() {
         }
 
         if (storedSession) {
-      applyStoredSession(
+          applyStoredSession(
             storedSession,
             routeMode === "admin" && isEngineerUnlocked ? "Engineer" : routeMode === "reviewer" ? "Artist" : null,
           );
@@ -394,20 +434,19 @@ export default function App() {
 
     try {
       const uploadResult = await uploadSessionAudio(sessionId, targetVersionId, file, targetTrackId);
-      const nextAudioSource = {
-        url: uploadResult.playbackUrl,
+      const nextAudioSource = normalizeAudioSource({
+        playbackUrl: uploadResult.playbackUrl,
+        audioUrl: uploadResult.audioUrl,
+        url: uploadResult.url,
         key: uploadResult.key,
         storage: uploadResult.storage,
         fileName: uploadResult.fileName || file.name,
         title,
         size: uploadResult.size || file.size,
         type: uploadResult.contentType || file.type || "audio file"
-      };
+      });
 
       setUploadError("");
-      if (projectTitle === emptyProjectName) {
-        setProjectTitle(title);
-      }
       setCurrentTime(0);
       setIsPlaying(false);
       playerRef.current = null;
@@ -449,7 +488,7 @@ export default function App() {
     } catch (error) {
       setUploadError(error.message || "Audio upload failed.");
     }
-  }, [activeTrackId, activeVersionId, currentReviewer, permissions.canEdit, projectTitle, sessionId, versions]);
+  }, [activeTrackId, activeVersionId, currentReviewer, permissions.canEdit, sessionId, versions]);
 
   const handleTrackUpload = useCallback(async (file) => {
     if (!permissions.canEdit) {
@@ -473,15 +512,17 @@ export default function App() {
 
     try {
       const uploadResult = await uploadSessionAudio(sessionId, nextVersionId, file, nextTrackId);
-      const nextAudioSource = {
-        url: uploadResult.playbackUrl,
+      const nextAudioSource = normalizeAudioSource({
+        playbackUrl: uploadResult.playbackUrl,
+        audioUrl: uploadResult.audioUrl,
+        url: uploadResult.url,
         key: uploadResult.key,
         storage: uploadResult.storage,
         fileName: uploadResult.fileName || file.name,
         title,
         size: uploadResult.size || file.size,
         type: uploadResult.contentType || file.type || "audio file"
-      };
+      });
       const nextVersions = createEmptyVersions().map((version) =>
         version.id === nextVersionId
           ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
@@ -497,19 +538,17 @@ export default function App() {
       setCurrentTime(0);
       setIsPlaying(false);
       playerRef.current = null;
-      if (projectTitle === emptyProjectName) {
-        setProjectTitle(title);
-      }
     } catch (error) {
       setUploadError(error.message || "Track upload failed.");
     }
-  }, [currentReviewer, permissions.canEdit, projectTitle, sessionId]);
+  }, [currentReviewer, permissions.canEdit, sessionId]);
 
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
     const nextSessionId = createSessionId();
     setSessionId(nextSessionId);
     setProjectTitle(emptyProjectName);
+    setSessionDetails(emptySessionDetails);
     setTracks([]);
     setActiveTrackId(null);
     setVersions(createEmptyVersions());
@@ -518,15 +557,45 @@ export default function App() {
     setUploadError("");
     setSessionMessage("");
     setShareId(null);
-    setHasStarted(true);
-    setAppView("workspace");
+    setHasStarted(false);
+    setAppView("setup");
     saveAccessState({ mode: "admin", sessionId: nextSessionId });
-    setReviewRoute("admin", "version-v1", nextSessionId);
+    clearWorkspaceRoute();
     clearStartRouteFlag();
     setCurrentTime(0);
     setIsPlaying(false);
     playerRef.current = null;
   }, []);
+
+  const submitSessionSetup = useCallback((event) => {
+    event.preventDefault();
+    const sessionName = sessionDetails.sessionName.trim();
+    const artistName = sessionDetails.artistName.trim();
+    if (!sessionName || !artistName) {
+      setSetupError("Session / Project Name and Artist Name are required.");
+      return;
+    }
+
+    const nextTitle = `${artistName} - ${sessionName}`;
+    const nextDetails = {
+      ...sessionDetails,
+      sessionName,
+      artistName,
+      reviewerName: sessionDetails.reviewerName.trim(),
+      reviewerClientId: sessionDetails.reviewerClientId.trim(),
+      reviewerToken: sessionDetails.reviewerToken.trim(),
+      notes: sessionDetails.notes.trim(),
+      status: "Draft"
+    };
+
+    setSetupError("");
+    setProjectTitle(nextTitle);
+    setSessionDetails(nextDetails);
+    setHasStarted(true);
+    setAppView("workspace");
+    setReviewRoute("admin", activeVersionId || "version-v1", sessionId, activeTrackId);
+    saveAccessState({ mode: "admin", sessionId });
+  }, [activeTrackId, activeVersionId, sessionDetails, sessionId]);
 
   const startNewSession = useCallback(() => {
     if (!isEngineerUnlocked) {
@@ -603,13 +672,16 @@ export default function App() {
     }
 
     try {
-      const storedSession = await loadSessionFromApi(name);
+      const storedSession = await findReviewerSession(name);
       if (!storedSession) {
         setLoginError("No review session matches that client ID.");
         return;
       }
 
-      const validToken = password === storedSession.shareId || password === storedSession.id;
+      const validToken =
+        password === storedSession.reviewerToken ||
+        password === storedSession.shareId ||
+        password === storedSession.id;
       if (!validToken) {
         setLoginError("Invalid review password or link token.");
         return;
@@ -706,6 +778,39 @@ export default function App() {
     navigator.clipboard?.writeText(link).catch(() => {});
     setSessionMessage(`Client review link copied for ${session.projectName || session.id}.`);
   }, []);
+
+  const toggleSessionPriority = useCallback(async (session) => {
+    if (!session?.id) {
+      return;
+    }
+
+    setAdminSessions((current) =>
+      sortSessionSummaries(
+        current.map((candidate) =>
+          candidate.id === session.id
+            ? { ...candidate, isPriority: !candidate.isPriority }
+            : candidate,
+        ),
+      ),
+    );
+
+    try {
+      const storedSession = await loadSessionFromApi(session.id);
+      if (!storedSession) {
+        throw new Error("Session was not found.");
+      }
+
+      await saveSessionToApi({
+        ...storedSession,
+        isPriority: !storedSession.isPriority,
+        updatedAt: new Date().toISOString()
+      });
+      refreshAdminSessions();
+    } catch (error) {
+      setSessionMessage(error.message || "Priority status could not be saved.");
+      refreshAdminSessions();
+    }
+  }, [refreshAdminSessions]);
 
   const openAdminSession = useCallback((targetSessionId) => {
     openStoredSession(targetSessionId, "Engineer").catch((error) => {
@@ -1008,15 +1113,28 @@ export default function App() {
 
   if (appView === "admin" && isEngineerUnlocked) {
     return (
-      <AdminDashboard
+        <AdminDashboard
         sessions={adminSessions}
         isLoading={isAdminSessionsLoading}
         message={sessionMessage}
         onCreateSession={startNewSession}
         onOpenSession={openAdminSession}
         onCopyClientLink={copyClientReviewLink}
+        onTogglePriority={toggleSessionPriority}
         onRefresh={refreshAdminSessions}
         onLogout={returnToStart}
+      />
+    );
+  }
+
+  if (appView === "setup" && isEngineerUnlocked) {
+    return (
+      <SessionSetup
+        details={sessionDetails}
+        error={setupError}
+        onBack={openAdminDashboard}
+        onChange={setSessionDetails}
+        onSubmit={submitSessionSetup}
       />
     );
   }
@@ -1108,6 +1226,7 @@ export default function App() {
             activeVersion={activeVersion}
             versions={versions}
             approvalSummary={approvalSummary}
+            activeTrack={activeTrack}
             currentReviewer={currentReviewer}
             onReviewerChange={updateReviewer}
             onApprovalChange={updateApprovalStatus}
@@ -1167,13 +1286,17 @@ function AdminDashboard({
   onCreateSession,
   onOpenSession,
   onCopyClientLink,
+  onTogglePriority,
   onRefresh,
   onLogout
 }) {
-  const buckets = approvalStates.reduce((groups, status) => {
-    groups[status] = sessions.filter((session) => session.status === status);
+  const dashboardStates = ["Draft", ...approvalStates];
+  const sortedSessions = sortSessionSummaries(sessions);
+  const buckets = dashboardStates.reduce((groups, status) => {
+    groups[status] = sortedSessions.filter((session) => (session.status || "Draft") === status);
     return groups;
   }, {});
+  const draftSessions = buckets.Draft || [];
   const pendingSessions = buckets["Pending Review"] || [];
   const needsReviewSessions = buckets["Needs Review"] || [];
   const approvedSessions = buckets.Approved || [];
@@ -1211,10 +1334,10 @@ function AdminDashboard({
 
       <section className="admin-dashboard" aria-label="Admin dashboard">
         <div className="summary-grid">
+          <SummaryTile label="Draft" value={draftSessions.length} />
           <SummaryTile label="Pending Reviews" value={pendingSessions.length} />
           <SummaryTile label="Needs Review" value={needsReviewSessions.length} />
           <SummaryTile label="Approved" value={approvedSessions.length} />
-          <SummaryTile label="All Sessions" value={sessions.length} />
         </div>
 
         {isLoading ? (
@@ -1229,26 +1352,100 @@ function AdminDashboard({
           </div>
         ) : (
           <div className="admin-session-list">
-            {sessions.map((session) => (
-              <article className="admin-session-row" key={session.id}>
-                <div>
-                  <p className="eyebrow">{session.status || "Pending Review"}</p>
-                  <h2>{session.projectName || "Untitled MixReview Session"}</h2>
-                  <p>{session.id}</p>
-                </div>
-                <div className="session-actions">
-                  <button type="button" onClick={() => onOpenSession(session.id)}>
-                    Open Session
-                  </button>
-                  <button type="button" onClick={() => onCopyClientLink(session)}>
-                    Copy Client Review Link
-                  </button>
-                </div>
-              </article>
+            {dashboardStates.map((status) => (
+              <section className="admin-session-group" key={status}>
+                <h2>{status}</h2>
+                {(buckets[status] || []).length === 0 ? (
+                  <p className="muted-line">No {status.toLowerCase()} sessions.</p>
+                ) : (
+                  (buckets[status] || []).map((session) => (
+                    <article className={`admin-session-row${session.isPriority ? " priority" : ""}`} key={session.id}>
+                      <div>
+                        <p className="eyebrow">{session.isPriority ? "Priority" : status}</p>
+                        <h2>{session.projectName || "Untitled MixReview Session"}</h2>
+                        <p>
+                          {session.artistName || "No artist"} · {session.reviewerName || session.reviewerClientId || "No reviewer"}
+                        </p>
+                        <p>
+                          {session.trackCount || 0} tracks · {session.approvedTrackCount || 0}/{session.trackCount || 0} approved · Updated {formatDashboardDate(session.updatedAt)}
+                        </p>
+                      </div>
+                      <div className="session-actions">
+                        <button type="button" onClick={() => onOpenSession(session.id)}>
+                          {status === "Draft" ? "Continue" : "Open"}
+                        </button>
+                        <button type="button" onClick={() => onTogglePriority(session)}>
+                          {session.isPriority ? "Unmark Priority" : "Mark Priority"}
+                        </button>
+                        <button type="button" onClick={() => onCopyClientLink(session)}>
+                          Copy Client Review Link
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </section>
             ))}
           </div>
         )}
       </section>
+    </main>
+  );
+}
+
+function SessionSetup({ details, error, onBack, onChange, onSubmit }) {
+  const updateField = (field, value) => {
+    onChange((current) => ({ ...current, [field]: value }));
+  };
+
+  return (
+    <main className="app-shell setup-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">MixReview</p>
+          <h1>Create Review Session</h1>
+        </div>
+        <div className="session-actions">
+          <button type="button" onClick={onBack}>
+            Admin Dashboard
+          </button>
+        </div>
+      </header>
+
+      <form className="session-setup-form" onSubmit={onSubmit}>
+        <label>
+          <span>Session / Project Name</span>
+          <input value={details.sessionName} onChange={(event) => updateField("sessionName", event.target.value)} />
+        </label>
+        <label>
+          <span>Artist Name</span>
+          <input value={details.artistName} onChange={(event) => updateField("artistName", event.target.value)} />
+        </label>
+        <label>
+          <span>Reviewer / Client Name</span>
+          <input value={details.reviewerName} onChange={(event) => updateField("reviewerName", event.target.value)} />
+        </label>
+        <label>
+          <span>Reviewer / Client ID</span>
+          <input value={details.reviewerClientId} onChange={(event) => updateField("reviewerClientId", event.target.value)} />
+        </label>
+        <label>
+          <span>Optional Reviewer Password / Token</span>
+          <input value={details.reviewerToken} onChange={(event) => updateField("reviewerToken", event.target.value)} />
+        </label>
+        <label className="span-2">
+          <span>Notes / Project Description</span>
+          <textarea value={details.notes} onChange={(event) => updateField("notes", event.target.value)} />
+        </label>
+        <label className="checkbox-row span-2">
+          <input type="checkbox" checked={details.isPriority} onChange={(event) => updateField("isPriority", event.target.checked)} />
+          <span>Mark as Priority</span>
+        </label>
+        {error && <p className="upload-error span-2">{error}</p>}
+        <div className="session-actions span-2">
+          <button type="submit">Create Draft Session</button>
+        </div>
+      </form>
     </main>
   );
 }
@@ -1277,6 +1474,106 @@ function createVersion(label, comments = []) {
   };
 }
 
+function buildSessionDetails(session) {
+  return {
+    ...emptySessionDetails,
+    sessionName: session?.sessionName || "",
+    artistName: session?.artistName || "",
+    reviewerName: session?.reviewerName || "",
+    reviewerClientId: session?.reviewerClientId || "",
+    reviewerToken: session?.reviewerToken || "",
+    notes: session?.notes || "",
+    isPriority: Boolean(session?.isPriority),
+    status: session?.status || "Draft"
+  };
+}
+
+function normalizeAudioUrl(audioSource) {
+  if (!audioSource) {
+    return null;
+  }
+
+  return audioSource.playbackUrl || audioSource.audioUrl || audioSource.url || audioSource.objectUrl || null;
+}
+
+function normalizeAudioSource(audioSource) {
+  if (!audioSource) {
+    return null;
+  }
+
+  const url = normalizeAudioUrl(audioSource);
+  return {
+    ...audioSource,
+    playbackUrl: audioSource.playbackUrl || url,
+    audioUrl: audioSource.audioUrl || url,
+    url,
+    objectUrl: audioSource.objectUrl || null,
+    needsRelink: Boolean(audioSource.needsRelink && !url)
+  };
+}
+
+async function findReviewerSession(clientIdOrName) {
+  const lookup = clientIdOrName.trim().toLowerCase();
+  const sessions = await listSessionsFromApi();
+  const match = sessions.find((session) =>
+    [session.reviewerClientId, session.reviewerName, session.shareId, session.id]
+      .filter(Boolean)
+      .some((value) => String(value).trim().toLowerCase() === lookup),
+  );
+
+  return match ? loadSessionFromApi(match.id) : null;
+}
+
+function sortSessionSummaries(sessions) {
+  return [...sessions].sort((a, b) => {
+    if (Boolean(a.isPriority) !== Boolean(b.isPriority)) {
+      return a.isPriority ? -1 : 1;
+    }
+
+    return new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime();
+  });
+}
+
+function formatDashboardDate(value) {
+  if (!value) {
+    return "Never";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function deriveSessionStatus(details, tracks) {
+  const importedTracks = tracks.filter((track) =>
+    track.versions.some((version) => version.audioSource),
+  );
+  if (importedTracks.length === 0) {
+    return "Draft";
+  }
+
+  const statuses = importedTracks.map((track) => {
+    const activeVersion = track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
+    return activeVersion?.approvalStatus || "Pending Review";
+  });
+
+  if (statuses.length > 0 && statuses.every((status) => status === "Approved")) {
+    return "Approved";
+  }
+  if (statuses.some((status) => status === "Needs Review")) {
+    return "Needs Review";
+  }
+  return "Pending Review";
+}
+
 function buildInitialVersions(session) {
   if (Array.isArray(session?.versions)) {
     const storedVersions = session.versions.map(hydrateStoredVersion);
@@ -1288,11 +1585,10 @@ function buildInitialVersions(session) {
     {
       ...createVersion("V1", legacyComments),
       audioSource: session?.audioMetadata
-        ? {
+        ? normalizeAudioSource({
             ...session.audioMetadata,
-            url: session.audioMetadata.url || null,
-            needsRelink: !session.audioMetadata.url
-          }
+            needsRelink: !normalizeAudioUrl(session.audioMetadata)
+          })
         : null,
       approvalStatus: resolveApprovalStatus(
         normalizeApprovalStatus(session?.approvalStatus || session?.mixStatus),
@@ -1357,11 +1653,10 @@ function hydrateStoredVersion(version) {
     id: version.id || versionIdFromLabel(version.label || "V1"),
     label: version.label || "V1",
     audioSource: version.audioMetadata
-      ? {
+      ? normalizeAudioSource({
           ...version.audioMetadata,
-          url: version.audioMetadata.url || null,
-          needsRelink: !version.audioMetadata.url
-        }
+          needsRelink: !normalizeAudioUrl(version.audioMetadata)
+        })
       : null,
     comments,
     approvalStatus: resolveApprovalStatus(

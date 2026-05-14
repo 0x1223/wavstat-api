@@ -192,8 +192,8 @@ export function WaveformReview({
 
       {timelineLabels.length > 0 && (
         <div className="timeline">
-          {timelineLabels.map((label) => (
-            <span key={label}>{label}</span>
+          {timelineLabels.map((label, index) => (
+            <span key={`${label}-${index}`}>{label}</span>
           ))}
         </div>
       )}

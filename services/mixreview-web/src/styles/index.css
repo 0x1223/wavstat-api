@@ -949,6 +949,24 @@ h2 {
   gap: 12px;
 }
 
+.admin-session-group {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-session-group > h2 {
+  margin: 8px 0 0;
+  color: #f6eedf;
+  font-size: 0.92rem;
+  letter-spacing: 0;
+}
+
+.muted-line {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
 .admin-session-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -960,6 +978,11 @@ h2 {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
     rgba(15, 15, 15, 0.84);
+}
+
+.admin-session-row.priority {
+  border-color: rgba(215, 173, 98, 0.4);
+  box-shadow: 0 18px 48px rgba(214, 163, 84, 0.08);
 }
 
 .admin-session-row h2 {
@@ -977,6 +1000,75 @@ h2 {
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
+}
+
+.setup-shell {
+  min-height: 100vh;
+}
+
+.session-setup-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
+    rgba(14, 14, 14, 0.86);
+}
+
+.session-setup-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--soft);
+  font-size: 0.72rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.session-setup-form input,
+.session-setup-form textarea {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #f8eedc;
+  background: #101010;
+  padding: 10px 12px;
+  font: inherit;
+  text-transform: none;
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.session-setup-form textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+.session-setup-form input:focus,
+.session-setup-form textarea:focus {
+  border-color: rgba(215, 173, 98, 0.48);
+  box-shadow: 0 0 0 3px rgba(215, 173, 98, 0.12);
+}
+
+.session-setup-form .span-2 {
+  grid-column: 1 / -1;
+}
+
+.session-setup-form .checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-setup-form .checkbox-row input {
+  width: 18px;
+  min-height: 18px;
+  accent-color: #d6a354;
 }
 
 .reviewer-select {
@@ -1745,6 +1837,15 @@ h2 {
   .upload-duration {
     justify-content: center;
     justify-items: start;
+  }
+
+  .session-setup-form,
+  .admin-session-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-dashboard .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

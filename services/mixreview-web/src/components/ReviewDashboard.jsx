@@ -10,6 +10,7 @@ export function ReviewDashboard({
   activeVersion,
   versions,
   approvalSummary,
+  activeTrack,
   currentReviewer,
   onReviewerChange,
   onApprovalChange,
@@ -29,7 +30,7 @@ export function ReviewDashboard({
       <div className="dashboard-header">
         <div>
           <p className="eyebrow">Review Dashboard</p>
-          <h2>{activeVersion.label} approval workflow</h2>
+          <h2>{activeTrack?.title || activeVersion.label} approval workflow</h2>
         </div>
 
         <label className="reviewer-select">

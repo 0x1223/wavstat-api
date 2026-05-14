@@ -393,7 +393,7 @@ async function attachAudioToSession(sessionId, audio, versionId, trackId = "trac
   const existingSession = await readSessionDocument(sessionId);
   const session = existingSession || {
     id: sessionId,
-    projectName: path.basename(audio.fileName, path.extname(audio.fileName)) || "Untitled MixReview Session",
+    projectName: "Untitled MixReview Session",
     tracks: [],
     versions: [],
     createdAt: now
@@ -540,11 +540,21 @@ async function writeSessionDocument(sessionId, session) {
 
 async function upsertSessionIndex(session) {
   const database = await readDatabase();
+  const trackSummary = getTrackSummary(session);
   const summary = {
     id: session.id,
     projectName: session.projectName || "Untitled MixReview Session",
+    sessionName: session.sessionName || "",
+    artistName: session.artistName || "",
+    reviewerName: session.reviewerName || "",
+    reviewerClientId: session.reviewerClientId || "",
+    reviewerToken: session.reviewerToken || "",
+    notes: session.notes || "",
+    isPriority: Boolean(session.isPriority),
     shareId: session.shareId || session.id,
     status: getSessionStatus(session),
+    trackCount: trackSummary.total,
+    approvedTrackCount: trackSummary.approved,
     updatedAt: session.updatedAt || new Date().toISOString(),
     storageKey: buildSessionObjectKey(session.id)
   };
@@ -580,6 +590,14 @@ function normalizeSessionDocument(session) {
       typeof session.projectName === "string" && session.projectName.trim()
         ? session.projectName.trim()
         : "Untitled MixReview Session",
+    sessionName: typeof session.sessionName === "string" ? session.sessionName.trim() : "",
+    artistName: typeof session.artistName === "string" ? session.artistName.trim() : "",
+    reviewerName: typeof session.reviewerName === "string" ? session.reviewerName.trim() : "",
+    reviewerClientId: typeof session.reviewerClientId === "string" ? session.reviewerClientId.trim() : "",
+    reviewerToken: typeof session.reviewerToken === "string" ? session.reviewerToken.trim() : "",
+    notes: typeof session.notes === "string" ? session.notes.trim() : "",
+    isPriority: Boolean(session.isPriority),
+    status: typeof session.status === "string" ? session.status : "Draft",
     shareId: typeof session.shareId === "string" && session.shareId.trim() ? session.shareId.trim() : id,
     activeTrackId: typeof session.activeTrackId === "string" ? sanitizePathSegment(session.activeTrackId) : null,
     versions: Array.isArray(session.versions) ? session.versions : [],
@@ -590,16 +608,53 @@ function normalizeSessionDocument(session) {
 }
 
 function getSessionStatus(session) {
-  const versions = Array.isArray(session.tracks)
-    ? session.tracks.flatMap((track) => (Array.isArray(track.versions) ? track.versions : []))
-    : Array.isArray(session.versions) ? session.versions : [];
-  if (versions.some((version) => version.approvalStatus === "Approved")) {
+  const importedTracks = getImportedTracks(session);
+  if (importedTracks.length === 0) {
+    return "Draft";
+  }
+
+  const activeStatuses = importedTracks.map((track) => {
+    const versions = Array.isArray(track.versions) ? track.versions : [];
+    const activeVersion = versions.find((version) => version.id === track.activeVersionId) || versions[0];
+    return activeVersion?.approvalStatus || "Pending Review";
+  });
+  if (activeStatuses.length > 0 && activeStatuses.every((status) => status === "Approved")) {
     return "Approved";
   }
-  if (versions.some((version) => version.approvalStatus === "Needs Review")) {
+  if (activeStatuses.some((status) => status === "Needs Review")) {
     return "Needs Review";
   }
   return "Pending Review";
+}
+
+function getTrackSummary(session) {
+  const importedTracks = getImportedTracks(session);
+  return {
+    total: importedTracks.length,
+    approved: importedTracks.filter((track) => {
+      const versions = Array.isArray(track.versions) ? track.versions : [];
+      const activeVersion = versions.find((version) => version.id === track.activeVersionId) || versions[0];
+      return activeVersion?.approvalStatus === "Approved";
+    }).length
+  };
+}
+
+function getImportedTracks(session) {
+  if (Array.isArray(session.tracks) && session.tracks.length > 0) {
+    return session.tracks.filter((track) =>
+      Array.isArray(track.versions) &&
+      track.versions.some((version) => version.audioMetadata?.url || version.audioMetadata?.playbackUrl || version.audioMetadata?.audioUrl),
+    );
+  }
+
+  if (Array.isArray(session.versions)) {
+    const hasAudio = session.versions.some((version) => version.audioMetadata?.url || version.audioMetadata?.playbackUrl || version.audioMetadata?.audioUrl);
+    return hasAudio
+      ? [{ id: "legacy-track", activeVersionId: session.activeVersionId, versions: session.versions }]
+      : [];
+  }
+
+  return [];
 }
 
 async function refreshSessionPlaybackUrls(session, req = null) {
