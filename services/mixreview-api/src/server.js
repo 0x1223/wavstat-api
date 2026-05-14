@@ -17,7 +17,13 @@ const serviceRoot = path.resolve(__dirname, "..");
 const uploadRoot = path.join(serviceRoot, "storage", "uploads");
 const sessionRoot = path.join(serviceRoot, "storage", "sessions");
 const frontendProductionOrigin = "https://mixreview.kingzbreadent.com";
-const defaultDevOrigins = ["http://localhost:4300", "http://localhost:4301", "http://localhost:4302"];
+const defaultDevOrigins = [
+  "http://localhost:4300",
+  "http://localhost:4301",
+  "http://localhost:4302",
+  "http://localhost:4303",
+  "http://localhost:4304"
+];
 const allowedOrigins = parseAllowedOrigins(
   getEnvValue("CORS_ORIGINS") || getEnvValue("CLIENT_ORIGIN"),
 );
@@ -78,6 +84,8 @@ app.get("/health", (_req, res) => {
   });
 });
 
+app.get("/api/audio/playback/:encodedKey", streamAudioPlayback);
+
 const sessionRouter = express.Router();
 sessionRouter.get("/", listSessions);
 sessionRouter.post("/", createSession);
@@ -116,13 +124,15 @@ async function handleAudioUpload(req, res, next) {
     }
 
     const sessionId = sanitizeSessionId(req.params.sessionId);
+    const trackId = sanitizePathSegment(req.body?.trackId || "track-1");
     const versionId = sanitizePathSegment(req.body?.versionId || "version-v1");
     const objectKey = buildAudioObjectKey(audioFile.originalname, validation.extension, {
       sessionId,
+      trackId,
       versionId
     });
     const storageResult = hasR2Config
-      ? await uploadAudioToR2(objectKey, audioFile, validation.contentType)
+      ? await uploadAudioToR2(objectKey, audioFile, validation.contentType, req)
       : await saveAudioLocally(objectKey, audioFile, req);
     const audioPayload = {
       key: objectKey,
@@ -135,7 +145,7 @@ async function handleAudioUpload(req, res, next) {
     };
 
     if (sessionId) {
-      await attachAudioToSession(sessionId, audioPayload, versionId);
+      await attachAudioToSession(sessionId, audioPayload, versionId, trackId);
     }
 
     return res.status(201).json({
@@ -145,6 +155,7 @@ async function handleAudioUpload(req, res, next) {
       playbackUrl: storageResult.playbackUrl,
       fileName: audioFile.originalname,
       sessionId: sessionId || null,
+      trackId,
       versionId,
       contentType: validation.contentType,
       size: audioFile.size
@@ -154,7 +165,7 @@ async function handleAudioUpload(req, res, next) {
   }
 }
 
-async function uploadAudioToR2(objectKey, audioFile, contentType) {
+async function uploadAudioToR2(objectKey, audioFile, contentType, req) {
   await r2Client.send(
     new PutObjectCommand({
       Bucket: r2Config.bucketName,
@@ -170,8 +181,45 @@ async function uploadAudioToR2(objectKey, audioFile, contentType) {
 
   return {
     storage: "r2",
-    playbackUrl: await buildR2PlaybackUrl(objectKey)
+    playbackUrl: buildApiPlaybackUrl(req, objectKey)
   };
+}
+
+async function streamAudioPlayback(req, res, next) {
+  try {
+    const objectKey = decodeURIComponent(req.params.encodedKey || "");
+    if (!objectKey || objectKey.includes("..")) {
+      return res.status(400).json({ error: "Valid audio key is required." });
+    }
+
+    if (!hasR2Config) {
+      return res.redirect(302, `/uploads/${objectKey}`);
+    }
+
+    const response = await r2Client.send(
+      new GetObjectCommand({
+        Bucket: r2Config.bucketName,
+        Key: objectKey,
+        Range: req.headers.range
+      }),
+    );
+
+    const statusCode = req.headers.range && response.ContentRange ? 206 : 200;
+    res.status(statusCode);
+    res.setHeader("Accept-Ranges", "bytes");
+    if (response.ContentType) {
+      res.setHeader("Content-Type", response.ContentType);
+    }
+    if (response.ContentLength) {
+      res.setHeader("Content-Length", response.ContentLength);
+    }
+    if (response.ContentRange) {
+      res.setHeader("Content-Range", response.ContentRange);
+    }
+    response.Body.pipe(res);
+  } catch (error) {
+    next(error);
+  }
 }
 
 async function saveAudioLocally(objectKey, audioFile, req) {
@@ -271,7 +319,7 @@ function readSynchsafeInt(buffer, offset) {
   );
 }
 
-function buildAudioObjectKey(originalName, extension, { sessionId, versionId } = {}) {
+function buildAudioObjectKey(originalName, extension, { sessionId, trackId, versionId } = {}) {
   const safeBaseName = path
     .basename(originalName, path.extname(originalName))
     .toLowerCase()
@@ -279,8 +327,9 @@ function buildAudioObjectKey(originalName, extension, { sessionId, versionId } =
     .replace(/^-|-$/g, "") || "mixreview-audio";
 
   if (sessionId) {
+    const safeTrackId = sanitizePathSegment(trackId || "track-1");
     const safeVersionId = sanitizePathSegment(versionId || "version-v1");
-    return `sessions/${sessionId}/audio/${safeVersionId}/${randomUUID()}-${safeBaseName}${extension}`;
+    return `sessions/${sessionId}/tracks/${safeTrackId}/versions/${safeVersionId}/audio/${randomUUID()}-${safeBaseName}${extension}`;
   }
 
   return `${new Date().toISOString().slice(0, 10)}/${randomUUID()}-${safeBaseName}${extension}`;
@@ -313,7 +362,7 @@ async function getSession(req, res) {
     return res.status(404).json({ error: "Session not found." });
   }
 
-  return res.json({ session: await refreshSessionPlaybackUrls(session) });
+  return res.json({ session: await refreshSessionPlaybackUrls(session, req) });
 }
 
 async function saveSession(req, res) {
@@ -339,18 +388,29 @@ async function saveSession(req, res) {
   return res.json({ session });
 }
 
-async function attachAudioToSession(sessionId, audio, versionId) {
+async function attachAudioToSession(sessionId, audio, versionId, trackId = "track-1") {
   const now = new Date().toISOString();
   const existingSession = await readSessionDocument(sessionId);
   const session = existingSession || {
     id: sessionId,
     projectName: path.basename(audio.fileName, path.extname(audio.fileName)) || "Untitled MixReview Session",
+    tracks: [],
     versions: [],
     createdAt: now
   };
 
-  const versions = Array.isArray(session.versions) ? session.versions : [];
+  const tracks = Array.isArray(session.tracks) ? session.tracks : [];
+  const targetTrackId = sanitizePathSegment(trackId || "track-1");
   const targetVersionId = versionId || "version-v1";
+  const trackIndex = tracks.findIndex((track) => track.id === targetTrackId);
+  const existingTrack = tracks[trackIndex] || {
+    id: targetTrackId,
+    title: path.basename(audio.fileName, path.extname(audio.fileName)) || "Untitled Track",
+    versions: [],
+    activeVersionId: targetVersionId,
+    createdAt: now
+  };
+  const versions = Array.isArray(existingTrack.versions) ? existingTrack.versions : [];
   const versionIndex = versions.findIndex((version) => version.id === targetVersionId);
   const audioMetadata = {
     fileName: audio.fileName,
@@ -382,9 +442,23 @@ async function attachAudioToSession(sessionId, audio, versionId) {
       duration: 0
     });
   }
+  const nextTrack = {
+    ...existingTrack,
+    title: audioMetadata.title || existingTrack.title,
+    activeVersionId: targetVersionId,
+    versions,
+    updatedAt: now
+  };
+  const nextTracks =
+    trackIndex >= 0
+      ? tracks.map((track, index) => (index === trackIndex ? nextTrack : track))
+      : [...tracks, nextTrack];
 
   const nextSession = normalizeSessionDocument({
     ...session,
+    tracks: nextTracks,
+    activeTrackId: targetTrackId,
+    activeVersionId: targetVersionId,
     versions,
     updatedAt: now
   });
@@ -470,6 +544,7 @@ async function upsertSessionIndex(session) {
     id: session.id,
     projectName: session.projectName || "Untitled MixReview Session",
     shareId: session.shareId || session.id,
+    status: getSessionStatus(session),
     updatedAt: session.updatedAt || new Date().toISOString(),
     storageKey: buildSessionObjectKey(session.id)
   };
@@ -506,36 +581,66 @@ function normalizeSessionDocument(session) {
         ? session.projectName.trim()
         : "Untitled MixReview Session",
     shareId: typeof session.shareId === "string" && session.shareId.trim() ? session.shareId.trim() : id,
+    activeTrackId: typeof session.activeTrackId === "string" ? sanitizePathSegment(session.activeTrackId) : null,
     versions: Array.isArray(session.versions) ? session.versions : [],
+    tracks: Array.isArray(session.tracks) ? session.tracks : [],
     createdAt: session.createdAt || new Date().toISOString(),
     updatedAt: session.updatedAt || new Date().toISOString()
   };
 }
 
-async function refreshSessionPlaybackUrls(session) {
-  if (!hasR2Config || !Array.isArray(session.versions)) {
+function getSessionStatus(session) {
+  const versions = Array.isArray(session.tracks)
+    ? session.tracks.flatMap((track) => (Array.isArray(track.versions) ? track.versions : []))
+    : Array.isArray(session.versions) ? session.versions : [];
+  if (versions.some((version) => version.approvalStatus === "Approved")) {
+    return "Approved";
+  }
+  if (versions.some((version) => version.approvalStatus === "Needs Review")) {
+    return "Needs Review";
+  }
+  return "Pending Review";
+}
+
+async function refreshSessionPlaybackUrls(session, req = null) {
+  if (!hasR2Config) {
     return session;
   }
 
+  const refreshVersion = (version) => {
+    const key = version?.audioMetadata?.key;
+    if (!key) {
+      return version;
+    }
+
+    return {
+      ...version,
+      audioMetadata: {
+        ...version.audioMetadata,
+        url: buildApiPlaybackUrl(req, key)
+      }
+    };
+  };
+
   return {
     ...session,
-    versions: await Promise.all(
-      session.versions.map(async (version) => {
-        const key = version?.audioMetadata?.key;
-        if (!key) {
-          return version;
-        }
-
-        return {
-          ...version,
-          audioMetadata: {
-            ...version.audioMetadata,
-            url: await buildR2PlaybackUrl(key)
-          }
-        };
-      }),
-    )
+    versions: Array.isArray(session.versions) ? session.versions.map(refreshVersion) : [],
+    tracks: Array.isArray(session.tracks)
+      ? session.tracks.map((track) => ({
+          ...track,
+          versions: Array.isArray(track.versions) ? track.versions.map(refreshVersion) : []
+        }))
+      : []
   };
+}
+
+function buildApiPlaybackUrl(req, objectKey) {
+  const encodedKey = encodeURIComponent(objectKey);
+  if (req) {
+    return `${req.protocol}://${req.get("host")}/api/audio/playback/${encodedKey}`;
+  }
+
+  return `/api/audio/playback/${encodedKey}`;
 }
 
 function sanitizeSessionId(value) {

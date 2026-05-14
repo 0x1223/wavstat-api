@@ -6,6 +6,7 @@ import { ReviewDashboard } from "./components/ReviewDashboard.jsx";
 import { SharePanel } from "./components/SharePanel.jsx";
 import { SpectrumAnalyzer } from "./components/SpectrumAnalyzer.jsx";
 import { StartScreen } from "./components/StartScreen.jsx";
+import { TrackList } from "./components/TrackList.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
 import { WaveformReview } from "./components/WaveformReview.jsx";
 import {
@@ -46,6 +47,7 @@ const routeParams = new URLSearchParams(window.location.search);
 const shareRoute = getShareRoute();
 const routeMode = routeParams.get("mode");
 const routeVersionId = routeParams.get("version");
+const routeTrackId = routeParams.get("track");
 const forceStartScreen = routeParams.has("start");
 const savedAccessState = forceStartScreen ? null : loadAccessState();
 const routeSessionId =
@@ -66,7 +68,11 @@ const restoredSession = shareRoute
         : hasPersistedRealAudio(latestSession)
           ? latestSession
           : null;
-const initialVersions = buildInitialVersions(restoredSession);
+const legacyInitialVersions = buildInitialVersions(restoredSession);
+const initialTracks = buildInitialTracks(restoredSession, legacyInitialVersions);
+const initialActiveTrackId = restoredSession?.activeTrackId || initialTracks[0]?.id || null;
+const initialActiveTrack = initialTracks.find((track) => track.id === initialActiveTrackId) || initialTracks[0] || null;
+const initialVersions = initialActiveTrack?.versions || legacyInitialVersions;
 const initialReviewer =
   savedAccessState?.mode === "admin"
     ? "Engineer"
@@ -89,6 +95,8 @@ export default function App() {
     restoredSession?.projectName || emptyProjectName,
   );
   const [versions, setVersions] = useState(initialVersions);
+  const [tracks, setTracks] = useState(initialTracks);
+  const [activeTrackId, setActiveTrackId] = useState(initialActiveTrackId);
   const [currentReviewer, setCurrentReviewer] = useState(
     initialReviewer,
   );
@@ -134,18 +142,22 @@ export default function App() {
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
 
+  const activeTrack = useMemo(
+    () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
+    [activeTrackId, tracks],
+  );
   const activeVersion = useMemo(
     () => versions.find((version) => version.id === activeVersionId) || versions[0],
     [activeVersionId, versions],
   );
 
-  const comments = activeVersion.comments;
-  const audioSource = activeVersion.audioSource;
-  const duration = activeVersion.duration;
-  const approvalStatus = activeVersion.approvalStatus;
-  const selectedCommentId = activeVersion.selectedCommentId;
-  const selectedTime = activeVersion.selectedTime;
-  const projectName = audioSource?.title || projectTitle;
+  const comments = activeVersion?.comments || [];
+  const audioSource = activeVersion?.audioSource || null;
+  const duration = activeVersion?.duration || 0;
+  const approvalStatus = activeVersion?.approvalStatus || "Pending Review";
+  const selectedCommentId = activeVersion?.selectedCommentId || null;
+  const selectedTime = activeVersion?.selectedTime || 0;
+  const projectName = projectTitle;
   const permissionRole = shareRoute?.role || "editable";
   const isEngineerSelected = currentReviewer === "Engineer";
   const isEngineerMode = isEngineerSelected && isEngineerUnlocked;
@@ -186,21 +198,33 @@ export default function App() {
     () => getReviewStatusState(activeVersion),
     [activeVersion],
   );
+  const approvalSummary = useMemo(
+    () => getTrackApprovalSummary(syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)),
+    [activeTrackId, activeVersionId, tracks, versions],
+  );
 
   const applyStoredSession = useCallback((session, reviewerOverride = null) => {
     if (!session) {
       return;
     }
 
-    const nextVersions = buildInitialVersions(session);
+    const nextTracks = buildInitialTracks(session, buildInitialVersions(session));
+    const nextActiveTrackId =
+      routeTrackId && nextTracks.some((track) => track.id === routeTrackId)
+        ? routeTrackId
+        : session.activeTrackId || nextTracks[0]?.id || null;
+    const nextActiveTrack = nextTracks.find((track) => track.id === nextActiveTrackId) || nextTracks[0] || null;
+    const nextVersions = nextActiveTrack?.versions || createEmptyVersions();
     revokeVersionUrls(versionsRef.current);
     setSessionId(session.id || createSessionId());
     setProjectTitle(session.projectName || emptyProjectName);
+    setTracks(nextTracks);
+    setActiveTrackId(nextActiveTrackId);
     setVersions(nextVersions);
     setActiveVersionId(
       routeVersionId && nextVersions.some((version) => version.id === routeVersionId)
         ? routeVersionId
-        : session.activeVersionId || nextVersions[0].id,
+        : nextActiveTrack?.activeVersionId || session.activeVersionId || nextVersions[0].id,
     );
     setCurrentReviewer(
       reviewerOverride ||
@@ -216,17 +240,23 @@ export default function App() {
   }, [isEngineerUnlocked]);
 
   const sessionSnapshot = useMemo(
-    () => ({
-      id: sessionId,
-      projectName,
-      shareId,
-      activeVersionId,
-      hasStarted,
-      currentReviewer,
-      versions: versions.map(toStoredVersion),
-      updatedAt: new Date().toISOString()
-    }),
-    [activeVersionId, currentReviewer, hasStarted, projectName, sessionId, shareId, versions],
+    () => {
+      const nextTracks = syncActiveTrack(tracks, activeTrackId, versions, activeVersionId);
+      const activeStoredTrack = nextTracks.find((track) => track.id === activeTrackId) || nextTracks[0] || null;
+      return {
+        id: sessionId,
+        projectName,
+        shareId,
+        activeTrackId,
+        activeVersionId,
+        hasStarted,
+        currentReviewer,
+        tracks: nextTracks.map(toStoredTrack),
+        versions: activeStoredTrack?.versions.map(toStoredVersion) || [],
+        updatedAt: new Date().toISOString()
+      };
+    },
+    [activeTrackId, activeVersionId, currentReviewer, hasStarted, projectName, sessionId, shareId, tracks, versions],
   );
 
   useEffect(() => {
@@ -258,7 +288,7 @@ export default function App() {
         }
 
         if (storedSession) {
-          applyStoredSession(
+      applyStoredSession(
             storedSession,
             routeMode === "admin" && isEngineerUnlocked ? "Engineer" : routeMode === "reviewer" ? "Artist" : null,
           );
@@ -326,11 +356,21 @@ export default function App() {
 
   const updateActiveVersion = useCallback((updater) => {
     setVersions((currentVersions) =>
-      currentVersions.map((version) =>
+      {
+        const nextVersions = currentVersions.map((version) =>
         version.id === activeVersionId ? updater(version) : version,
-      ),
+        );
+        setTracks((currentTracks) =>
+          currentTracks.map((track) =>
+            track.id === activeTrackId
+              ? { ...track, activeVersionId, versions: nextVersions, updatedAt: new Date().toISOString() }
+              : track,
+          ),
+        );
+        return nextVersions;
+      }
     );
-  }, [activeVersionId]);
+  }, [activeTrackId, activeVersionId]);
 
   const handleAudioUpload = useCallback(async (file) => {
     if (!permissions.canEdit) {
@@ -347,11 +387,13 @@ export default function App() {
     }
 
     const title = deriveProjectTitle(file.name);
+    const targetTrackId = activeTrackId || createTrackId(title);
+    const targetVersionId = activeVersionId || "version-v1";
     setUploadError("Uploading audio to session storage...");
     setSessionMessage("");
 
     try {
-      const uploadResult = await uploadSessionAudio(sessionId, activeVersionId, file);
+      const uploadResult = await uploadSessionAudio(sessionId, targetVersionId, file, targetTrackId);
       const nextAudioSource = {
         url: uploadResult.playbackUrl,
         key: uploadResult.key,
@@ -363,44 +405,123 @@ export default function App() {
       };
 
       setUploadError("");
-      setProjectTitle(title);
+      if (projectTitle === emptyProjectName) {
+        setProjectTitle(title);
+      }
       setCurrentTime(0);
       setIsPlaying(false);
       playerRef.current = null;
 
-      updateActiveVersion((version) => ({
-        ...version,
-        audioSource: nextAudioSource,
-        comments: [],
-        activity: [
-          makeActivity("Version audio replaced", `${currentReviewer} uploaded ${file.name}`),
-          ...version.activity
-        ],
-        selectedCommentId: null,
-        selectedTime: 0,
-        duration: 0
-      }));
+      if (!activeTrackId) {
+        const nextVersions = createEmptyVersions().map((version) =>
+          version.id === targetVersionId
+            ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
+            : version,
+        );
+        const nextTrack = createTrack(title, nextVersions, targetTrackId);
+        setTracks([nextTrack]);
+        setActiveTrackId(targetTrackId);
+        setVersions(nextVersions);
+        setActiveVersionId(targetVersionId);
+        return;
+      }
+
+      setTracks((currentTracks) =>
+        currentTracks.map((track) => {
+          if (track.id !== activeTrackId) {
+            return track;
+          }
+          const nextVersions = versions.map((version) =>
+            version.id === targetVersionId
+              ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
+              : version,
+          );
+          setVersions(nextVersions);
+          return {
+            ...track,
+            title,
+            activeVersionId: targetVersionId,
+            versions: nextVersions,
+            updatedAt: new Date().toISOString()
+          };
+        }),
+      );
     } catch (error) {
       setUploadError(error.message || "Audio upload failed.");
     }
-  }, [activeVersionId, currentReviewer, permissions.canEdit, sessionId, updateActiveVersion]);
+  }, [activeTrackId, activeVersionId, currentReviewer, permissions.canEdit, projectTitle, sessionId, versions]);
+
+  const handleTrackUpload = useCallback(async (file) => {
+    if (!permissions.canEdit) {
+      return;
+    }
+
+    if (!file) {
+      return;
+    }
+
+    if (!isAudioFile(file)) {
+      setUploadError("Choose an audio file to add a track.");
+      return;
+    }
+
+    const title = deriveProjectTitle(file.name);
+    const nextTrackId = createTrackId(title);
+    const nextVersionId = "version-v1";
+    setUploadError("Uploading track to session storage...");
+    setSessionMessage("");
+
+    try {
+      const uploadResult = await uploadSessionAudio(sessionId, nextVersionId, file, nextTrackId);
+      const nextAudioSource = {
+        url: uploadResult.playbackUrl,
+        key: uploadResult.key,
+        storage: uploadResult.storage,
+        fileName: uploadResult.fileName || file.name,
+        title,
+        size: uploadResult.size || file.size,
+        type: uploadResult.contentType || file.type || "audio file"
+      };
+      const nextVersions = createEmptyVersions().map((version) =>
+        version.id === nextVersionId
+          ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
+          : version,
+      );
+      const nextTrack = createTrack(title, nextVersions, nextTrackId);
+
+      setUploadError("");
+      setTracks((currentTracks) => [...currentTracks, nextTrack]);
+      setActiveTrackId(nextTrackId);
+      setVersions(nextVersions);
+      setActiveVersionId(nextVersionId);
+      setCurrentTime(0);
+      setIsPlaying(false);
+      playerRef.current = null;
+      if (projectTitle === emptyProjectName) {
+        setProjectTitle(title);
+      }
+    } catch (error) {
+      setUploadError(error.message || "Track upload failed.");
+    }
+  }, [currentReviewer, permissions.canEdit, projectTitle, sessionId]);
 
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
-    const nextVersions = createEmptyVersions();
     const nextSessionId = createSessionId();
     setSessionId(nextSessionId);
     setProjectTitle(emptyProjectName);
-    setVersions(nextVersions);
+    setTracks([]);
+    setActiveTrackId(null);
+    setVersions(createEmptyVersions());
     setCurrentReviewer("Engineer");
-    setActiveVersionId(nextVersions[0].id);
+    setActiveVersionId("version-v1");
     setUploadError("");
     setSessionMessage("");
     setShareId(null);
     setHasStarted(true);
     setAppView("workspace");
     saveAccessState({ mode: "admin", sessionId: nextSessionId });
-    setReviewRoute("admin", nextVersions[0].id, nextSessionId);
+    setReviewRoute("admin", "version-v1", nextSessionId);
     clearStartRouteFlag();
     setCurrentTime(0);
     setIsPlaying(false);
@@ -448,7 +569,7 @@ export default function App() {
       sessionId: storedSession.id,
       role: reviewer
     });
-    setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", storedSession.activeVersionId || "version-v1", storedSession.id);
+    setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", storedSession.activeVersionId || "version-v1", storedSession.id, storedSession.activeTrackId);
   }, [applyStoredSession]);
 
   const handleAccessLogin = useCallback(async (event) => {
@@ -500,7 +621,7 @@ export default function App() {
       setAppView("workspace");
       saveLatestSession(storedSession);
       saveAccessState({ mode: "reviewer", sessionId: storedSession.id, role: "Artist" });
-      setReviewRoute("reviewer", storedSession.activeVersionId || "version-v1", storedSession.id);
+      setReviewRoute("reviewer", storedSession.activeVersionId || "version-v1", storedSession.id, storedSession.activeTrackId);
     } catch (error) {
       setLoginError(error.message || "Unable to open that review session.");
     }
@@ -522,7 +643,12 @@ export default function App() {
 
   const switchVersion = useCallback((versionId) => {
     setActiveVersionId(versionId);
-    setReviewRoute(isEngineerMode ? "admin" : "reviewer", versionId, sessionId);
+    setTracks((currentTracks) =>
+      currentTracks.map((track) =>
+        track.id === activeTrackId ? { ...track, activeVersionId: versionId } : track,
+      ),
+    );
+    setReviewRoute(isEngineerMode ? "admin" : "reviewer", versionId, sessionId, activeTrackId);
     saveAccessState({
       mode: isEngineerMode ? "admin" : "reviewer",
       sessionId,
@@ -532,7 +658,31 @@ export default function App() {
     setIsPlaying(false);
     activeMarkerRef.current = null;
     playerRef.current = null;
-  }, [currentReviewer, isEngineerMode, sessionId]);
+  }, [activeTrackId, currentReviewer, isEngineerMode, sessionId]);
+
+  const selectTrack = useCallback((trackId) => {
+    const nextTracks = syncActiveTrack(tracks, activeTrackId, versions, activeVersionId);
+    const nextTrack = nextTracks.find((track) => track.id === trackId);
+    if (!nextTrack) {
+      return;
+    }
+
+    setTracks(nextTracks);
+    setActiveTrackId(trackId);
+    setVersions(nextTrack.versions);
+    setActiveVersionId(nextTrack.activeVersionId || nextTrack.versions[0]?.id || "version-v1");
+    setCurrentTime(0);
+    setIsPlaying(false);
+    setMediaElement(null);
+    activeMarkerRef.current = null;
+    playerRef.current = null;
+    setReviewRoute(
+      isEngineerMode ? "admin" : "reviewer",
+      nextTrack.activeVersionId || nextTrack.versions[0]?.id || "version-v1",
+      sessionId,
+      trackId,
+    );
+  }, [activeTrackId, activeVersionId, isEngineerMode, sessionId, tracks, versions]);
 
   const shareSession = useCallback(() => {
     if (!permissions.canShare) {
@@ -576,6 +726,8 @@ export default function App() {
     setCurrentReviewer("Artist");
     setSessionId(createSessionId());
     setProjectTitle(emptyProjectName);
+    setTracks([]);
+    setActiveTrackId(null);
     setVersions(createEmptyVersions());
     setActiveVersionId("version-v1");
     setShareId(null);
@@ -837,8 +989,8 @@ export default function App() {
     }
 
     setCurrentReviewer(reviewer);
-    setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", activeVersionId, sessionId);
-  }, [activeVersionId, sessionId]);
+    setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", activeVersionId, sessionId, activeTrackId);
+  }, [activeTrackId, activeVersionId, sessionId]);
 
   if (appView === "start") {
     return (
@@ -917,6 +1069,14 @@ export default function App() {
 
       <section className="review-layout" aria-label="Mix review workspace">
         <div className="review-main">
+          <TrackList
+            tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
+            activeTrackId={activeTrackId}
+            canEdit={permissions.canEdit}
+            onTrackSelect={selectTrack}
+            onTrackUpload={handleTrackUpload}
+          />
+
           {(permissions.canEdit || audioSource) && (
             <AudioUpload
               audioSource={audioSource}
@@ -928,7 +1088,7 @@ export default function App() {
           )}
 
           <WaveformReview
-            key={activeVersionId}
+            key={`${activeTrackId || "no-track"}-${activeVersionId}`}
             audioSource={audioSource}
             comments={comments}
             selectedCommentId={selectedCommentId}
@@ -947,6 +1107,7 @@ export default function App() {
           <ReviewDashboard
             activeVersion={activeVersion}
             versions={versions}
+            approvalSummary={approvalSummary}
             currentReviewer={currentReviewer}
             onReviewerChange={updateReviewer}
             onApprovalChange={updateApprovalStatus}
@@ -986,6 +1147,17 @@ export default function App() {
 
 function createEmptyVersions() {
   return versionLabels.map((label) => createVersion(label, []));
+}
+
+function createTrack(title, versions = createEmptyVersions(), id = createTrackId(title)) {
+  return {
+    id,
+    title: title || "Untitled Track",
+    activeVersionId: versions[0]?.id || "version-v1",
+    versions,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
 }
 
 function AdminDashboard({
@@ -1136,6 +1308,40 @@ function buildInitialVersions(session) {
   ]);
 }
 
+function buildInitialTracks(session, fallbackVersions = createEmptyVersions()) {
+  if (Array.isArray(session?.tracks)) {
+    return session.tracks.map(hydrateStoredTrack).filter(Boolean);
+  }
+
+  const hasLegacyAudio = fallbackVersions.some((version) => version.audioSource);
+  const hasLegacyComments = fallbackVersions.some((version) => version.comments.length > 0);
+  if (!hasLegacyAudio && !hasLegacyComments) {
+    return [];
+  }
+
+  const trackTitle =
+    fallbackVersions.find((version) => version.audioSource)?.audioSource?.title ||
+    session?.projectName ||
+    "Track 1";
+  return [createTrack(trackTitle, fallbackVersions, createTrackId(trackTitle))];
+}
+
+function hydrateStoredTrack(track) {
+  if (!track) {
+    return null;
+  }
+
+  const versions = ensureBaseVersions((track.versions || []).map(hydrateStoredVersion));
+  return {
+    id: track.id || createTrackId(track.title || versions[0]?.audioSource?.title || "track"),
+    title: track.title || versions[0]?.audioSource?.title || "Untitled Track",
+    activeVersionId: track.activeVersionId || versions[0]?.id || "version-v1",
+    versions,
+    createdAt: track.createdAt || new Date().toISOString(),
+    updatedAt: track.updatedAt || new Date().toISOString()
+  };
+}
+
 function ensureBaseVersions(existingVersions) {
   return versionLabels.map((label) => {
     const existingVersion = existingVersions.find((version) => version.label === label);
@@ -1183,6 +1389,65 @@ function toStoredVersion(version) {
     selectedCommentId: version.selectedCommentId,
     selectedTime: version.selectedTime,
     duration: version.duration
+  };
+}
+
+function toStoredTrack(track) {
+  return {
+    id: track.id,
+    title: track.title,
+    activeVersionId: track.activeVersionId,
+    versions: track.versions.map(toStoredVersion),
+    createdAt: track.createdAt,
+    updatedAt: track.updatedAt
+  };
+}
+
+function syncActiveTrack(tracks, activeTrackId, versions, activeVersionId) {
+  if (!activeTrackId) {
+    return tracks;
+  }
+
+  return tracks.map((track) =>
+    track.id === activeTrackId
+      ? {
+          ...track,
+          activeVersionId,
+          title:
+            versions.find((version) => version.audioSource)?.audioSource?.title ||
+            track.title,
+          versions,
+          updatedAt: new Date().toISOString()
+        }
+      : track,
+  );
+}
+
+function getTrackApprovalSummary(tracks) {
+  const importedTracks = tracks.filter((track) =>
+    track.versions.some((version) => version.audioSource),
+  );
+  return {
+    approved: importedTracks.filter((track) => {
+      const activeVersion = track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
+      return activeVersion?.approvalStatus === "Approved";
+    }).length,
+    total: importedTracks.length
+  };
+}
+
+function withUploadedAudio(version, audioSource, reviewer, fileName) {
+  return {
+    ...version,
+    audioSource,
+    comments: [],
+    activity: [
+      makeActivity("Version audio replaced", `${reviewer} uploaded ${fileName}`),
+      ...version.activity
+    ],
+    selectedCommentId: null,
+    selectedTime: 0,
+    duration: 0
   };
 }
 
@@ -1243,6 +1508,10 @@ function resolveApprovalStatus(status, comments, approvalHistory) {
 }
 
 function getReviewStatusState(version) {
+  if (!version) {
+    return {};
+  }
+
   const submittedReviewComments = getSubmittedReviewComments(version.comments);
   const hasSubmittedReview = submittedReviewComments.length > 0;
   const allReviewItemsResolved =
@@ -1322,6 +1591,10 @@ function createSessionId() {
   return `session-${Date.now()}`;
 }
 
+function createTrackId(title = "track") {
+  return `track-${slugify(title)}-${Date.now()}`;
+}
+
 function slugify(value) {
   return (
     value
@@ -1346,6 +1619,7 @@ function clearWorkspaceRoute() {
   url.searchParams.delete("start");
   url.searchParams.delete("mode");
   url.searchParams.delete("version");
+  url.searchParams.delete("track");
   url.searchParams.delete("session");
   url.searchParams.delete("share");
   url.searchParams.delete("role");
@@ -1356,17 +1630,25 @@ function replaceWithLandingRoute() {
   window.history.replaceState(null, "", "/");
 }
 
-function setReviewRoute(mode, versionId, sessionId) {
+function setReviewRoute(mode, versionId, sessionId, trackId = null) {
   const url = new URL(window.location.href);
   url.searchParams.delete("start");
   url.searchParams.set("mode", mode);
   url.searchParams.set("version", versionId);
   url.searchParams.set("session", sessionId);
+  if (trackId) {
+    url.searchParams.set("track", trackId);
+  } else {
+    url.searchParams.delete("track");
+  }
   window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function hasPersistedRealAudio(session) {
   return Boolean(
+    session?.tracks?.some((track) =>
+      track.versions?.some((version) => version.audioMetadata?.url),
+    ) ||
     session?.versions?.some((version) => version.audioMetadata?.url),
   );
 }

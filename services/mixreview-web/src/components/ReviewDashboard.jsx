@@ -9,6 +9,7 @@ const reviewers = ["Artist", "Engineer", "Manager", "Label"];
 export function ReviewDashboard({
   activeVersion,
   versions,
+  approvalSummary,
   currentReviewer,
   onReviewerChange,
   onApprovalChange,
@@ -21,9 +22,7 @@ export function ReviewDashboard({
   const unresolvedCount = activeVersion.comments.filter(
     (comment) => !comment.resolved,
   ).length;
-  const approvalCount = versions.filter((version) =>
-    version.approvalStatus === "Approved",
-  ).length;
+  const approvalCount = approvalSummary || { approved: 0, total: 0 };
 
   return (
     <section className="review-dashboard" aria-label="Review dashboard">
@@ -52,7 +51,7 @@ export function ReviewDashboard({
       <div className="summary-grid">
         <SummaryMetric label="Total Comments" value={activeVersion.comments.length} />
         <SummaryMetric label="Unresolved" value={unresolvedCount} />
-        <SummaryMetric label="Approvals" value={`${approvalCount}/${versions.length}`} />
+        <SummaryMetric label="Approvals" value={`${approvalCount.approved}/${approvalCount.total}`} />
         <SummaryMetric label="Latest Revision" value={activeVersion.label} />
       </div>
 

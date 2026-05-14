@@ -757,7 +757,8 @@ h2 {
 .waveform-panel,
 .review-dashboard,
 .comment-sidebar,
-.upload-panel {
+.upload-panel,
+.track-list-panel {
   min-height: 0;
   border-radius: 8px;
 }
@@ -766,6 +767,7 @@ h2 {
 .review-dashboard,
 .waveform-panel,
 .comment-sidebar,
+.track-list-panel,
 .transport {
   animation: rise-in 460ms ease both;
 }
@@ -776,6 +778,80 @@ h2 {
   align-items: center;
   gap: 18px;
   padding: 18px 22px;
+}
+
+.track-list-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px 22px;
+}
+
+.track-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.track-list-header h2 {
+  margin: 0;
+  color: #fff4db;
+  font-size: 1rem;
+}
+
+.upload-button.compact {
+  min-width: 110px;
+  min-height: 36px;
+}
+
+.track-list {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.track-list button {
+  min-width: 180px;
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #e7dcc8;
+  background: rgba(255, 255, 255, 0.045);
+  padding: 12px;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.track-list button:hover,
+.track-list button.active {
+  border-color: rgba(215, 173, 98, 0.52);
+  background: rgba(215, 173, 98, 0.12);
+}
+
+.track-list button:active {
+  transform: translateY(1px);
+}
+
+.track-list button span,
+.track-list button small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-list button span {
+  font-weight: 850;
+}
+
+.track-list button small {
+  color: var(--soft);
 }
 
 .upload-panel h2 {

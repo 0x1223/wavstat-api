@@ -48,10 +48,13 @@ export async function saveSessionToApi(session) {
   return payload.session || null;
 }
 
-export async function uploadSessionAudio(sessionId, versionId, file) {
+export async function uploadSessionAudio(sessionId, versionId, file, trackId = null) {
   const formData = new FormData();
   formData.append("audio", file);
   formData.append("versionId", versionId);
+  if (trackId) {
+    formData.append("trackId", trackId);
+  }
 
   const response = await fetch(apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/audio`), {
     method: "POST",
