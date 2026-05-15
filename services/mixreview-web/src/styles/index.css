@@ -2143,9 +2143,15 @@ h2 {
   padding-top: 10px;
   margin-top: 8px;
 }
+.tool-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 
 .reviewer-mode .marker-tool-toggle {
-  width: 52px;
+  min-width: 140px;
   height: 52px;
   border-radius: 14px;
   border: 1px solid rgba(255, 214, 102, 0.35);
@@ -2155,6 +2161,8 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
+  padding: 0 14px;
 }
 
   .reviewer-mode .mobile-note-button {
