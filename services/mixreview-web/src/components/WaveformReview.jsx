@@ -333,8 +333,7 @@ export function WaveformReview({
           </button>
         </div>
       )}
-      {isDrawerOpen && (
-  <div className={`mobile-review-drawer ${isDrawerOpen ? "open" : ""}`}>
+      <div className={`mobile-review-drawer ${isDrawerOpen ? "open" : ""}`}>
     <textarea
       className="mobile-review-input"
       placeholder="Write review..."
@@ -347,7 +346,7 @@ export function WaveformReview({
       Save Review
     </button>
   </div>
-)}
+
     </section>
   );
 }
