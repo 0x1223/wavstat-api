@@ -266,10 +266,6 @@ export function WaveformReview({
         </div>
       )}
 
-      <div className="waveform-stage">
-        {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
-        {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
-        
         <div
   className="waveform-stage">
   {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
