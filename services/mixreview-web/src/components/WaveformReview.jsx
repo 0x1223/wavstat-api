@@ -220,9 +220,13 @@ export function WaveformReview({
     }
 
     if (isMarkerToolActive) {
-      callbacksRef.current.onTimestampCreate(clickedTime);
-    }
-  }
+  callbacksRef.current.onTimestampCreate(clickedTime);
+
+  setIsDrawerOpen(true);
+  setIsMarkerToolActive(false);
+
+  return;
+}
 
   const hasAudio = Boolean(audioSource?.url);
   const markerItems = duration > 0
@@ -325,7 +329,6 @@ export function WaveformReview({
   title="Add timestamp note mode"
   onClick={() => {
   setIsMarkerToolActive((current) => !current);
-  setIsDrawerOpen(true);
 }}
           >
             <span aria-hidden="true">✍️</span>
