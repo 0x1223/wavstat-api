@@ -1,3 +1,21 @@
 {
-  "sessions": []
+  "sessions": [
+    {
+      "id": "session-1778805821157",
+      "projectName": "QA Artist - Sync Gate Test",
+      "sessionName": "Sync Gate Test",
+      "artistName": "QA Artist",
+      "reviewerName": "QA Client",
+      "reviewerClientId": "qa-client-sync",
+      "reviewerToken": "token123",
+      "notes": "Verify sync before upload.",
+      "isPriority": false,
+      "shareId": "session-1778805821157",
+      "status": "Pending Review",
+      "trackCount": 1,
+      "approvedTrackCount": 0,
+      "updatedAt": "2026-05-15T16:57:57.417Z",
+      "storageKey": "sessions/session-1778805821157/session.json"
+    }
+  ]
 }

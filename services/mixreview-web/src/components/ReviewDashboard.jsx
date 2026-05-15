@@ -20,11 +20,14 @@ export function ReviewDashboard({
   canSubmit,
   canChooseReviewer
 }) {
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 768;
   const unresolvedCount = activeVersion.comments.filter(
     (comment) => !comment.resolved,
   ).length;
   const approvalCount = approvalSummary || { approved: 0, total: 0 };
-
+if (isMobile) {
+  return null;
+}
   return (
     <section className="review-dashboard" aria-label="Review dashboard">
       <div className="dashboard-header">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { formatTimecode } from "../lib/time.js";
 
 export function CommentSidebar({
@@ -8,18 +8,13 @@ export function CommentSidebar({
   onCommentEdit,
   onCommentDelete,
   onToggleResolved,
+  onCommentDrawerOpen,
   currentReviewer,
   canModifyComment = () => true,
   canResolve = true
 }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState("");
-  const commentRefs = useRef(new Map());
-
-  useEffect(() => {
-    const selectedElement = commentRefs.current.get(selectedCommentId);
-    selectedElement?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [selectedCommentId]);
 
   function startEditing(comment) {
     setEditingId(comment.id);
@@ -64,18 +59,16 @@ export function CommentSidebar({
             <article
               className={`comment-card${isSelected ? " selected" : ""}`}
               key={comment.id}
-              ref={(element) => {
-                if (element) {
-                  commentRefs.current.set(comment.id, element);
-                } else {
-                  commentRefs.current.delete(comment.id);
-                }
-              }}
             >
               <button
                 type="button"
                 className="comment-main"
-                onClick={() => onCommentSelect(comment, { autoplay: false })}
+                onClick={() => {
+                  onCommentSelect(comment, { autoplay: false });
+                  if (isMobileViewport()) {
+                    onCommentDrawerOpen?.(comment);
+                  }
+                }}
               >
                 <span className="timecode">{formatTimecode(comment.time)}</span>
                 <span className="comment-author">
@@ -133,4 +126,8 @@ export function CommentSidebar({
       </div>
     </aside>
   );
+}
+
+function isMobileViewport() {
+  return window.matchMedia?.("(max-width: 768px)")?.matches || window.innerWidth <= 768;
 }

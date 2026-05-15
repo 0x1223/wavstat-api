@@ -1,0 +1,154 @@
+{
+  "id": "session-1778805821157",
+  "projectName": "QA Artist - Sync Gate Test",
+  "sessionName": "Sync Gate Test",
+  "artistName": "QA Artist",
+  "reviewerName": "QA Client",
+  "reviewerClientId": "qa-client-sync",
+  "reviewerToken": "token123",
+  "notes": "Verify sync before upload.",
+  "isPriority": false,
+  "status": "Pending Review",
+  "shareId": "session-1778805821157",
+  "activeTrackId": "track-sync-gate",
+  "activeVersionId": "version-v1",
+  "hasStarted": true,
+  "currentReviewer": "Engineer",
+  "tracks": [
+    {
+      "id": "track-sync-gate",
+      "title": "mixreview-admin-flow",
+      "activeVersionId": "version-v1",
+      "versions": [
+        {
+          "id": "version-v1",
+          "label": "V1",
+          "audioMetadata": {
+            "fileName": "mixreview-admin-flow.wav",
+            "title": "mixreview-admin-flow",
+            "size": 264644,
+            "type": "audio/wav",
+            "mimeType": "audio/wav",
+            "url": "http://localhost:4301/api/audio/playback/sessions%2Fsession-1778805821157%2Ftracks%2Ftrack-sync-gate%2Fversions%2Fversion-v1%2Faudio%2F77a75914-fdb7-4af1-8960-db56721c5b3d-mixreview-admin-flow.wav",
+            "playbackUrl": "http://localhost:4301/api/audio/playback/sessions%2Fsession-1778805821157%2Ftracks%2Ftrack-sync-gate%2Fversions%2Fversion-v1%2Faudio%2F77a75914-fdb7-4af1-8960-db56721c5b3d-mixreview-admin-flow.wav",
+            "audioUrl": "http://localhost:4301/api/audio/playback/sessions%2Fsession-1778805821157%2Ftracks%2Ftrack-sync-gate%2Fversions%2Fversion-v1%2Faudio%2F77a75914-fdb7-4af1-8960-db56721c5b3d-mixreview-admin-flow.wav",
+            "objectUrl": null,
+            "key": "sessions/session-1778805821157/tracks/track-sync-gate/versions/version-v1/audio/77a75914-fdb7-4af1-8960-db56721c5b3d-mixreview-admin-flow.wav",
+            "storage": "r2",
+            "uploadedAt": "2026-05-15T00:44:16.116Z"
+          },
+          "comments": [],
+          "approvalStatus": "Pending Review",
+          "approvalHistory": [],
+          "activity": [],
+          "selectedCommentId": null,
+          "selectedTime": 0,
+          "duration": 1.5
+        },
+        {
+          "id": "version-v2",
+          "label": "V2",
+          "audioMetadata": null,
+          "comments": [],
+          "approvalStatus": "Pending Review",
+          "approvalHistory": [],
+          "activity": [],
+          "selectedCommentId": null,
+          "selectedTime": 0,
+          "duration": 0
+        },
+        {
+          "id": "version-master",
+          "label": "Master",
+          "audioMetadata": null,
+          "comments": [],
+          "approvalStatus": "Pending Review",
+          "approvalHistory": [],
+          "activity": [],
+          "selectedCommentId": null,
+          "selectedTime": 0,
+          "duration": 0
+        },
+        {
+          "id": "version-radio-edit",
+          "label": "Radio Edit",
+          "audioMetadata": null,
+          "comments": [],
+          "approvalStatus": "Pending Review",
+          "approvalHistory": [],
+          "activity": [],
+          "selectedCommentId": null,
+          "selectedTime": 0,
+          "duration": 0
+        }
+      ],
+      "createdAt": "2026-05-15T00:44:16.116Z",
+      "updatedAt": "2026-05-15T16:57:56.911Z"
+    }
+  ],
+  "versions": [
+    {
+      "id": "version-v1",
+      "label": "V1",
+      "audioMetadata": {
+        "fileName": "mixreview-admin-flow.wav",
+        "title": "mixreview-admin-flow",
+        "size": 264644,
+        "type": "audio/wav",
+        "mimeType": "audio/wav",
+        "url": "http://localhost:4301/api/audio/playback/sessions%2Fsession-1778805821157%2Ftracks%2Ftrack-sync-gate%2Fversions%2Fversion-v1%2Faudio%2F77a75914-fdb7-4af1-8960-db56721c5b3d-mixreview-admin-flow.wav",
+        "playbackUrl": "http://localhost:4301/api/audio/playback/sessions%2Fsession-1778805821157%2Ftracks%2Ftrack-sync-gate%2Fversions%2Fversion-v1%2Faudio%2F77a75914-fdb7-4af1-8960-db56721c5b3d-mixreview-admin-flow.wav",
+        "audioUrl": "http://localhost:4301/api/audio/playback/sessions%2Fsession-1778805821157%2Ftracks%2Ftrack-sync-gate%2Fversions%2Fversion-v1%2Faudio%2F77a75914-fdb7-4af1-8960-db56721c5b3d-mixreview-admin-flow.wav",
+        "objectUrl": null,
+        "key": "sessions/session-1778805821157/tracks/track-sync-gate/versions/version-v1/audio/77a75914-fdb7-4af1-8960-db56721c5b3d-mixreview-admin-flow.wav",
+        "storage": "r2",
+        "uploadedAt": "2026-05-15T00:44:16.116Z"
+      },
+      "comments": [],
+      "approvalStatus": "Pending Review",
+      "approvalHistory": [],
+      "activity": [],
+      "selectedCommentId": null,
+      "selectedTime": 0,
+      "duration": 1.5
+    },
+    {
+      "id": "version-v2",
+      "label": "V2",
+      "audioMetadata": null,
+      "comments": [],
+      "approvalStatus": "Pending Review",
+      "approvalHistory": [],
+      "activity": [],
+      "selectedCommentId": null,
+      "selectedTime": 0,
+      "duration": 0
+    },
+    {
+      "id": "version-master",
+      "label": "Master",
+      "audioMetadata": null,
+      "comments": [],
+      "approvalStatus": "Pending Review",
+      "approvalHistory": [],
+      "activity": [],
+      "selectedCommentId": null,
+      "selectedTime": 0,
+      "duration": 0
+    },
+    {
+      "id": "version-radio-edit",
+      "label": "Radio Edit",
+      "audioMetadata": null,
+      "comments": [],
+      "approvalStatus": "Pending Review",
+      "approvalHistory": [],
+      "activity": [],
+      "selectedCommentId": null,
+      "selectedTime": 0,
+      "duration": 0
+    }
+  ],
+  "updatedAt": "2026-05-15T16:57:57.417Z",
+  "createdAt": "2026-05-15T16:57:57.417Z"
+}

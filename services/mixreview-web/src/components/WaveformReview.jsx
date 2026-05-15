@@ -7,12 +7,16 @@ export function WaveformReview({
   comments,
   selectedCommentId,
   selectedTime,
+  previewMarkerTime = null,
+  trackTitle,
   onTimestampCreate,
   onMarkerSelect,
   onReady,
   onTimeUpdate,
   onDurationChange,
-  onPlaybackChange
+  onPlaybackChange,
+  isReviewerMode = false,
+  onMobileNoteRequest
 }) {
   const containerRef = useRef(null);
   const wavesurferRef = useRef(null);
@@ -21,7 +25,8 @@ export function WaveformReview({
     onPlaybackChange,
     onReady,
     onTimeUpdate,
-    onTimestampCreate
+    onTimestampCreate,
+    onMobileNoteRequest
   });
   const [duration, setDuration] = useState(0);
   const [waveformWidth, setWaveformWidth] = useState(0);
@@ -35,9 +40,10 @@ export function WaveformReview({
       onPlaybackChange,
       onReady,
       onTimeUpdate,
-      onTimestampCreate
+      onTimestampCreate,
+      onMobileNoteRequest
     };
-  }, [onDurationChange, onPlaybackChange, onReady, onTimeUpdate, onTimestampCreate]);
+  }, [onDurationChange, onMobileNoteRequest, onPlaybackChange, onReady, onTimeUpdate, onTimestampCreate]);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -77,7 +83,7 @@ export function WaveformReview({
       autoScroll: false,
       autoCenter: false,
       normalize: true,
-      dragToSeek: false,
+      dragToSeek: true,
       fillParent: true
     });
 
@@ -203,19 +209,39 @@ export function WaveformReview({
     const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
     const clickedTime = clickRatio * duration;
     seekToTime(clickedTime);
+
+    if (isReviewerMode && isMobileViewport()) {
+      event.preventDefault();
+      event.stopPropagation();
+      callbacksRef.current.onMobileNoteRequest?.(clickedTime);
+      return;
+    }
+
     if (isMarkerToolActive) {
       callbacksRef.current.onTimestampCreate(clickedTime);
     }
   }
 
   const hasAudio = Boolean(audioSource?.url);
-  const markerItems = duration > 0 ? comments.map((comment) => ({
-    ...comment,
-    left:
-      duration > 0 && waveformWidth > 0
-        ? `${Math.min(waveformWidth, Math.max(0, (comment.time / duration) * waveformWidth))}px`
-        : "0px"
-  })) : [];
+  const markerItems = duration > 0
+    ? [
+        ...comments,
+        ...(Number.isFinite(previewMarkerTime)
+          ? [{
+              id: "__mobile-note-preview",
+              time: previewMarkerTime,
+              resolved: false,
+              isPreview: true
+            }]
+          : [])
+      ].map((comment) => ({
+        ...comment,
+        left:
+          duration > 0 && waveformWidth > 0
+            ? `${Math.min(waveformWidth, Math.max(0, (comment.time / duration) * waveformWidth))}px`
+            : "0px"
+      }))
+    : [];
 
   const timelineLabels = duration > 0 ? getTimelineLabels(duration) : [];
 
@@ -225,7 +251,7 @@ export function WaveformReview({
         <div className="mix-strip">
           <div>
             <p className="eyebrow">Stereo Mix</p>
-            <h2>Uploaded audio review pass</h2>
+            <h2>{trackTitle || "Uploaded audio review pass"}</h2>
           </div>
           <span className="selected-time">{formatTimecode(selectedTime)}</span>
         </div>
@@ -251,7 +277,7 @@ export function WaveformReview({
                 type="button"
                 className={`wave-marker${comment.resolved ? " resolved" : ""}${
                   comment.id === selectedCommentId ? " selected" : ""
-                }`}
+                }${comment.isPreview ? " preview" : ""}`}
                 key={comment.id}
                 data-time={formatTimecode(comment.time)}
                 style={{ left: comment.left }}
@@ -259,7 +285,9 @@ export function WaveformReview({
                 onClick={(event) => {
                   event.stopPropagation();
                   seekToTime(comment.time);
-                  onMarkerSelect(comment, { autoplay: true });
+                  if (!comment.isPreview) {
+                    onMarkerSelect(comment, { autoplay: true });
+                  }
                 }}
               />
             ))}
@@ -283,6 +311,10 @@ export function WaveformReview({
       )}
     </section>
   );
+}
+
+function isMobileViewport() {
+  return window.matchMedia?.("(max-width: 768px)")?.matches || window.innerWidth <= 768;
 }
 
 function getWaveformMetrics(element) {

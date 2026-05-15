@@ -21,6 +21,7 @@ export function Header({
     "Approved"
   ];
   const isBackToStart = backLabel === "Back to Start";
+  const showAdminActions = permissions.canEdit;
 
   function handleBackClick() {
     if (isBackToStart) {
@@ -37,7 +38,14 @@ export function Header({
     <header className="topbar">
       <div>
         <p className="eyebrow">MixReview</p>
-        <h1>{projectName}</h1>
+        <div className="mobile-session-title">
+          <h1>{projectName}</h1>
+          {!permissions.canEdit && permissions.canReview && (
+            <span className={`mobile-status-badge ${statusState?.[approvalStatus]?.tone || ""}`}>
+              {approvalStatus}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="project-controls">
@@ -63,27 +71,25 @@ export function Header({
           </div>
         )}
 
-        <div className="session-actions">
-          <button type="button" onClick={handleBackClick}>
-            {backLabel}
-          </button>
-          {permissions.canEdit && (
-            <>
-              <button type="button" onClick={onShareSession} disabled={!permissions.canShare}>
-                Share Session
-              </button>
-              <button type="button" onClick={onNewSession}>
-                New Session
-              </button>
-              <button type="button" onClick={onClearSession}>
-                Clear Session
-              </button>
-              <button type="button" onClick={onExportSession}>
-                Export
-              </button>
-            </>
-          )}
-        </div>
+        {showAdminActions && (
+          <div className="session-actions">
+            <button type="button" onClick={handleBackClick}>
+              {backLabel}
+            </button>
+            <button type="button" onClick={onShareSession} disabled={!permissions.canShare}>
+              Share Session
+            </button>
+            <button type="button" onClick={onNewSession}>
+              New Session
+            </button>
+            <button type="button" onClick={onClearSession}>
+              Clear Session
+            </button>
+            <button type="button" onClick={onExportSession}>
+              Export
+            </button>
+          </div>
+        )}
 
         {permissions.canReview && (
           <div className="status-switch approval-switch" aria-label="Approval status">

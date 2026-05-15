@@ -147,6 +147,9 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [mediaElement, setMediaElement] = useState(null);
+  const [mobileNoteDraft, setMobileNoteDraft] = useState(null);
+  const [mobileCommentDrawerId, setMobileCommentDrawerId] = useState(null);
+  const [mobileCommentDraft, setMobileCommentDraft] = useState("");
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
     () =>
       window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
@@ -168,6 +171,10 @@ export default function App() {
   const activeAudioUrl = normalizeAudioUrl(activeVersion?.audioSource);
 
   const comments = activeVersion?.comments || [];
+  const mobileDrawerComment = useMemo(
+    () => comments.find((comment) => comment.id === mobileCommentDrawerId) || null,
+    [comments, mobileCommentDrawerId],
+  );
   const audioSource = useMemo(
     () =>
       activeVersion?.audioSource
@@ -225,6 +232,8 @@ export default function App() {
     [activeTrackId, activeVersionId, tracks, versions],
   );
   const canUploadAudio = permissions.canEdit && isSessionSynced && !isSessionSaving;
+  const isReviewerMode = !permissions.canEdit && permissions.canReview;
+  const hasPlayableAudio = Boolean(audioSource?.playbackUrl || audioSource?.url || activeAudioUrl);
 
   useEffect(() => {
     if (!import.meta.env.DEV) {
@@ -278,6 +287,7 @@ export default function App() {
     setCurrentTime(0);
     setIsPlaying(false);
     setIsPlayerReady(false);
+    setMobileNoteDraft(null);
     setHasStarted(true);
     setIsSessionSynced(true);
     playerRef.current = null;
@@ -483,6 +493,7 @@ export default function App() {
       setCurrentTime(0);
       setIsPlaying(false);
       setIsPlayerReady(false);
+      setMobileNoteDraft(null);
       playerRef.current = null;
 
       if (!activeTrackId) {
@@ -574,6 +585,7 @@ export default function App() {
       setCurrentTime(0);
       setIsPlaying(false);
       setIsPlayerReady(false);
+      setMobileNoteDraft(null);
       playerRef.current = null;
     } catch (error) {
       setUploadError(error.message || "Track upload failed.");
@@ -604,6 +616,7 @@ export default function App() {
     setCurrentTime(0);
     setIsPlaying(false);
     setIsPlayerReady(false);
+    setMobileNoteDraft(null);
     playerRef.current = null;
   }, []);
 
@@ -794,6 +807,7 @@ export default function App() {
     setIsPlaying(false);
     setIsPlayerReady(false);
     activeMarkerRef.current = null;
+    setMobileNoteDraft(null);
     playerRef.current = null;
   }, [activeTrackId, currentReviewer, isEngineerMode, sessionId]);
 
@@ -813,6 +827,7 @@ export default function App() {
     setIsPlayerReady(false);
     setMediaElement(null);
     activeMarkerRef.current = null;
+    setMobileNoteDraft(null);
     playerRef.current = null;
     setReviewRoute(
       isEngineerMode ? "admin" : "reviewer",
@@ -890,6 +905,7 @@ export default function App() {
     setIsPlayerReady(false);
     setCurrentTime(0);
     setHasStarted(false);
+    setMobileNoteDraft(null);
     setAppView("start");
     clearLatestSession();
     clearAccessState();
@@ -913,7 +929,7 @@ export default function App() {
     replaceWithLandingRoute();
   }, []);
 
-  const handleWaveformTimestamp = useCallback((time) => {
+  const handleWaveformTimestamp = useCallback((time, text = "New timestamp marker ready for a mix note.") => {
     if (!permissions.canReview) {
       return;
     }
@@ -924,7 +940,7 @@ export default function App() {
       id: commentId,
       time,
       author,
-      text: "New timestamp marker ready for a mix note.",
+      text: text.trim() || "New timestamp marker ready for a mix note.",
       resolved: false,
       submitted: isEngineerMode
     };
@@ -940,6 +956,50 @@ export default function App() {
       ]
     }));
   }, [currentReviewer, isEngineerMode, permissions.canReview, updateActiveVersion]);
+
+  const openMobileNote = useCallback((time) => {
+    if (!isReviewerMode) {
+      return;
+    }
+
+    const safeTime = Math.min(Math.max(time || 0, 0), duration || time || 0);
+    setCurrentTime(safeTime);
+    playerRef.current?.seekToTime(safeTime);
+    updateActiveVersion((version) => ({
+      ...version,
+      selectedTime: safeTime,
+      selectedCommentId: null
+    }));
+    setMobileNoteDraft({ time: safeTime, text: "" });
+  }, [duration, isReviewerMode, updateActiveVersion]);
+
+  const pauseMobileNotePlayback = useCallback(() => {
+    playerRef.current?.pause();
+    setIsPlaying(false);
+  }, []);
+
+  const saveMobileNote = useCallback(() => {
+    if (!mobileNoteDraft) {
+      return;
+    }
+
+    handleWaveformTimestamp(mobileNoteDraft.time, mobileNoteDraft.text);
+    setMobileNoteDraft(null);
+  }, [handleWaveformTimestamp, mobileNoteDraft]);
+
+  const openMobileCommentDrawer = useCallback((comment) => {
+    if (!comment || !isReviewerMode || !isMobileViewport()) {
+      return;
+    }
+
+    setMobileCommentDrawerId(comment.id);
+    setMobileCommentDraft(comment.text || "");
+  }, [isReviewerMode]);
+
+  const closeMobileCommentDrawer = useCallback(() => {
+    setMobileCommentDrawerId(null);
+    setMobileCommentDraft("");
+  }, []);
 
   const toggleResolved = useCallback((commentId) => {
     if (!permissions.canReview) {
@@ -1020,6 +1080,24 @@ export default function App() {
     });
   }, [currentReviewer, permissions, updateActiveVersion]);
 
+  const saveMobileCommentDrawer = useCallback(() => {
+    if (!mobileDrawerComment) {
+      return;
+    }
+
+    editComment(mobileDrawerComment.id, mobileCommentDraft);
+    closeMobileCommentDrawer();
+  }, [closeMobileCommentDrawer, editComment, mobileCommentDraft, mobileDrawerComment]);
+
+  const deleteMobileCommentDrawer = useCallback(() => {
+    if (!mobileDrawerComment) {
+      return;
+    }
+
+    deleteComment(mobileDrawerComment.id);
+    closeMobileCommentDrawer();
+  }, [closeMobileCommentDrawer, deleteComment, mobileDrawerComment]);
+
   const selectComment = useCallback((comment) => {
     updateActiveVersion((version) => ({
       ...version,
@@ -1041,7 +1119,8 @@ export default function App() {
     if (autoplay) {
       playerRef.current?.play();
     }
-  }, [updateActiveVersion]);
+    openMobileCommentDrawer(comment);
+  }, [openMobileCommentDrawer, updateActiveVersion]);
 
   const handlePlayerReady = useCallback((controls) => {
     playerRef.current = controls;
@@ -1231,7 +1310,7 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${isReviewerMode ? " reviewer-mode" : ""}`}>
       <div className="top-stack">
         <Header
           projectName={projectName}
@@ -1272,7 +1351,7 @@ export default function App() {
             onTrackUpload={handleTrackUpload}
           />
 
-          {(permissions.canEdit || audioSource) && (
+          {(permissions.canEdit || !hasPlayableAudio) && (
             <AudioUpload
               audioSource={audioSource}
               duration={duration}
@@ -1288,12 +1367,16 @@ export default function App() {
             comments={comments}
             selectedCommentId={selectedCommentId}
             selectedTime={selectedTime}
+            previewMarkerTime={isReviewerMode ? mobileNoteDraft?.time : null}
+            trackTitle={activeTrack?.title}
             onTimestampCreate={handleWaveformTimestamp}
             onMarkerSelect={activateComment}
             onReady={handlePlayerReady}
             onTimeUpdate={handlePlaybackTimeUpdate}
             onDurationChange={updateDuration}
             onPlaybackChange={setIsPlaying}
+            isReviewerMode={isReviewerMode}
+            onMobileNoteRequest={openMobileNote}
           />
           <SpectrumAnalyzer mediaElement={mediaElement} isPlaying={isPlaying} />
         </div>
@@ -1321,12 +1404,78 @@ export default function App() {
             onCommentEdit={editComment}
             onCommentDelete={deleteComment}
             onToggleResolved={toggleResolved}
+            onCommentDrawerOpen={openMobileCommentDrawer}
             currentReviewer={currentReviewer}
             canModifyComment={(comment) => canEditComment(comment, currentReviewer, permissions)}
             canResolve={permissions.canReview}
           />
         </div>
       </section>
+      
+{mobileCommentDrawerId && (
+  <>
+    <div
+      className="mobile-comment-drawer-backdrop"
+      onClick={closeMobileCommentDrawer}
+    />
+
+    <aside className="mobile-comment-drawer open">
+      {(() => {
+        const activeComment = comments.find(
+          (comment) => comment.id === mobileCommentDrawerId
+        );
+
+        if (!activeComment) return null;
+
+        return (
+          <>
+            <div className="mobile-comment-drawer-header">
+              <div>
+                <p className="eyebrow">Timestamp Comment</p>
+                <h3>{formatTimecode(activeComment.time)}</h3>
+              </div>
+
+              <button type="button" onClick={closeMobileCommentDrawer}>
+                Close
+              </button>
+            </div>
+
+            <textarea
+              value={mobileCommentDraft}
+              onChange={(event) => setMobileCommentDraft(event.target.value)}
+            />
+
+            <div className="mobile-comment-drawer-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  editComment(mobileCommentDrawerId, mobileCommentDraft);
+                  closeMobileCommentDrawer();
+                }}
+              >
+                Save
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  deleteComment(mobileCommentDrawerId);
+                  closeMobileCommentDrawer();
+                }}
+              >
+                Delete
+              </button>
+
+              <button type="button" onClick={closeMobileCommentDrawer}>
+                Cancel
+              </button>
+            </div>
+          </>
+        );
+      })()}
+    </aside>
+  </>
+)}
 
       <TransportBar
         currentTime={currentTime}
@@ -1337,6 +1486,71 @@ export default function App() {
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}
       />
+
+      {isReviewerMode && mobileNoteDraft && (
+        <div className="mobile-note-popover" role="dialog" aria-label="Add timestamp note">
+          <div className="mobile-note-card">
+            <div className="mobile-note-header">
+              <span>Timestamp note</span>
+              <strong>{formatTime(mobileNoteDraft.time)}</strong>
+            </div>
+            <textarea
+              value={mobileNoteDraft.text}
+              placeholder="Type feedback for this moment..."
+              onChange={(event) =>
+                setMobileNoteDraft((draft) =>
+                  draft ? { ...draft, text: event.target.value } : draft,
+                )
+              }
+            />
+            <div className="mobile-note-actions">
+              <button type="button" onClick={pauseMobileNotePlayback}>
+                Stop
+              </button>
+              <button type="button" onClick={() => setMobileNoteDraft(null)}>
+                Cancel
+              </button>
+              <button type="button" className="primary-action" onClick={saveMobileNote}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isReviewerMode && mobileDrawerComment && (
+        <aside className="mobile-comment-drawer" aria-label="Edit timestamp comment">
+          <div className="mobile-comment-drawer-header">
+            <span>{formatTime(mobileDrawerComment.time)}</span>
+            <strong>{mobileDrawerComment.author}</strong>
+          </div>
+          <textarea
+            value={mobileCommentDraft}
+            onChange={(event) => setMobileCommentDraft(event.target.value)}
+          />
+          <div className="mobile-comment-drawer-actions">
+            <button type="button" onClick={closeMobileCommentDrawer}>
+              Close
+            </button>
+            {canEditComment(mobileDrawerComment, currentReviewer, permissions) && (
+              <button type="button" onClick={deleteMobileCommentDrawer}>
+                Delete
+              </button>
+            )}
+            <button
+              type="button"
+              className={`resolve-toggle${mobileDrawerComment.resolved ? " resolved" : ""}`}
+              disabled={!permissions.canReview}
+              onClick={() => toggleResolved(mobileDrawerComment.id)}
+            >
+              {mobileDrawerComment.resolved ? "Resolved" : "Unresolved"}
+            </button>
+            <button type="button" className="primary-action" onClick={saveMobileCommentDrawer}>
+              Save
+            </button>
+          </div>
+        </aside>
+      )}
     </main>
   );
 }
@@ -1957,6 +2171,10 @@ function formatTime(seconds) {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.floor(seconds % 60);
   return `${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function isMobileViewport() {
+  return window.matchMedia?.("(max-width: 768px)")?.matches || window.innerWidth <= 768;
 }
 
 function createSessionId() {
