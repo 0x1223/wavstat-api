@@ -2096,11 +2096,13 @@ h2 {
   }
 
   .reviewer-mode .waveform-stage {
-    min-height: min(54vh, 380px);
-  }
+  min-height: auto;
+  padding-bottom: 0;
+}
 
   .reviewer-mode .waveform {
-    min-height: min(46vh, 318px);
+    min-height: 180px;
+    height: 180px;
     padding: 0 12px;
     cursor: pointer;
     touch-action: none;
