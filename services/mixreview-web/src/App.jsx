@@ -117,6 +117,8 @@ export default function App() {
   const [uploadError, setUploadError] = useState("");
   const [sessionMessage, setSessionMessage] = useState("");
   const [setupError, setSetupError] = useState("");
+  const [isSessionSynced, setIsSessionSynced] = useState(Boolean(restoredSession));
+  const [isSessionSaving, setIsSessionSaving] = useState(false);
   const [loginName, setLoginName] = useState(
     savedAccessState?.mode === "reviewer" ? savedAccessState.sessionId || "" : "",
   );
@@ -221,6 +223,7 @@ export default function App() {
     () => getTrackApprovalSummary(syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)),
     [activeTrackId, activeVersionId, tracks, versions],
   );
+  const canUploadAudio = permissions.canEdit && isSessionSynced && !isSessionSaving;
 
   useEffect(() => {
     if (!import.meta.env.DEV) {
@@ -274,6 +277,7 @@ export default function App() {
     setCurrentTime(0);
     setIsPlaying(false);
     setHasStarted(true);
+    setIsSessionSynced(true);
     playerRef.current = null;
   }, [isEngineerUnlocked]);
 
@@ -369,10 +373,17 @@ export default function App() {
     }
 
     const timeoutId = window.setTimeout(() => {
-      lastSavedSessionRef.current = serializedSession;
-      saveSessionToApi(sessionSnapshot).catch(() => {
-        setSessionMessage("Session changes are cached locally but could not sync to storage.");
-      });
+      saveSessionToApi(sessionSnapshot)
+        .then(() => {
+          lastSavedSessionRef.current = serializedSession;
+          setIsSessionSynced(true);
+        })
+        .catch((error) => {
+          setIsSessionSynced(false);
+          setSessionMessage(
+            error.message || "Session changes are cached locally but could not sync to storage.",
+          );
+        });
     }, 450);
 
     return () => window.clearTimeout(timeoutId);
@@ -412,6 +423,24 @@ export default function App() {
     );
   }, [activeTrackId, activeVersionId]);
 
+  const ensureSessionPersisted = useCallback(async (session = sessionSnapshot) => {
+    if (!session?.id) {
+      throw new Error("Create and save a review session before uploading audio.");
+    }
+
+    setIsSessionSaving(true);
+    try {
+      await saveSessionToApi(session);
+      setIsSessionSynced(true);
+      return session.id;
+    } catch (error) {
+      setIsSessionSynced(false);
+      throw new Error(error.message || "Session could not sync before upload.");
+    } finally {
+      setIsSessionSaving(false);
+    }
+  }, [sessionSnapshot]);
+
   const handleAudioUpload = useCallback(async (file) => {
     if (!permissions.canEdit) {
       return;
@@ -433,6 +462,7 @@ export default function App() {
     setSessionMessage("");
 
     try {
+      await ensureSessionPersisted();
       const uploadResult = await uploadSessionAudio(sessionId, targetVersionId, file, targetTrackId);
       const nextAudioSource = normalizeAudioSource({
         playbackUrl: uploadResult.playbackUrl,
@@ -443,7 +473,8 @@ export default function App() {
         fileName: uploadResult.fileName || file.name,
         title,
         size: uploadResult.size || file.size,
-        type: uploadResult.contentType || file.type || "audio file"
+        type: uploadResult.contentType || file.type || "audio file",
+        mimeType: uploadResult.contentType || file.type || null
       });
 
       setUploadError("");
@@ -488,7 +519,7 @@ export default function App() {
     } catch (error) {
       setUploadError(error.message || "Audio upload failed.");
     }
-  }, [activeTrackId, activeVersionId, currentReviewer, permissions.canEdit, sessionId, versions]);
+  }, [activeTrackId, activeVersionId, currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, versions]);
 
   const handleTrackUpload = useCallback(async (file) => {
     if (!permissions.canEdit) {
@@ -511,6 +542,7 @@ export default function App() {
     setSessionMessage("");
 
     try {
+      await ensureSessionPersisted();
       const uploadResult = await uploadSessionAudio(sessionId, nextVersionId, file, nextTrackId);
       const nextAudioSource = normalizeAudioSource({
         playbackUrl: uploadResult.playbackUrl,
@@ -521,7 +553,8 @@ export default function App() {
         fileName: uploadResult.fileName || file.name,
         title,
         size: uploadResult.size || file.size,
-        type: uploadResult.contentType || file.type || "audio file"
+        type: uploadResult.contentType || file.type || "audio file",
+        mimeType: uploadResult.contentType || file.type || null
       });
       const nextVersions = createEmptyVersions().map((version) =>
         version.id === nextVersionId
@@ -541,7 +574,7 @@ export default function App() {
     } catch (error) {
       setUploadError(error.message || "Track upload failed.");
     }
-  }, [currentReviewer, permissions.canEdit, sessionId]);
+  }, [currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId]);
 
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
@@ -558,6 +591,8 @@ export default function App() {
     setSessionMessage("");
     setShareId(null);
     setHasStarted(false);
+    setIsSessionSynced(false);
+    setIsSessionSaving(false);
     setAppView("setup");
     saveAccessState({ mode: "admin", sessionId: nextSessionId });
     clearWorkspaceRoute();
@@ -567,7 +602,7 @@ export default function App() {
     playerRef.current = null;
   }, []);
 
-  const submitSessionSetup = useCallback((event) => {
+  const submitSessionSetup = useCallback(async (event) => {
     event.preventDefault();
     const sessionName = sessionDetails.sessionName.trim();
     const artistName = sessionDetails.artistName.trim();
@@ -587,15 +622,36 @@ export default function App() {
       notes: sessionDetails.notes.trim(),
       status: "Draft"
     };
+    const draftSession = {
+      id: sessionId,
+      projectName: nextTitle,
+      ...nextDetails,
+      shareId,
+      activeTrackId: null,
+      activeVersionId: "version-v1",
+      hasStarted: true,
+      currentReviewer: "Engineer",
+      tracks: [],
+      versions: [],
+      updatedAt: new Date().toISOString()
+    };
 
     setSetupError("");
-    setProjectTitle(nextTitle);
-    setSessionDetails(nextDetails);
-    setHasStarted(true);
-    setAppView("workspace");
-    setReviewRoute("admin", activeVersionId || "version-v1", sessionId, activeTrackId);
-    saveAccessState({ mode: "admin", sessionId });
-  }, [activeTrackId, activeVersionId, sessionDetails, sessionId]);
+    setSessionMessage("Saving review session...");
+    try {
+      await ensureSessionPersisted(draftSession);
+      setProjectTitle(nextTitle);
+      setSessionDetails(nextDetails);
+      setHasStarted(true);
+      setAppView("workspace");
+      setSessionMessage("Session saved. Choose audio to start the review.");
+      setReviewRoute("admin", "version-v1", sessionId, null);
+      saveAccessState({ mode: "admin", sessionId });
+    } catch (error) {
+      setSetupError(error.message || "Session could not be saved. Try again before uploading audio.");
+      setSessionMessage("");
+    }
+  }, [ensureSessionPersisted, sessionDetails, sessionId, shareId]);
 
   const startNewSession = useCallback(() => {
     if (!isEngineerUnlocked) {
@@ -616,6 +672,7 @@ export default function App() {
     playerRef.current?.pause();
     setIsPlaying(false);
     setHasStarted(false);
+    setIsSessionSynced(true);
     setAppView("admin");
     setIsSharePanelOpen(false);
     saveAccessState({ mode: "admin", sessionId });
@@ -632,6 +689,7 @@ export default function App() {
     applyStoredSession(storedSession, reviewer);
     setAppView("workspace");
     setHasStarted(true);
+    setIsSessionSynced(true);
     saveLatestSession(storedSession);
     saveAccessState({
       mode: reviewer === "Engineer" ? "admin" : "reviewer",
@@ -829,6 +887,8 @@ export default function App() {
     window.sessionStorage.removeItem(ADMIN_UNLOCK_SESSION_KEY);
     setIsEngineerUnlocked(false);
     setCurrentReviewer("Artist");
+    setIsSessionSynced(false);
+    setIsSessionSaving(false);
     setSessionId(createSessionId());
     setProjectTitle(emptyProjectName);
     setTracks([]);
@@ -1190,7 +1250,7 @@ export default function App() {
           <TrackList
             tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
             activeTrackId={activeTrackId}
-            canEdit={permissions.canEdit}
+            canEdit={canUploadAudio}
             onTrackSelect={selectTrack}
             onTrackUpload={handleTrackUpload}
           />
@@ -1200,7 +1260,7 @@ export default function App() {
               audioSource={audioSource}
               duration={duration}
               error={uploadError}
-              disabled={!permissions.canEdit}
+              disabled={!canUploadAudio}
               onFileSelect={handleAudioUpload}
             />
           )}

@@ -91,6 +91,7 @@ export function toStoredAudioMetadata(audioSource) {
     title: audioSource.title,
     size: audioSource.size,
     type: audioSource.type,
+    mimeType: audioSource.mimeType || audioSource.type || null,
     url,
     playbackUrl: url,
     audioUrl: url,

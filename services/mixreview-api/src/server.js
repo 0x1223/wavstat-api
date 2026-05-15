@@ -417,7 +417,9 @@ async function attachAudioToSession(sessionId, audio, versionId, trackId = "trac
     title: path.basename(audio.fileName, path.extname(audio.fileName)) || audio.fileName,
     size: audio.size,
     type: audio.contentType,
+    mimeType: audio.contentType,
     url: audio.playbackUrl,
+    playbackUrl: audio.playbackUrl,
     key: audio.key,
     storage: audio.storage,
     uploadedAt: audio.uploadedAt
