@@ -1,9 +1,11 @@
 [build]
 builder = "nixpacks"
-buildCommand = "npm install"
+buildCommand = "cd services/mixreview-api && npm install"
 
 [deploy]
-startCommand = "node server.js"
+startCommand = "cd services/mixreview-api && npm start"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
 

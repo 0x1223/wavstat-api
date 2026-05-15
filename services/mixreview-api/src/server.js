@@ -74,7 +74,7 @@ app.options("*", cors(corsOptions));
 app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(uploadRoot));
 
-app.get("/health", (_req, res) => {
+function sendHealth(_req, res) {
   res.json({
     ok: true,
     service: "mixreview-api",
@@ -84,7 +84,10 @@ app.get("/health", (_req, res) => {
     r2UploadConfigured: hasR2Config,
     allowedOrigins
   });
-});
+}
+
+app.get("/health", sendHealth);
+app.get("/api/health", sendHealth);
 
 app.get("/api/audio/playback/:encodedKey", streamAudioPlayback);
 
