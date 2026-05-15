@@ -317,14 +317,14 @@ export function WaveformReview({
       {duration > 0 && (
         <div className="review-console">
           <button
-            type="button"
-            className={`marker-tool-toggle${isMarkerToolActive ? " active" : ""}`}
-            aria-pressed={isMarkerToolActive}
-            aria-label="Add timestamp note mode"
-            title="Add timestamp note mode"
-            onClick={() => setIsMarkerToolActive((current) => !current)}
+  type="button"
+  className={`marker-tool-toggle${isMarkerToolActive ? " active" : ""}`}
+  aria-pressed={isMarkerToolActive}
+  aria-label="Add timestamp note mode"
+  title="Add timestamp note mode"
+  onClick={() => setIsMarkerToolActive((current) => !current)}
           >
-            <span aria-hidden="true">+</span>
+            <span aria-hidden="true">💬</span>
           </button>
         </div>
       )}
