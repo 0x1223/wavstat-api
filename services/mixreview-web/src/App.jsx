@@ -145,6 +145,7 @@ export default function App() {
   );
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [mediaElement, setMediaElement] = useState(null);
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
     () =>
@@ -276,6 +277,7 @@ export default function App() {
     setShareId(session.shareId || session.id || null);
     setCurrentTime(0);
     setIsPlaying(false);
+    setIsPlayerReady(false);
     setHasStarted(true);
     setIsSessionSynced(true);
     playerRef.current = null;
@@ -480,6 +482,7 @@ export default function App() {
       setUploadError("");
       setCurrentTime(0);
       setIsPlaying(false);
+      setIsPlayerReady(false);
       playerRef.current = null;
 
       if (!activeTrackId) {
@@ -570,6 +573,7 @@ export default function App() {
       setActiveVersionId(nextVersionId);
       setCurrentTime(0);
       setIsPlaying(false);
+      setIsPlayerReady(false);
       playerRef.current = null;
     } catch (error) {
       setUploadError(error.message || "Track upload failed.");
@@ -599,6 +603,7 @@ export default function App() {
     clearStartRouteFlag();
     setCurrentTime(0);
     setIsPlaying(false);
+    setIsPlayerReady(false);
     playerRef.current = null;
   }, []);
 
@@ -671,6 +676,7 @@ export default function App() {
   const openAdminDashboard = useCallback(() => {
     playerRef.current?.pause();
     setIsPlaying(false);
+    setIsPlayerReady(false);
     setHasStarted(false);
     setIsSessionSynced(true);
     setAppView("admin");
@@ -786,6 +792,7 @@ export default function App() {
     });
     setCurrentTime(0);
     setIsPlaying(false);
+    setIsPlayerReady(false);
     activeMarkerRef.current = null;
     playerRef.current = null;
   }, [activeTrackId, currentReviewer, isEngineerMode, sessionId]);
@@ -803,6 +810,7 @@ export default function App() {
     setActiveVersionId(nextTrack.activeVersionId || nextTrack.versions[0]?.id || "version-v1");
     setCurrentTime(0);
     setIsPlaying(false);
+    setIsPlayerReady(false);
     setMediaElement(null);
     activeMarkerRef.current = null;
     playerRef.current = null;
@@ -879,6 +887,7 @@ export default function App() {
   const returnToStart = useCallback(() => {
     playerRef.current?.pause();
     setIsPlaying(false);
+    setIsPlayerReady(false);
     setCurrentTime(0);
     setHasStarted(false);
     setAppView("start");
@@ -1036,7 +1045,15 @@ export default function App() {
 
   const handlePlayerReady = useCallback((controls) => {
     playerRef.current = controls;
+    setIsPlayerReady(Boolean(controls));
     setMediaElement(controls?.mediaElement || null);
+    if (controls) {
+      console.log("MixReview transport player ready", {
+        hasWaveSurfer: Boolean(controls.wavesurfer),
+        muted: controls.mediaElement?.muted,
+        readyState: controls.mediaElement?.readyState
+      });
+    }
   }, []);
 
   const updateDuration = useCallback((nextDuration) => {
@@ -1315,7 +1332,7 @@ export default function App() {
         currentTime={currentTime}
         duration={duration}
         isPlaying={isPlaying}
-        isDisabled={!playerRef.current}
+        isDisabled={!isPlayerReady}
         onPlayPause={() => playerRef.current?.playPause()}
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}

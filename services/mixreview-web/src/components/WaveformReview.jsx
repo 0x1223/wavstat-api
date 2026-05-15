@@ -55,15 +55,17 @@ export function WaveformReview({
 
     let isDisposed = false;
     let hasLoaded = false;
-    if (!audioSource?.url) {
+    const playbackUrl = audioSource?.playbackUrl || audioSource?.url;
+    if (!playbackUrl) {
       setIsLoading(false);
       callbacksRef.current.onReady(null);
       return undefined;
     }
 
+    console.log("WaveSurfer load start", { playbackUrl });
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
-      url: audioSource.url,
+      url: playbackUrl,
       waveColor: "#6d6457",
       progressColor: "#d6a354",
       cursorColor: "#f5efe3",
@@ -92,14 +94,34 @@ export function WaveformReview({
 
       hasLoaded = true;
       const audioDuration = wavesurfer.getDuration();
+      const mediaElement = wavesurfer.getMediaElement();
+      if (mediaElement) {
+        mediaElement.muted = false;
+        mediaElement.volume = 1;
+        mediaElement.preload = "auto";
+      }
+      console.log("WaveSurfer ready", {
+        duration: audioDuration,
+        muted: mediaElement?.muted,
+        volume: mediaElement?.volume,
+        readyState: mediaElement?.readyState
+      });
+      console.log("WaveSurfer decoded duration", audioDuration);
       setDuration(audioDuration);
       setIsLoading(false);
       callbacksRef.current.onDurationChange(audioDuration);
       callbacksRef.current.onReady({
-        mediaElement: wavesurfer.getMediaElement(),
-        play: () => wavesurfer.play(),
+        wavesurfer,
+        mediaElement,
+        play: async () => {
+          await wavesurfer.play();
+          console.log("WaveSurfer play state", { isPlaying: wavesurfer.isPlaying() });
+        },
         pause: () => wavesurfer.pause(),
-        playPause: () => wavesurfer.playPause(),
+        playPause: async () => {
+          await wavesurfer.playPause();
+          console.log("WaveSurfer play state", { isPlaying: wavesurfer.isPlaying() });
+        },
         skip: (seconds) => wavesurfer.skip(seconds),
         seekToTime: (time) => {
           const nextTime = Math.min(Math.max(time, 0), wavesurfer.getDuration());
@@ -109,11 +131,12 @@ export function WaveformReview({
       });
     });
 
-    wavesurfer.on("error", () => {
+    wavesurfer.on("error", (error) => {
       if (isDisposed || hasLoaded) {
         return;
       }
 
+      console.error("WaveSurfer error", error);
       setIsLoading(false);
       setLoadError("This audio file could not be decoded. Try a WAV, MP3, M4A, or AAC file.");
       callbacksRef.current.onReady(null);
@@ -127,16 +150,34 @@ export function WaveformReview({
       }
     });
 
-    wavesurfer.on("play", () => !isDisposed && callbacksRef.current.onPlaybackChange(true));
-    wavesurfer.on("pause", () => !isDisposed && callbacksRef.current.onPlaybackChange(false));
-    wavesurfer.on("finish", () => !isDisposed && callbacksRef.current.onPlaybackChange(false));
+    wavesurfer.on("play", () => {
+      if (!isDisposed) {
+        console.log("WaveSurfer play state", { isPlaying: true });
+        callbacksRef.current.onPlaybackChange(true);
+      }
+    });
+    wavesurfer.on("pause", () => {
+      if (!isDisposed) {
+        console.log("WaveSurfer play state", { isPlaying: false });
+        callbacksRef.current.onPlaybackChange(false);
+      }
+    });
+    wavesurfer.on("finish", () => {
+      if (!isDisposed) {
+        console.log("WaveSurfer play state", { isPlaying: false, finished: true });
+        callbacksRef.current.onPlaybackChange(false);
+      }
+    });
 
     return () => {
       isDisposed = true;
+      if (wavesurferRef.current === wavesurfer) {
+        wavesurferRef.current = null;
+      }
       wavesurfer.destroy();
       resizeObserver.disconnect();
     };
-  }, [audioSource]);
+  }, [audioSource?.playbackUrl, audioSource?.url]);
 
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
