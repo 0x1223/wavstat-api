@@ -221,13 +221,11 @@ export function WaveformReview({
 
     if (isMarkerToolActive) {
   callbacksRef.current.onTimestampCreate(clickedTime);
-
   setIsDrawerOpen(true);
   setIsMarkerToolActive(false);
-
   return;
 }
-
+}
   const hasAudio = Boolean(audioSource?.url);
   const markerItems = duration > 0
     ? [
