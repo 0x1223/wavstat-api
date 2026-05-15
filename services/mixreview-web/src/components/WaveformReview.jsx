@@ -324,7 +324,7 @@ export function WaveformReview({
   title="Add timestamp note mode"
   onClick={() => setIsMarkerToolActive((current) => !current)}
           >
-            <span aria-hidden="true">💬</span>
+            <span aria-hidden="true">+</span>
           </button>
         </div>
       )}
