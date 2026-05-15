@@ -269,22 +269,27 @@ export function WaveformReview({
       <div className="waveform-stage">
         {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
         {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
+        
         <div
+  className="waveform-stage">
+  {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
+  {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
+
   <div
-  ref={containerRef}
-  className="waveform"
-  onClick={handleWaveformClick}
-  onTouchEnd={(event) => {
-    const touch = event.changedTouches?.[0];
-    if (!touch || !containerRef.current || !duration) return;
+    ref={containerRef}
+    className="waveform"
+    onClick={handleWaveformClick}
+    onTouchEnd={(event) => {
+      const touch = event.changedTouches?.[0];
+      if (!touch || !containerRef.current || !duration) return;
 
-    const rect = containerRef.current.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (touch.clientX - rect.left) / rect.width));
-    const nextTime = ratio * duration;
+      const rect = containerRef.current.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (touch.clientX - rect.left) / rect.width));
+      const nextTime = ratio * duration;
 
-    seekToTime(nextTime);
-  }}
-/>
+      seekToTime(nextTime);
+    }}
+  />
 
         {duration > 0 && (
           <div className="marker-layer">
