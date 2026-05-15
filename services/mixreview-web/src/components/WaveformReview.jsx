@@ -33,6 +33,7 @@ export function WaveformReview({
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isScrubbing, setIsScrubbing] = useState(false);
 
   useEffect(() => {
@@ -322,13 +323,31 @@ export function WaveformReview({
   aria-pressed={isMarkerToolActive}
   aria-label="Add timestamp note mode"
   title="Add timestamp note mode"
-  onClick={() => setIsMarkerToolActive((current) => !current)}
+  onClick={() => {
+  setIsMarkerToolActive((current) => !current);
+  setIsDrawerOpen(true);
+}}
           >
             <span aria-hidden="true">✍️</span>
 <span className="tool-label">Review</span>
           </button>
         </div>
       )}
+      {isDrawerOpen && (
+  <div className={`mobile-review-drawer ${isDrawerOpen ? "open" : ""}`}>
+    <textarea
+      className="mobile-review-input"
+      placeholder="Write review..."
+    />
+
+    <button
+      className="mobile-review-save"
+      onClick={() => setIsDrawerOpen(false)}
+    >
+      Save Review
+    </button>
+  </div>
+)}
     </section>
   );
 }
