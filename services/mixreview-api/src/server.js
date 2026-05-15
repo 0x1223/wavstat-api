@@ -68,7 +68,9 @@ if (isProduction && !hasR2Config) {
 }
 
 app.set("trust proxy", 1);
-app.use(cors(buildCorsOptions()));
+const corsOptions = buildCorsOptions();
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(uploadRoot));
 
@@ -755,28 +757,37 @@ function getEnvValue(name) {
 
 function parseAllowedOrigins(value) {
   const configuredOrigins = value
-    ? value.split(",").map((origin) => origin.trim()).filter(Boolean)
+    ? value.split(",").map(normalizeOrigin).filter(Boolean)
     : [];
 
   return Array.from(new Set([
     ...configuredOrigins,
-    frontendProductionOrigin,
+    normalizeOrigin(frontendProductionOrigin),
     ...(isProduction ? [] : defaultDevOrigins)
   ]));
+}
+
+function normalizeOrigin(origin) {
+  if (!origin || typeof origin !== "string") {
+    return "";
+  }
+
+  return origin.trim().replace(/\/$/, "");
 }
 
 function buildCorsOptions() {
   return {
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
+      const normalizedOrigin = normalizeOrigin(origin);
+      if (!origin || allowedOrigins.includes(normalizedOrigin)) {
         callback(null, true);
         return;
       }
 
       callback(new Error(`Origin ${origin} is not allowed by MixReview CORS.`));
     },
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    methods: ["GET", "POST", "PUT", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
     credentials: false,
     maxAge: 86400
   };
