@@ -33,6 +33,7 @@ export function WaveformReview({
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
+  const [isScrubbing, setIsScrubbing] = useState(false);
 
   useEffect(() => {
     callbacksRef.current = {
@@ -268,7 +269,19 @@ export function WaveformReview({
       <div className="waveform-stage">
         {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
         {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
-        <div ref={containerRef} className="waveform" onClick={handleWaveformClick} />
+        <div
+  ref={containerRef}
+  className="waveform"
+  onTouchStart={() => setIsScrubbing(true)}
+  onTouchEnd={() => {
+    setTimeout(() => setIsScrubbing(false), 120);
+  }}
+  onClick={(event) => {
+    if (isScrubbing) return;
+    handleWaveformClick(event);
+  }}
+/>
+
 
         {duration > 0 && (
           <div className="marker-layer">
