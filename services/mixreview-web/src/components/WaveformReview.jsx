@@ -272,16 +272,29 @@ export function WaveformReview({
         <div
   ref={containerRef}
   className="waveform"
-  onTouchStart={() => setIsScrubbing(true)}
-  onTouchEnd={() => {
-    setTimeout(() => setIsScrubbing(false), 120);
+  onTouchStart={(event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsScrubbing(true);
+  }}
+  onTouchMove={(event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }}
+  onTouchEnd={(event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setTimeout(() => setIsScrubbing(false), 200);
   }}
   onClick={(event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
     if (isScrubbing) return;
+
     handleWaveformClick(event);
   }}
 />
-
 
         {duration > 0 && (
           <div className="marker-layer">
@@ -296,12 +309,18 @@ export function WaveformReview({
                 style={{ left: comment.left }}
                 aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
                 onClick={(event) => {
-                  event.stopPropagation();
-                  seekToTime(comment.time);
-                  if (!comment.isPreview) {
-                    onMarkerSelect(comment, { autoplay: true });
-                  }
-                }}
+  event.preventDefault();
+  event.stopPropagation();
+
+  setIsScrubbing(false);
+  seekToTime(comment.time);
+
+  if (!comment.isPreview) {
+    onMarkerSelect(comment, { autoplay: true });
+  }
+}}
+onTouchStart={(event) => event.stopPropagation()}
+onTouchEnd={(event) => event.stopPropagation()}
               />
             ))}
           </div>
