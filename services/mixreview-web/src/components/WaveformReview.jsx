@@ -284,7 +284,7 @@ export function WaveformReview({
       const nextTime = ratio * duration;
 
       seekToTime(nextTime);
-    }}
+    }},
   />
 
         {duration > 0 && (
