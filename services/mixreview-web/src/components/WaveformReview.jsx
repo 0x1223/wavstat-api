@@ -272,21 +272,24 @@ export function WaveformReview({
   {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
 
   <div
-    ref={containerRef}
-    className="waveform"
-    onTouchEnd={(event) => {
-    onTouchEnd={(event) => {
-      const touch = event.changedTouches?.[0];
-      if (!touch || !containerRef.current || !duration) return;
+  ref={containerRef}
+  className="waveform"
+  onClick={handleWaveformClick}
+  onTouchMove={(event) => {
+    const touch = event.changedTouches?.[0];
+    if (!touch || !containerRef.current || !duration) return;
 
-      const rect = containerRef.current.getBoundingClientRect();
-      const ratio = Math.min(1, Math.max(0, (touch.clientX - rect.left) / rect.width));
-      const nextTime = ratio * duration;
+    const rect = containerRef.current.getBoundingClientRect();
+    const ratio = Math.min(
+      1,
+      Math.max(0, (touch.clientX - rect.left) / rect.width)
+    );
 
-      seekToTime(nextTime);
-    }},
-  />
+    const nextTime = ratio * duration;
 
+    seekToTime(nextTime);
+  }}
+/>
         {duration > 0 && (
           <div className="marker-layer">
             {markerItems.map((comment) => (
