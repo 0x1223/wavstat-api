@@ -2137,12 +2137,25 @@ h2 {
   }
 
   .reviewer-mode .review-console {
-    display: none;
-  }
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding-top: 10px;
+  margin-top: 8px;
+}
 
-  .reviewer-mode .marker-tool-toggle {
-    display: none;
-  }
+.reviewer-mode .marker-tool-toggle {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 214, 102, 0.35);
+  background: rgba(18, 18, 18, 0.92);
+  color: #ffd666;
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 
   .reviewer-mode .mobile-note-button {
     display: none;
