@@ -270,29 +270,19 @@ export function WaveformReview({
         {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
         {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
         <div
+  <div
   ref={containerRef}
   className="waveform"
-  onTouchStart={(event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setIsScrubbing(true);
-  }}
-  onTouchMove={(event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  }}
+  onClick={handleWaveformClick}
   onTouchEnd={(event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    setTimeout(() => setIsScrubbing(false), 200);
-  }}
-  onClick={(event) => {
-    event.preventDefault();
-    event.stopPropagation();
+    const touch = event.changedTouches?.[0];
+    if (!touch || !containerRef.current || !duration) return;
 
-    if (isScrubbing) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (touch.clientX - rect.left) / rect.width));
+    const nextTime = ratio * duration;
 
-    handleWaveformClick(event);
+    seekToTime(nextTime);
   }}
 />
 
