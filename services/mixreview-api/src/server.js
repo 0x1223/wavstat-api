@@ -64,7 +64,7 @@ const r2Client = hasR2Config
   : null;
 
 if (isProduction && !hasR2Config) {
-  throw new Error("R2 credentials are required in production.");
+  console.warn("R2 credentials are not configured; MixReview API is using local storage fallback.");
 }
 
 app.set("trust proxy", 1);
