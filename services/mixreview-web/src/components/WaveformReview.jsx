@@ -275,6 +275,7 @@ export function WaveformReview({
     ref={containerRef}
     className="waveform"
     onTouchEnd={(event) => {
+    onTouchEnd={(event) => {
       const touch = event.changedTouches?.[0];
       if (!touch || !containerRef.current || !duration) return;
 
