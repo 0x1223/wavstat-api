@@ -274,7 +274,6 @@ export function WaveformReview({
   <div
   ref={containerRef}
   className="waveform"
-  onClick={handleWaveformClick}
   onTouchMove={(event) => {
     const touch = event.changedTouches?.[0];
     if (!touch || !containerRef.current || !duration) return;
