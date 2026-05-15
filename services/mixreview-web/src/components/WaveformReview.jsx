@@ -309,18 +309,12 @@ export function WaveformReview({
                 style={{ left: comment.left }}
                 aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
                 onClick={(event) => {
-  event.preventDefault();
-  event.stopPropagation();
-
-  setIsScrubbing(false);
-  seekToTime(comment.time);
-
-  if (!comment.isPreview) {
-    onMarkerSelect(comment, { autoplay: true });
-  }
-}}
-onTouchStart={(event) => event.stopPropagation()}
-onTouchEnd={(event) => event.stopPropagation()}
+                  event.stopPropagation();
+                  seekToTime(comment.time);
+                  if (!comment.isPreview) {
+                    onMarkerSelect(comment, { autoplay: true });
+                  }
+                }}
               />
             ))}
           </div>
