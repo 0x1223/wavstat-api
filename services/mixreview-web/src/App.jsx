@@ -1429,7 +1429,7 @@ export default function App() {
             <div className="mobile-comment-drawer-header">
               <div>
                 <p className="eyebrow">Timestamp Comment</p>
-                <h3>{formatTimecode(activeComment.time)}</h3>
+                <h3>{formatTime(activeComment.time)}</h3>
               </div>
               <button type="button" onClick={closeMobileCommentDrawer}>✕</button>
             </div>
