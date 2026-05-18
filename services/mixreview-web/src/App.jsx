@@ -1453,6 +1453,17 @@ export default function App() {
                 Save Review
               </button>
             </div>
+            <button
+              type="button"
+              className="mobile-comment-delete"
+              onClick={() => {
+                if (window.confirm("Delete this review marker?")) {
+                  deleteMobileCommentDrawer();
+                }
+              }}
+            >
+              Delete marker
+            </button>
           </>
         );
       })()}
