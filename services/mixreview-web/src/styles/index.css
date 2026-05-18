@@ -2232,7 +2232,10 @@ h2 {
   }
 
   .reviewer-mode .wave-marker {
-    width: 4px;
+    /* Restrict hit area to dot only — no full-height tap zone */
+    bottom: auto;
+    height: 36px;
+    width: 36px;
     min-width: 36px;
     margin-left: -18px;
     background: transparent;
@@ -2240,7 +2243,8 @@ h2 {
   }
 
   .reviewer-mode .wave-marker::before {
-    top: 18px;
+    top: 50%;
+    transform: translate(-50%, -50%);
     width: 17px;
     height: 17px;
     box-shadow:
@@ -2249,7 +2253,23 @@ h2 {
   }
 
   .reviewer-mode .wave-marker::after {
-    display: none;
+    /* Visual bar below the dot — outside button box, receives no touch events */
+    content: "";
+    display: block;
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 160px;
+    background: linear-gradient(180deg, var(--gold-bright) 0%, transparent 75%);
+    pointer-events: none;
+    opacity: 0.7;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    font-size: 0;
+    color: transparent;
   }
 
   .reviewer-mode .review-console {
