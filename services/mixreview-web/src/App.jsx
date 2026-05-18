@@ -1498,7 +1498,6 @@ export default function App() {
             <textarea
               value={mobileNoteDraft.text}
               placeholder="Type your feedback for this moment…"
-              autoFocus
               onChange={(event) =>
                 setMobileNoteDraft((draft) =>
                   draft ? { ...draft, text: event.target.value } : draft,
