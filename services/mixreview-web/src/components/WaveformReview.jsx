@@ -309,7 +309,6 @@ export function WaveformReview({
                 onClick={(event) => {
                   event.stopPropagation();
                   if (!comment || comment.isPreview) return;
-                  seekToTime(comment.time);
                   onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
                 }}
               />

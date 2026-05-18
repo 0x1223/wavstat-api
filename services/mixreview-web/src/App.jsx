@@ -964,7 +964,6 @@ export default function App() {
 
     const safeTime = Math.min(Math.max(time || 0, 0), duration || time || 0);
     setCurrentTime(safeTime);
-    playerRef.current?.seekToTime(safeTime);
     updateActiveVersion((version) => ({
       ...version,
       selectedTime: safeTime,
