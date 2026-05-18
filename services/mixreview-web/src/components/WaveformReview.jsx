@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
 import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
+import { MobileSpectrumAnalyzer } from "./MobileSpectrumAnalyzer.jsx";
 
 export function WaveformReview({
   audioSource,
@@ -303,6 +304,16 @@ export function WaveformReview({
 
         <div
   className="waveform-stage"
+  onClickCapture={(event) => {
+    if (!isReviewerMode || !isMarkerToolActive || !isMobileViewport()) return;
+    if (event.target.closest(".wave-marker") || isLoading || loadError || duration <= 0) return;
+    const metrics = getWaveformMetrics(containerRef.current);
+    if (!metrics.width) return;
+    event.stopPropagation();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
+    callbacksRef.current.onMobileNoteRequest?.(ratio * duration);
+    setIsMarkerToolActive(false);
+  }}
   onClick={handleWaveformClick}>
   {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
   {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
@@ -409,6 +420,12 @@ export function WaveformReview({
               )}
             </>
           )}
+        </div>
+      )}
+
+      {isReviewerMode && isMobileViewport() && duration > 0 && (
+        <div className="mobile-spectrum-container">
+          <MobileSpectrumAnalyzer key={audioSource?.playbackUrl || audioSource?.url} wsRef={wavesurferRef} />
         </div>
       )}
     </section>
