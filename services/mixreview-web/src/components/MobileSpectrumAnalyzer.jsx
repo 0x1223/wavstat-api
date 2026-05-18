@@ -12,6 +12,12 @@ const CANVAS_H = 72;
 // 1/3-octave half-bandwidth factor: 2^(1/6)
 const HALF_BW = Math.pow(2, 1 / 6);
 
+// [band index, label] pairs aligned to their bars; last entry includes "Hz" suffix
+const FREQ_LABELS = [
+  [1, "31"], [4, "63"], [7, "125"], [10, "250"], [13, "500"],
+  [16, "1k"], [19, "2k"], [22, "4k"], [25, "8k"], [28, "16kHz"],
+];
+
 export function MobileSpectrumAnalyzer({ wsRef }) {
   const canvasRef = useRef(null);
 
@@ -63,6 +69,18 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
         const h = Math.max(2, (amp * H) | 0);
         ctx.fillRect(x, H - h, barW, h);
       }
+
+      ctx.save();
+      ctx.font = "bold 8px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.shadowColor = "rgba(0,0,0,0.65)";
+      ctx.shadowBlur = 2;
+      ctx.fillStyle = "rgba(255,255,255,0.40)";
+      for (const [i, label] of FREQ_LABELS) {
+        ctx.fillText(label, (i + 0.5) * slotW, 2);
+      }
+      ctx.restore();
     }
 
     // ── RAF loop ─────────────────────────────────────────────────────────
