@@ -1444,26 +1444,142 @@ h2 {
 }
 
 .marker-tool-toggle {
-  display: inline-grid;
-  place-items: center;
-  width: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   min-height: 36px;
+  padding: 0 14px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
-  padding: 0;
   color: #cfc6b6;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
     #121212;
   cursor: pointer;
-  font-size: 1.2rem;
+  font-size: 0.88rem;
   font-weight: 800;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.marker-tool-toggle:hover {
+  color: #fffaf0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent),
+    #1a1a1a;
+}
+
+.marker-tool-toggle .tool-label {
+  font-size: 0.78rem;
 }
 
 .marker-tool-toggle.active {
   color: #130d04;
   border-color: rgba(215, 173, 98, 0.55);
   background: linear-gradient(180deg, #ffd889, #d6a354);
+  box-shadow: 0 6px 18px rgba(215, 173, 98, 0.2);
+}
+
+.marker-tool-hint {
+  color: #a89a7e;
+  font-size: 0.78rem;
+  font-style: italic;
+}
+
+/* ── Desktop inline comment box ── */
+.desktop-comment-box {
+  flex: 1;
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(215, 173, 98, 0.28);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(215, 173, 98, 0.07), rgba(215, 173, 98, 0.02)),
+    rgba(10, 10, 10, 0.6);
+  animation: rise-in 180ms ease both;
+}
+
+.desktop-comment-box-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.desktop-comment-box-header .eyebrow {
+  margin-bottom: 4px;
+}
+
+.desktop-comment-textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: none;
+  border: 1px solid rgba(215, 173, 98, 0.2);
+  border-radius: 7px;
+  color: #f8efe1;
+  background: #090909;
+  padding: 10px 12px;
+  font: inherit;
+  line-height: 1.5;
+  outline: none;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.desktop-comment-textarea:focus {
+  border-color: rgba(215, 173, 98, 0.48);
+  box-shadow: 0 0 0 3px rgba(215, 173, 98, 0.1);
+}
+
+.desktop-comment-textarea::placeholder {
+  color: #5a5245;
+}
+
+.desktop-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.desktop-comment-cancel {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #cfc6b6;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  font-weight: 760;
+  transition:
+    color 160ms ease,
+    background 160ms ease;
+}
+
+.desktop-comment-cancel:hover {
+  color: #fffaf0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.desktop-comment-save {
+  min-height: 34px;
+  padding: 0 16px;
+  border: 1px solid rgba(215, 173, 98, 0.55);
+  border-radius: 6px;
+  color: #130d04;
+  background: linear-gradient(180deg, #ffd889, #d6a354);
+  box-shadow: 0 6px 16px rgba(215, 173, 98, 0.18);
+  cursor: pointer;
+  font-weight: 850;
+  transition: filter 160ms ease;
+}
+
+.desktop-comment-save:hover {
+  filter: brightness(1.08);
 }
 
 .mobile-note-button {
@@ -2262,25 +2378,6 @@ h2 {
     border-color: #120d05;
   }
 
-  .mobile-review-drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: min(92vw, 420px);
-  height: 100vh;
-  background: rgba(12, 12, 12, 0.98);
-  border-left: 1px solid rgba(255, 214, 102, 0.18);
-  z-index: 120;
-  transform: translateX(100%);
-  transition: transform 0.28s ease;
-  overflow-y: auto;
-  backdrop-filter: blur(14px);
-}
-
-.mobile-review-drawer.open {
-  transform: translateX(0%);
-}
-
   .mobile-comment-drawer-header {
     display: flex;
     align-items: center;
@@ -2451,19 +2548,22 @@ h2 {
   position: fixed;
   top: 0;
   right: 0;
-  width: 85vw;
-  max-width: 420px;
+  width: min(88vw, 400px);
   height: 100vh;
-  background: #0b0b0f;
-  border-left: 1px solid rgba(212,175,55,0.25);
-  padding: 20px;
-  z-index: 1300;
-  transform: translateX(100%);
-  transition: transform 0.25s ease;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  padding: 24px 20px max(24px, env(safe-area-inset-bottom));
+  border-left: 1px solid rgba(215, 173, 98, 0.22);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 30%),
+    rgba(10, 10, 10, 0.97);
+  box-shadow: -24px 0 80px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(18px);
+  z-index: 1300;
   overflow-y: auto;
+  transform: translateX(100%);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .mobile-comment-drawer.open {
@@ -2472,30 +2572,115 @@ h2 {
 
 .mobile-comment-drawer-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mobile-comment-drawer-header h3 {
+  margin: 4px 0 0;
+  color: #ffe0a3;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.mobile-comment-drawer-header button {
+  flex-shrink: 0;
+  min-width: 32px;
+  min-height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #a89a7e;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 800;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.mobile-comment-drawer-header button:hover {
+  color: #fffaf0;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .mobile-comment-drawer textarea {
+  flex: 1;
   width: 100%;
-  min-height: 220px;
-  background: #121212;
-  color: #fff;
-  border: 1px solid rgba(212,175,55,0.25);
-  border-radius: 12px;
-  padding: 14px;
-  font-size: 16px;
-  resize: vertical;
+  min-height: 180px;
+  resize: none;
+  border: 1px solid rgba(215, 173, 98, 0.22);
+  border-radius: 8px;
+  color: #f8efe1;
+  background: #0a0a0a;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1.55;
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.mobile-comment-drawer textarea:focus {
+  border-color: rgba(215, 173, 98, 0.48);
+  box-shadow: 0 0 0 3px rgba(215, 173, 98, 0.1);
+}
+
+.mobile-comment-drawer textarea::placeholder {
+  color: #4a4238;
 }
 
 .mobile-comment-drawer-actions {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: auto;
 }
 
 .mobile-comment-drawer-actions button {
-  flex: 1;
+  min-height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #d8cebe;
+  background: #141414;
+  cursor: pointer;
+  font-weight: 850;
+  font-size: 0.9rem;
+  transition:
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.mobile-comment-drawer-actions button:hover {
+  color: #fffaf0;
+  background: #1e1e1e;
+}
+
+.mobile-comment-drawer-actions .primary-action {
+  color: #130d04;
+  border-color: rgba(215, 173, 98, 0.55);
+  background: linear-gradient(180deg, #ffd889, #d6a354);
+  box-shadow: 0 6px 20px rgba(215, 173, 98, 0.18);
+}
+
+.mobile-comment-drawer-actions .primary-action:hover {
+  filter: brightness(1.07);
+  color: #130d04;
+  background: linear-gradient(180deg, #ffd889, #d6a354);
+}
+
+.mobile-comment-drawer-actions .resolve-toggle {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: #cfc6b6;
+  font-size: 0.82rem;
+}
+
+.mobile-comment-drawer-actions .resolve-toggle.resolved {
+  color: #aef1bc;
+  border-color: rgba(127, 210, 145, 0.28);
+  background: rgba(127, 210, 145, 0.08);
 }
 
 @media (min-width: 769px) {

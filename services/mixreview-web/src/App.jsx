@@ -1418,15 +1418,12 @@ export default function App() {
       className="mobile-comment-drawer-backdrop"
       onClick={closeMobileCommentDrawer}
     />
-
-    <aside className="mobile-comment-drawer open">
+    <aside className="mobile-comment-drawer open" role="dialog" aria-label="Edit timestamp comment">
       {(() => {
         const activeComment = comments.find(
           (comment) => comment.id === mobileCommentDrawerId
         );
-
         if (!activeComment) return null;
-
         return (
           <>
             <div className="mobile-comment-drawer-header">
@@ -1434,40 +1431,26 @@ export default function App() {
                 <p className="eyebrow">Timestamp Comment</p>
                 <h3>{formatTimecode(activeComment.time)}</h3>
               </div>
-
-              <button type="button" onClick={closeMobileCommentDrawer}>
-                Close
-              </button>
+              <button type="button" onClick={closeMobileCommentDrawer}>✕</button>
             </div>
-
             <textarea
               value={mobileCommentDraft}
+              placeholder="Edit your note…"
               onChange={(event) => setMobileCommentDraft(event.target.value)}
             />
-
             <div className="mobile-comment-drawer-actions">
+              <button type="button" onClick={closeMobileCommentDrawer}>
+                Cancel
+              </button>
               <button
                 type="button"
+                className="primary-action"
                 onClick={() => {
                   editComment(mobileCommentDrawerId, mobileCommentDraft);
                   closeMobileCommentDrawer();
                 }}
               >
-                Save
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  deleteComment(mobileCommentDrawerId);
-                  closeMobileCommentDrawer();
-                }}
-              >
-                Delete
-              </button>
-
-              <button type="button" onClick={closeMobileCommentDrawer}>
-                Cancel
+                Save Review
               </button>
             </div>
           </>
@@ -1488,68 +1471,39 @@ export default function App() {
       />
 
       {isReviewerMode && mobileNoteDraft && (
-        <div className="mobile-note-popover" role="dialog" aria-label="Add timestamp note">
-          <div className="mobile-note-card">
-            <div className="mobile-note-header">
-              <span>Timestamp note</span>
-              <strong>{formatTime(mobileNoteDraft.time)}</strong>
+        <>
+          <div
+            className="mobile-comment-drawer-backdrop"
+            onClick={() => setMobileNoteDraft(null)}
+          />
+          <aside className="mobile-comment-drawer open" role="dialog" aria-label="Add timestamp note">
+            <div className="mobile-comment-drawer-header">
+              <div>
+                <p className="eyebrow">New Timestamp Note</p>
+                <h3>{formatTime(mobileNoteDraft.time)}</h3>
+              </div>
+              <button type="button" onClick={() => setMobileNoteDraft(null)}>✕</button>
             </div>
             <textarea
               value={mobileNoteDraft.text}
-              placeholder="Type feedback for this moment..."
+              placeholder="Type your feedback for this moment…"
+              autoFocus
               onChange={(event) =>
                 setMobileNoteDraft((draft) =>
                   draft ? { ...draft, text: event.target.value } : draft,
                 )
               }
             />
-            <div className="mobile-note-actions">
-              <button type="button" onClick={pauseMobileNotePlayback}>
-                Stop
-              </button>
+            <div className="mobile-comment-drawer-actions">
               <button type="button" onClick={() => setMobileNoteDraft(null)}>
                 Cancel
               </button>
               <button type="button" className="primary-action" onClick={saveMobileNote}>
-                Save
+                Save Review
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {isReviewerMode && mobileDrawerComment && (
-        <aside className="mobile-comment-drawer" aria-label="Edit timestamp comment">
-          <div className="mobile-comment-drawer-header">
-            <span>{formatTime(mobileDrawerComment.time)}</span>
-            <strong>{mobileDrawerComment.author}</strong>
-          </div>
-          <textarea
-            value={mobileCommentDraft}
-            onChange={(event) => setMobileCommentDraft(event.target.value)}
-          />
-          <div className="mobile-comment-drawer-actions">
-            <button type="button" onClick={closeMobileCommentDrawer}>
-              Close
-            </button>
-            {canEditComment(mobileDrawerComment, currentReviewer, permissions) && (
-              <button type="button" onClick={deleteMobileCommentDrawer}>
-                Delete
-              </button>
-            )}
-            <button
-              type="button"
-              className={`resolve-toggle${mobileDrawerComment.resolved ? " resolved" : ""}`}
-              disabled={!permissions.canReview}
-              onClick={() => toggleResolved(mobileDrawerComment.id)}
-            >
-              {mobileDrawerComment.resolved ? "Resolved" : "Unresolved"}
-            </button>
-            <button type="button" className="primary-action" onClick={saveMobileCommentDrawer}>
-              Save
-            </button>
-          </div>
-        </aside>
+          </aside>
+        </>
       )}
     </main>
   );

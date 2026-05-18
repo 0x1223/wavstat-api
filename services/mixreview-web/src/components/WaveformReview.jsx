@@ -33,8 +33,7 @@ export function WaveformReview({
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isScrubbing, setIsScrubbing] = useState(false);
+  const [pendingMarker, setPendingMarker] = useState(null);
 
   useEffect(() => {
     callbacksRef.current = {
@@ -212,31 +211,33 @@ export function WaveformReview({
     const clickedTime = clickRatio * duration;
     seekToTime(clickedTime);
 
+    // Mobile reviewer: tap only creates a marker when review mode is active.
+    // When inactive, the tap just seeks (handled above) — touch-drag scrubs via onTouchMove.
     if (isReviewerMode && isMobileViewport()) {
       event.preventDefault();
       event.stopPropagation();
-      callbacksRef.current.onMobileNoteRequest?.(clickedTime);
+      if (isMarkerToolActive) {
+        callbacksRef.current.onMobileNoteRequest?.(clickedTime);
+        setIsMarkerToolActive(false);
+      }
       return;
     }
 
+    // Desktop: open the inline comment editor at this timestamp.
     if (isMarkerToolActive) {
-  callbacksRef.current.onTimestampCreate(clickedTime);
-  setIsDrawerOpen(true);
-  setIsMarkerToolActive(false);
-  return;
-}
-}
+      setPendingMarker({ time: clickedTime, text: "" });
+      setIsMarkerToolActive(false);
+    }
+  }
   const hasAudio = Boolean(audioSource?.url);
   const markerItems = duration > 0
     ? [
         ...comments,
         ...(Number.isFinite(previewMarkerTime)
-          ? [{
-              id: "__mobile-note-preview",
-              time: previewMarkerTime,
-              resolved: false,
-              isPreview: true
-            }]
+          ? [{ id: "__mobile-note-preview", time: previewMarkerTime, resolved: false, isPreview: true }]
+          : []),
+        ...(pendingMarker
+          ? [{ id: "__desktop-pending", time: pendingMarker.time, resolved: false, isPreview: true }]
           : [])
       ].map((comment) => ({
         ...comment,
@@ -319,35 +320,66 @@ export function WaveformReview({
 
       {duration > 0 && (
         <div className="review-console">
-          <button
-  type="button"
-  className={`marker-tool-toggle${isMarkerToolActive ? " active" : ""}`}
-  aria-pressed={isMarkerToolActive}
-  aria-label="Add timestamp note mode"
-  title="Add timestamp note mode"
-  onClick={() => {
-  setIsMarkerToolActive((current) => !current);
-}}
-          >
-            <span aria-hidden="true">✍️</span>
-<span className="tool-label">Review</span>
-          </button>
+          {pendingMarker ? (
+            <div className="desktop-comment-box">
+              <div className="desktop-comment-box-header">
+                <div>
+                  <p className="eyebrow">New marker</p>
+                  <span className="selected-time" style={{ display: "inline-block" }}>
+                    {formatTimecode(pendingMarker.time)}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="desktop-comment-cancel"
+                  aria-label="Cancel"
+                  onClick={() => setPendingMarker(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+              <textarea
+                className="desktop-comment-textarea"
+                placeholder="Add a note for this timestamp…"
+                value={pendingMarker.text}
+                rows={3}
+                autoFocus
+                onChange={(e) =>
+                  setPendingMarker((p) => p ? { ...p, text: e.target.value } : p)
+                }
+              />
+              <div className="desktop-comment-actions">
+                <button
+                  type="button"
+                  className="desktop-comment-save"
+                  onClick={() => {
+                    callbacksRef.current.onTimestampCreate(pendingMarker.time, pendingMarker.text);
+                    setPendingMarker(null);
+                  }}
+                >
+                  Save Note
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                className={`marker-tool-toggle${isMarkerToolActive ? " active" : ""}`}
+                aria-pressed={isMarkerToolActive}
+                aria-label="Toggle review mode"
+                onClick={() => setIsMarkerToolActive((c) => !c)}
+              >
+                <span aria-hidden="true">✍️</span>
+                <span className="tool-label">Review</span>
+              </button>
+              {isMarkerToolActive && (
+                <span className="marker-tool-hint">Click the waveform to place a marker</span>
+              )}
+            </>
+          )}
         </div>
       )}
-      <div className={`mobile-review-drawer ${isDrawerOpen ? "open" : ""}`}>
-    <textarea
-      className="mobile-review-input"
-      placeholder="Write review..."
-    />
-
-    <button
-      className="mobile-review-save"
-      onClick={() => setIsDrawerOpen(false)}
-    >
-      Save Review
-    </button>
-  </div>
-
     </section>
   );
 }
