@@ -271,7 +271,8 @@ export function WaveformReview({
       )}
 
         <div
-  className="waveform-stage">
+  className="waveform-stage"
+  onClick={handleWaveformClick}>
   {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
   {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
 
