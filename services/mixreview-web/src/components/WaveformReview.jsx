@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
+import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
 
 export function WaveformReview({
   audioSource,
@@ -60,8 +61,6 @@ export function WaveformReview({
     callbacksRef.current.onDurationChange(0);
     callbacksRef.current.onPlaybackChange(false);
 
-    let isDisposed = false;
-    let hasLoaded = false;
     const playbackUrl = audioSource?.playbackUrl || audioSource?.url;
     if (!playbackUrl) {
       setIsLoading(false);
@@ -69,6 +68,43 @@ export function WaveformReview({
       return undefined;
     }
 
+    const resizeObserver = new ResizeObserver(([entry]) => {
+      setWaveformWidth(getWaveformMetrics(entry.target).width);
+    });
+    resizeObserver.observe(containerRef.current);
+
+    if (isMobileViewport()) {
+      // Mobile: singleton engine — survives React re-renders and comment state changes
+      const ws = mountMobileEngine(containerRef.current, playbackUrl, {
+        onReady: (player) => {
+          setIsLoading(false);
+          callbacksRef.current.onReady(player);
+        },
+        onError: () => {
+          setIsLoading(false);
+          setLoadError("This audio file could not be decoded. Try a WAV, MP3, M4A, or AAC file.");
+          callbacksRef.current.onReady(null);
+          callbacksRef.current.onDurationChange(0);
+          callbacksRef.current.onPlaybackChange(false);
+        },
+        onDurationChange: (d) => {
+          setDuration(d);
+          callbacksRef.current.onDurationChange(d);
+        },
+        onTimeUpdate: (t) => callbacksRef.current.onTimeUpdate(t),
+        onPlaybackChange: (p) => callbacksRef.current.onPlaybackChange(p),
+      });
+      wavesurferRef.current = ws;
+      return () => {
+        if (wavesurferRef.current === ws) wavesurferRef.current = null;
+        resizeObserver.disconnect();
+        disposeMobileEngine();
+      };
+    }
+
+    // Desktop: inline WaveSurfer — unchanged
+    let isDisposed = false;
+    let hasLoaded = false;
     console.log("WaveSurfer load start", { playbackUrl });
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
@@ -89,10 +125,6 @@ export function WaveformReview({
     });
 
     wavesurferRef.current = wavesurfer;
-    const resizeObserver = new ResizeObserver(([entry]) => {
-      setWaveformWidth(getWaveformMetrics(entry.target).width);
-    });
-    resizeObserver.observe(containerRef.current);
 
     wavesurfer.on("ready", () => {
       if (isDisposed) {

@@ -2729,6 +2729,44 @@ h2 {
   color: rgba(220, 100, 80, 0.85);
 }
 
+.mobile-comment-delete-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.78rem;
+  color: rgba(245, 239, 227, 0.55);
+}
+
+.mobile-comment-delete-confirm-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mobile-comment-delete-confirm-cancel,
+.mobile-comment-delete-confirm-yes {
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid;
+}
+
+.mobile-comment-delete-confirm-cancel {
+  border-color: rgba(245, 239, 227, 0.18);
+  background: transparent;
+  color: rgba(245, 239, 227, 0.6);
+}
+
+.mobile-comment-delete-confirm-yes {
+  border-color: rgba(220, 100, 80, 0.4);
+  background: rgba(220, 100, 80, 0.12);
+  color: rgba(220, 100, 80, 0.9);
+}
+
 @media (min-width: 769px) {
   .mobile-comment-drawer,
   .mobile-comment-drawer-backdrop {

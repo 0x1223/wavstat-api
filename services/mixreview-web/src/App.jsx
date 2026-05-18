@@ -150,6 +150,7 @@ export default function App() {
   const [mobileNoteDraft, setMobileNoteDraft] = useState(null);
   const [mobileCommentDrawerId, setMobileCommentDrawerId] = useState(null);
   const [mobileCommentDraft, setMobileCommentDraft] = useState("");
+  const [deleteConfirmPending, setDeleteConfirmPending] = useState(false);
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
     () =>
       window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
@@ -999,6 +1000,7 @@ export default function App() {
   const closeMobileCommentDrawer = useCallback(() => {
     setMobileCommentDrawerId(null);
     setMobileCommentDraft("");
+    setDeleteConfirmPending(false);
   }, []);
 
   const toggleResolved = useCallback((commentId) => {
@@ -1453,17 +1455,35 @@ export default function App() {
                 Save Review
               </button>
             </div>
-            <button
-              type="button"
-              className="mobile-comment-delete"
-              onClick={() => {
-                if (window.confirm("Delete this review marker?")) {
-                  deleteMobileCommentDrawer();
-                }
-              }}
-            >
-              Delete marker
-            </button>
+            {deleteConfirmPending ? (
+              <div className="mobile-comment-delete-confirm">
+                <span>Delete this marker?</span>
+                <div className="mobile-comment-delete-confirm-actions">
+                  <button
+                    type="button"
+                    className="mobile-comment-delete-confirm-cancel"
+                    onClick={() => setDeleteConfirmPending(false)}
+                  >
+                    Keep
+                  </button>
+                  <button
+                    type="button"
+                    className="mobile-comment-delete-confirm-yes"
+                    onClick={deleteMobileCommentDrawer}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="mobile-comment-delete"
+                onClick={() => setDeleteConfirmPending(true)}
+              >
+                Delete marker
+              </button>
+            )}
           </>
         );
       })()}
