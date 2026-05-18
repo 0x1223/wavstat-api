@@ -964,6 +964,7 @@ export default function App() {
 
     const safeTime = Math.min(Math.max(time || 0, 0), duration || time || 0);
     setCurrentTime(safeTime);
+    playerRef.current?.seekToTime(safeTime);
     updateActiveVersion((version) => ({
       ...version,
       selectedTime: safeTime,
@@ -1497,6 +1498,7 @@ export default function App() {
             <textarea
               value={mobileNoteDraft.text}
               placeholder="Type your feedback for this moment…"
+              autoFocus
               onChange={(event) =>
                 setMobileNoteDraft((draft) =>
                   draft ? { ...draft, text: event.target.value } : draft,
