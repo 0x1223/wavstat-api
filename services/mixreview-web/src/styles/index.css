@@ -2274,6 +2274,7 @@ h2 {
 
   .reviewer-mode .review-console {
   display: flex;
+  width: 100%;
   justify-content: center;
   align-items: center;
   padding-top: 10px;

@@ -241,10 +241,9 @@ export function WaveformReview({
 
     const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
     const clickedTime = clickRatio * duration;
-    seekToTime(clickedTime);
 
-    // Mobile reviewer: tap only creates a marker when review mode is active.
-    // When inactive, the tap just seeks (handled above) — touch-drag scrubs via onTouchMove.
+    // Mobile reviewer: WaveSurfer's dragToSeek handles the seek internally on waveform tap,
+    // so we skip our redundant seekToTime call to avoid a double-seek audio glitch.
     if (isReviewerMode && isMobileViewport()) {
       event.preventDefault();
       event.stopPropagation();
@@ -341,7 +340,7 @@ export function WaveformReview({
                 onClick={(event) => {
                   event.stopPropagation();
                   if (!comment || comment.isPreview) return;
-                  seekToTime(comment.time);
+                  if (!isMobileViewport()) seekToTime(comment.time);
                   onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
                 }}
               />
