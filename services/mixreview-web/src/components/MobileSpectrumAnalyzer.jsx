@@ -76,7 +76,7 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
       ctx.textBaseline = "top";
       ctx.shadowColor = "rgba(0,0,0,0.65)";
       ctx.shadowBlur = 2;
-      ctx.fillStyle = "rgba(255,255,255,0.40)";
+      ctx.fillStyle = "#ffffff";
       for (const [i, label] of FREQ_LABELS) {
         ctx.fillText(label, (i + 0.5) * slotW, 2);
       }
