@@ -3,10 +3,10 @@ import cors from "cors";
 import "dotenv/config";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const app = express();
@@ -96,6 +96,7 @@ sessionRouter.get("/", listSessions);
 sessionRouter.post("/", createSession);
 sessionRouter.get("/:sessionId", getSession);
 sessionRouter.put("/:sessionId", saveSession);
+sessionRouter.delete("/:sessionId", deleteSession);
 sessionRouter.post("/:sessionId/audio", upload.single("audio"), handleAudioUpload);
 
 app.use("/api/sessions", sessionRouter);
@@ -393,6 +394,37 @@ async function saveSession(req, res) {
   return res.json({ session });
 }
 
+async function deleteSession(req, res) {
+  const sessionId = sanitizeSessionId(req.params.sessionId);
+  if (!sessionId) {
+    return res.status(400).json({ error: "Valid session id is required." });
+  }
+
+  await removeSessionFromIndex(sessionId);
+
+  const localPath = buildLocalSessionPath(sessionId);
+  try {
+    await unlink(localPath);
+  } catch {
+    // Local file may not exist; index removal is the authoritative step.
+  }
+
+  if (hasR2Config) {
+    try {
+      await r2Client.send(
+        new DeleteObjectCommand({
+          Bucket: r2Config.bucketName,
+          Key: buildSessionObjectKey(sessionId)
+        }),
+      );
+    } catch {
+      // R2 deletion is best-effort; index has already been updated.
+    }
+  }
+
+  return res.json({ ok: true, deleted: sessionId });
+}
+
 async function attachAudioToSession(sessionId, audio, versionId, trackId = "track-1") {
   const now = new Date().toISOString();
   const existingSession = await readSessionDocument(sessionId);
@@ -569,6 +601,12 @@ async function upsertSessionIndex(session) {
     summary,
     ...database.sessions.filter((candidate) => candidate.id !== session.id)
   ];
+  await writeDatabase(database);
+}
+
+async function removeSessionFromIndex(sessionId) {
+  const database = await readDatabase();
+  database.sessions = database.sessions.filter((candidate) => candidate.id !== sessionId);
   await writeDatabase(database);
 }
 
@@ -789,7 +827,7 @@ function buildCorsOptions() {
 
       callback(new Error(`Origin ${origin} is not allowed by MixReview CORS.`));
     },
-    methods: ["GET", "POST", "PUT", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "Accept", "Origin", "X-Requested-With"],
     credentials: false,
     maxAge: 86400

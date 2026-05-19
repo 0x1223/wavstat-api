@@ -48,6 +48,20 @@ export async function saveSessionToApi(session) {
   return payload.session || null;
 }
 
+export async function deleteSessionFromApi(sessionId) {
+  if (!sessionId) {
+    return;
+  }
+
+  const response = await fetch(apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}`), {
+    method: "DELETE"
+  });
+
+  if (!response.ok) {
+    throw new Error("Session could not be deleted.");
+  }
+}
+
 export async function uploadSessionAudio(sessionId, versionId, file, trackId = null) {
   const formData = new FormData();
   formData.append("audio", file);

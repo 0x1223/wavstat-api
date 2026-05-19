@@ -10,6 +10,7 @@ import { TrackList } from "./components/TrackList.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
 import { WaveformReview } from "./components/WaveformReview.jsx";
 import {
+  deleteSessionFromApi,
   listSessionsFromApi,
   loadSessionFromApi,
   saveSessionToApi,
@@ -593,32 +594,6 @@ export default function App() {
     }
   }, [currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId]);
 
-  const handleTrackDelete = useCallback((trackId) => {
-    if (!permissions.canEdit) {
-      return;
-    }
-
-    const nextTracks = tracks.filter((track) => track.id !== trackId);
-    setTracks(nextTracks);
-
-    if (trackId === activeTrackId) {
-      if (nextTracks.length > 0) {
-        const nextTrack = nextTracks[0];
-        setActiveTrackId(nextTrack.id);
-        setVersions(nextTrack.versions);
-        setActiveVersionId(nextTrack.activeVersionId || nextTrack.versions[0]?.id || "version-v1");
-      } else {
-        setActiveTrackId(null);
-        setVersions(createEmptyVersions());
-        setActiveVersionId("version-v1");
-      }
-      setCurrentTime(0);
-      setIsPlaying(false);
-      setIsPlayerReady(false);
-      playerRef.current = null;
-    }
-  }, [activeTrackId, permissions.canEdit, tracks]);
-
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
     const nextSessionId = createSessionId();
@@ -925,6 +900,20 @@ export default function App() {
       setSessionMessage(error.message || "Session could not be opened.");
     });
   }, [openStoredSession]);
+
+  const deleteAdminSession = useCallback(async (session) => {
+    if (!session?.id) {
+      return;
+    }
+
+    setAdminSessions((current) => current.filter((candidate) => candidate.id !== session.id));
+    try {
+      await deleteSessionFromApi(session.id);
+    } catch (error) {
+      setSessionMessage(error.message || "Session could not be deleted.");
+      refreshAdminSessions();
+    }
+  }, [refreshAdminSessions]);
 
   const returnToStart = useCallback(() => {
     playerRef.current?.pause();
@@ -1306,6 +1295,7 @@ export default function App() {
         onOpenSession={openAdminSession}
         onCopyClientLink={copyClientReviewLink}
         onTogglePriority={toggleSessionPriority}
+        onDeleteSession={deleteAdminSession}
         onRefresh={refreshAdminSessions}
         onLogout={returnToStart}
       />
@@ -1378,7 +1368,6 @@ export default function App() {
             canEdit={canUploadAudio}
             onTrackSelect={selectTrack}
             onTrackUpload={handleTrackUpload}
-            onTrackDelete={permissions.canEdit ? handleTrackDelete : undefined}
           />
 
           {(permissions.canEdit || !hasPlayableAudio) && (
@@ -1590,6 +1579,7 @@ function AdminDashboard({
   onOpenSession,
   onCopyClientLink,
   onTogglePriority,
+  onDeleteSession,
   onRefresh,
   onLogout
 }) {
@@ -1682,6 +1672,17 @@ function AdminDashboard({
                         </button>
                         <button type="button" onClick={() => onCopyClientLink(session)}>
                           Copy Client Review Link
+                        </button>
+                        <button
+                          type="button"
+                          className="session-delete-btn"
+                          onClick={() => {
+                            if (window.confirm(`Permanently delete "${session.projectName || session.id}"? This cannot be undone.`)) {
+                              onDeleteSession(session);
+                            }
+                          }}
+                        >
+                          Delete
                         </button>
                       </div>
                     </article>

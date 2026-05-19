@@ -862,42 +862,6 @@ h2 {
   color: var(--soft);
 }
 
-.track-list-item {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-}
-
-.track-list-item .track-list-select {
-  flex: 1;
-  min-width: 0;
-}
-
-.track-list-item.active .track-list-select {
-  border-color: rgba(215, 173, 98, 0.52);
-  background: rgba(215, 173, 98, 0.12);
-}
-
-.track-delete-btn {
-  min-width: 28px !important;
-  max-width: 28px !important;
-  padding: 0 !important;
-  display: flex !important;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.55;
-  font-size: 11px;
-  flex-shrink: 0;
-  gap: 0;
-}
-
-.track-delete-btn:hover {
-  opacity: 1;
-  border-color: rgba(220, 80, 80, 0.5) !important;
-  color: #ff6b6b !important;
-  background: rgba(220, 80, 80, 0.12) !important;
-}
-
 .upload-panel h2 {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1037,6 +1001,12 @@ h2 {
   margin: 5px 0 0;
   color: var(--soft);
   font-size: 0.85rem;
+}
+
+.session-delete-btn:hover {
+  border-color: rgba(220, 80, 80, 0.5) !important;
+  color: #ff6b6b !important;
+  background: rgba(220, 80, 80, 0.1) !important;
 }
 
 .dashboard-header {
