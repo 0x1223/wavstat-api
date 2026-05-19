@@ -17,15 +17,17 @@ import {
   uploadSessionAudio
 } from "./api/sessions.js";
 import {
-  clearLatestSession,
+  addDeletedSessionId,
+  clearSessionCache,
   clearSharedSession,
   createShareId,
   createShareLink,
   createExportSession,
   getShareRoute,
-  loadLatestSession,
+  isSessionDeleted,
+  loadSessionCache,
   loadSharedSession,
-  saveLatestSession,
+  saveSessionCache,
   saveSharedSession,
   toStoredAudioMetadata
 } from "./storage/projects.js";
@@ -62,24 +64,15 @@ const routeVersionId = routeParams.get("version");
 const routeTrackId = routeParams.get("track");
 const forceStartScreen = routeParams.has("start");
 const savedAccessState = forceStartScreen ? null : loadAccessState();
-const routeSessionId =
-  routeParams.get("session") ||
-  shareRoute?.shareId ||
-  (savedAccessState?.mode === "reviewer" ? savedAccessState.sessionId : null);
-const latestSession = loadLatestSession();
-const routeCachedSession =
-  routeSessionId && latestSession?.id === routeSessionId ? latestSession : null;
-const restoredSession = shareRoute
-  ? loadSharedSession(shareRoute.shareId) || routeCachedSession
-  : forceStartScreen
-    ? null
-    : routeMode
-      ? routeCachedSession || latestSession
-      : savedAccessState?.mode === "reviewer"
-        ? routeCachedSession || latestSession
-        : hasPersistedRealAudio(latestSession)
-          ? latestSession
-          : null;
+// Session identity comes only from URL — never from stale access state.
+const routeSessionId = routeParams.get("session") || shareRoute?.shareId || null;
+const restoredSession = (() => {
+  if (forceStartScreen || !routeSessionId) return null;
+  const cached = shareRoute
+    ? loadSharedSession(shareRoute.shareId) || loadSessionCache(routeSessionId)
+    : loadSessionCache(routeSessionId);
+  return cached?.id && isSessionDeleted(cached.id) ? null : cached;
+})();
 const legacyInitialVersions = buildInitialVersions(restoredSession);
 const initialTracks = buildInitialTracks(restoredSession, legacyInitialVersions);
 const initialActiveTrackId = restoredSession?.activeTrackId || initialTracks[0]?.id || null;
@@ -131,16 +124,14 @@ export default function App() {
       ? "workspace"
       : !forceStartScreen && savedAccessState?.mode === "admin"
       ? "admin"
-      : Boolean(!forceStartScreen && savedAccessState?.mode === "reviewer")
-        ? "workspace"
-        : "start",
+      : "start",
   );
   const [adminSessions, setAdminSessions] = useState([]);
   const [isAdminSessionsLoading, setIsAdminSessionsLoading] = useState(false);
   const [shareId, setShareId] = useState(shareRoute?.shareId || restoredSession?.shareId || null);
   const [isSharePanelOpen, setIsSharePanelOpen] = useState(false);
   const [hasStarted, setHasStarted] = useState(
-    Boolean(!forceStartScreen && (shareRoute || restoredSession || routeMode || savedAccessState?.mode === "reviewer")),
+    Boolean(!forceStartScreen && (shareRoute || restoredSession || routeMode)),
   );
   const [isSessionHydrating, setIsSessionHydrating] = useState(
     Boolean(!forceStartScreen && routeSessionId && !restoredSession),
@@ -346,19 +337,36 @@ export default function App() {
           return;
         }
 
-        if (storedSession) {
-          applyStoredSession(
-            storedSession,
-            routeMode === "admin" && isEngineerUnlocked ? "Engineer" : routeMode === "reviewer" ? "Artist" : null,
-          );
-          saveLatestSession(storedSession);
-        } else {
-          setSessionMessage("Session was not found in persistent storage.");
+        const isGone = !storedSession || isSessionDeleted(storedSession?.id ?? routeSessionId);
+        if (isGone) {
+          // Permanently invalidate — write tombstone, wipe all local caches,
+          // and reset workspace so stale audio/waveform cannot persist.
+          addDeletedSessionId(routeSessionId);
+          clearSessionCache(routeSessionId);
+          clearSharedSession(routeSessionId);
+          setTracks([]);
+          setActiveTrackId(null);
+          setVersions(createEmptyVersions());
+          setActiveVersionId("version-v1");
+          setHasStarted(false);
+          setIsSessionSynced(false);
+          setAppView("start");
+          setSessionMessage("This review session no longer exists.");
+          replaceWithLandingRoute();
+          return;
         }
+
+        applyStoredSession(
+          storedSession,
+          routeMode === "admin" && isEngineerUnlocked ? "Engineer" : routeMode === "reviewer" ? "Artist" : null,
+        );
+        saveSessionCache(storedSession);
       })
       .catch(() => {
         if (!isCancelled) {
-          setSessionMessage("Session could not be loaded from persistent storage.");
+          // Network error: session status unknown — leave cached content visible
+          // but warn the user. Do not destroy the workspace on a transient failure.
+          setSessionMessage("Session could not be verified. Check your connection.");
         }
       })
       .finally(() => {
@@ -377,7 +385,23 @@ export default function App() {
       return;
     }
 
-    saveLatestSession(sessionSnapshot);
+    // Never re-persist a session that has been deleted — blocks stale-tab resurrection.
+    if (isSessionDeleted(sessionSnapshot?.id)) {
+      return;
+    }
+
+    // Don't auto-persist blank drafts — only save sessions created by explicit user action.
+    // Prevents ghost "Untitled MixReview Session" drafts from being created on page load,
+    // tab restore, or failed session lookup.
+    const hasSessionContent = Boolean(
+      sessionSnapshot?.sessionName?.trim() ||
+      (sessionSnapshot?.tracks && sessionSnapshot.tracks.length > 0),
+    );
+    if (!hasSessionContent) {
+      return;
+    }
+
+    saveSessionCache(sessionSnapshot);
     if (shareId) {
       saveSharedSession(shareId, sessionSnapshot);
     }
@@ -685,9 +709,9 @@ export default function App() {
   }, [beginNewSession, isEngineerUnlocked]);
 
   const clearSession = useCallback(() => {
-    clearLatestSession();
+    clearSessionCache(sessionId);
     startNewSession();
-  }, [startNewSession]);
+  }, [sessionId, startNewSession]);
 
   const openAdminDashboard = useCallback(() => {
     playerRef.current?.pause();
@@ -712,7 +736,7 @@ export default function App() {
     setAppView("workspace");
     setHasStarted(true);
     setIsSessionSynced(true);
-    saveLatestSession(storedSession);
+    saveSessionCache(storedSession);
     saveAccessState({
       mode: reviewer === "Engineer" ? "admin" : "reviewer",
       sessionId: storedSession.id,
@@ -771,7 +795,7 @@ export default function App() {
       setLoginPassword("");
       applyStoredSession(storedSession, "Artist");
       setAppView("workspace");
-      saveLatestSession(storedSession);
+      saveSessionCache(storedSession);
       saveAccessState({ mode: "reviewer", sessionId: storedSession.id, role: "Artist" });
       setReviewRoute("reviewer", storedSession.activeVersionId || "version-v1", storedSession.id, storedSession.activeTrackId);
     } catch (error) {
@@ -916,11 +940,17 @@ export default function App() {
       return;
     }
 
+    // Write tombstone first — blocks all tabs from re-persisting this session.
+    addDeletedSessionId(session.id);
+    if (session.shareId && session.shareId !== session.id) {
+      addDeletedSessionId(session.shareId);
+    }
+
     // Purge all local persistence layers so the deleted session
     // cannot hydrate back on reload.
-    const storedLatest = loadLatestSession();
-    if (storedLatest?.id === session.id) {
-      clearLatestSession();
+    clearSessionCache(session.id);
+    if (session.shareId && session.shareId !== session.id) {
+      clearSessionCache(session.shareId);
     }
 
     // Clear shared-session registry entries for both the session ID
@@ -945,7 +975,7 @@ export default function App() {
     setHasStarted(false);
     setMobileNoteDraft(null);
     setAppView("start");
-    clearLatestSession();
+    clearSessionCache(sessionId);
     clearAccessState();
     window.sessionStorage.removeItem(ADMIN_UNLOCK_SESSION_KEY);
     setIsEngineerUnlocked(false);
@@ -1636,7 +1666,6 @@ function AdminDashboard({
           <button
             type="button"
             onClick={() => {
-              window.localStorage.removeItem("mixreview.latestSession");
               window.localStorage.removeItem("mixreview.accessState");
               window.sessionStorage.removeItem("mixreview.engineerUnlocked");
               window.history.replaceState(null, "", "/");

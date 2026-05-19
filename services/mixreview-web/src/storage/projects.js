@@ -1,5 +1,9 @@
-const STORAGE_KEY = "mixreview.latestSession";
 const SHARE_STORAGE_KEY = "mixreview.sharedSessions";
+const DELETED_SESSIONS_KEY = "mixreview.deletedSessions";
+
+function sessionCacheKey(sessionId) {
+  return `mixreview.session.${sessionId}`;
+}
 export const EXPORT_SCHEMA_VERSION = 1;
 const VERSION_LABELS = ["V1", "V2", "Master", "Radio Edit"];
 const APPROVAL_STATES = [
@@ -10,28 +14,31 @@ const APPROVAL_STATES = [
 const REVIEWERS = ["Artist", "Engineer", "Manager", "Label"];
 const CLIENT_REVIEWERS = ["Artist", "Manager", "Label"];
 
-export function loadLatestSession() {
+export function loadSessionCache(sessionId) {
+  if (!sessionId) return null;
   try {
-    const rawSession = window.localStorage.getItem(STORAGE_KEY);
-    return rawSession ? JSON.parse(rawSession) : null;
+    const raw = window.localStorage.getItem(sessionCacheKey(sessionId));
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
-export function saveLatestSession(session) {
+export function saveSessionCache(session) {
+  if (!session?.id) return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    window.localStorage.setItem(sessionCacheKey(session.id), JSON.stringify(session));
   } catch {
-    // Local persistence is best-effort for the frontend-only MVP.
+    // Local persistence is best-effort.
   }
 }
 
-export function clearLatestSession() {
+export function clearSessionCache(sessionId) {
+  if (!sessionId) return;
   try {
-    window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(sessionCacheKey(sessionId));
   } catch {
-    // Local persistence is best-effort for the frontend-only MVP.
+    // Local persistence is best-effort.
   }
 }
 
@@ -55,6 +62,31 @@ export function saveSharedSession(shareId, session) {
     window.localStorage.setItem(SHARE_STORAGE_KEY, JSON.stringify(registry));
   } catch {
     // Local sharing is best-effort until backend sync exists.
+  }
+}
+
+export function isSessionDeleted(sessionId) {
+  if (!sessionId) return false;
+  try {
+    const raw = window.localStorage.getItem(DELETED_SESSIONS_KEY);
+    const ids = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids) && ids.includes(sessionId);
+  } catch {
+    return false;
+  }
+}
+
+export function addDeletedSessionId(sessionId) {
+  if (!sessionId) return;
+  try {
+    const raw = window.localStorage.getItem(DELETED_SESSIONS_KEY);
+    const ids = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(ids) && !ids.includes(sessionId)) {
+      ids.push(sessionId);
+      window.localStorage.setItem(DELETED_SESSIONS_KEY, JSON.stringify(ids));
+    }
+  } catch {
+    // Best-effort.
   }
 }
 
