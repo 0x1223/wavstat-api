@@ -1147,6 +1147,9 @@ export default function App() {
   }, [updateActiveVersion]);
 
   const activateComment = useCallback((comment, { autoplay = false } = {}) => {
+    if (!canEditComment(comment, currentReviewer, permissions)) {
+      return;
+    }
     updateActiveVersion((version) => ({
       ...version,
       selectedCommentId: comment.id,
@@ -1160,7 +1163,7 @@ export default function App() {
       playerRef.current?.play();
     }
     openMobileCommentDrawer(comment);
-  }, [openMobileCommentDrawer, updateActiveVersion]);
+  }, [currentReviewer, openMobileCommentDrawer, permissions, updateActiveVersion]);
 
   const handlePlayerReady = useCallback((controls) => {
     playerRef.current = controls;
