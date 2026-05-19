@@ -593,6 +593,32 @@ export default function App() {
     }
   }, [currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId]);
 
+  const handleTrackDelete = useCallback((trackId) => {
+    if (!permissions.canEdit) {
+      return;
+    }
+
+    const nextTracks = tracks.filter((track) => track.id !== trackId);
+    setTracks(nextTracks);
+
+    if (trackId === activeTrackId) {
+      if (nextTracks.length > 0) {
+        const nextTrack = nextTracks[0];
+        setActiveTrackId(nextTrack.id);
+        setVersions(nextTrack.versions);
+        setActiveVersionId(nextTrack.activeVersionId || nextTrack.versions[0]?.id || "version-v1");
+      } else {
+        setActiveTrackId(null);
+        setVersions(createEmptyVersions());
+        setActiveVersionId("version-v1");
+      }
+      setCurrentTime(0);
+      setIsPlaying(false);
+      setIsPlayerReady(false);
+      playerRef.current = null;
+    }
+  }, [activeTrackId, permissions.canEdit, tracks]);
+
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
     const nextSessionId = createSessionId();
@@ -1352,6 +1378,7 @@ export default function App() {
             canEdit={canUploadAudio}
             onTrackSelect={selectTrack}
             onTrackUpload={handleTrackUpload}
+            onTrackDelete={permissions.canEdit ? handleTrackDelete : undefined}
           />
 
           {(permissions.canEdit || !hasPlayableAudio) && (

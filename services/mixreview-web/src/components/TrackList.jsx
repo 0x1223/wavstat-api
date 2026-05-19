@@ -3,7 +3,8 @@ export function TrackList({
   activeTrackId,
   canEdit,
   onTrackSelect,
-  onTrackUpload
+  onTrackUpload,
+  onTrackDelete
 }) {
   const importedTracks = tracks.filter((track) => track.versions.some((version) => version.audioSource));
 
@@ -38,16 +39,36 @@ export function TrackList({
         <div className="track-list">
           {tracks.map((track, index) => {
             const activeVersion = track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
+            const isApproved = activeVersion?.approvalStatus === "Approved";
+            const showDelete = canEdit && onTrackDelete && isApproved;
             return (
-              <button
-                type="button"
-                className={track.id === activeTrackId ? "active" : ""}
+              <div
+                className={`track-list-item${track.id === activeTrackId ? " active" : ""}`}
                 key={track.id}
-                onClick={() => onTrackSelect(track.id)}
               >
-                <span>{track.title || `Track ${index + 1}`}</span>
-                <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
-              </button>
+                <button
+                  type="button"
+                  className="track-list-select"
+                  onClick={() => onTrackSelect(track.id)}
+                >
+                  <span>{track.title || `Track ${index + 1}`}</span>
+                  <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
+                </button>
+                {showDelete && (
+                  <button
+                    type="button"
+                    className="track-delete-btn"
+                    title="Delete approved track"
+                    onClick={() => {
+                      if (window.confirm(`Delete "${track.title || `Track ${index + 1}`}"? This cannot be undone.`)) {
+                        onTrackDelete(track.id);
+                      }
+                    }}
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
