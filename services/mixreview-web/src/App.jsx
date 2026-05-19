@@ -18,6 +18,7 @@ import {
 } from "./api/sessions.js";
 import {
   clearLatestSession,
+  clearSharedSession,
   createShareId,
   createShareLink,
   createExportSession,
@@ -912,6 +913,27 @@ export default function App() {
     } catch (error) {
       setSessionMessage(error.message || "Session could not be deleted.");
       refreshAdminSessions();
+      return;
+    }
+
+    // Purge all local persistence layers so the deleted session
+    // cannot hydrate back on reload.
+    const storedLatest = loadLatestSession();
+    if (storedLatest?.id === session.id) {
+      clearLatestSession();
+    }
+
+    // Clear shared-session registry entries for both the session ID
+    // and its shareId (they can differ).
+    clearSharedSession(session.id);
+    if (session.shareId && session.shareId !== session.id) {
+      clearSharedSession(session.shareId);
+    }
+
+    // Clear access state if it was pointing at the deleted session.
+    const storedAccess = loadAccessState();
+    if (storedAccess?.sessionId === session.id) {
+      clearAccessState();
     }
   }, [refreshAdminSessions]);
 

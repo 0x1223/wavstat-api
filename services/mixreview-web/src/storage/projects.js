@@ -58,6 +58,16 @@ export function saveSharedSession(shareId, session) {
   }
 }
 
+export function clearSharedSession(shareId) {
+  try {
+    const registry = getShareRegistry();
+    delete registry[shareId];
+    window.localStorage.setItem(SHARE_STORAGE_KEY, JSON.stringify(registry));
+  } catch {
+    // Best-effort.
+  }
+}
+
 export function createShareId() {
   return `shr_${crypto.randomUUID?.() || `${Date.now()}_${Math.random()}`}`;
 }
