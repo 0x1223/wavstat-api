@@ -2168,7 +2168,7 @@ function canEditComment(comment, reviewer, permissions) {
     return true;
   }
 
-  return comment.author === reviewer && comment.submitted === false;
+  return comment.author === reviewer;
 }
 
 function makeActivity(label, detail) {
