@@ -30,13 +30,25 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
     let isPlaying = false;
     let analyser = null;
     let freqData = null;
+    let decayBuf = null;
     let audioCtx = null;
     let detachWs = null;
 
     // ── Drawing ──────────────────────────────────────────────────────────
-    function paint() {
+    // dataOverride: optional Float32Array to draw from instead of reading the analyser.
+    function paint(dataOverride = null) {
       if (!canvas || !analyser || !freqData) return;
-      analyser.getByteFrequencyData(freqData);
+
+      let data;
+      if (dataOverride) {
+        data = dataOverride;
+      } else {
+        analyser.getByteFrequencyData(freqData);
+        if (decayBuf) {
+          for (let i = 0; i < freqData.length; i++) decayBuf[i] = freqData[i];
+        }
+        data = freqData;
+      }
 
       const ctx = canvas.getContext("2d");
       const W = canvas.width;
@@ -56,7 +68,7 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
 
         let peak = 0;
         for (let b = bLo; b <= bHi; b++) {
-          if (freqData[b] > peak) peak = freqData[b];
+          if (data[b] > peak) peak = data[b];
         }
 
         const amp = peak / 255;
@@ -90,6 +102,17 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
       rafId = requestAnimationFrame(tick);
     }
 
+    function decayTick() {
+      if (!alive || isPlaying || !decayBuf) return;
+      let anyActive = false;
+      for (let i = 0; i < decayBuf.length; i++) {
+        decayBuf[i] *= 0.82;
+        if (decayBuf[i] > 0.5) anyActive = true;
+      }
+      paint(decayBuf);
+      rafId = anyActive ? requestAnimationFrame(decayTick) : null;
+    }
+
     function startAnim() {
       isPlaying = true;
       if (audioCtx?.state === "suspended") audioCtx.resume().catch(() => {});
@@ -99,7 +122,7 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
     function stopAnim() {
       isPlaying = false;
       if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
-      paint(); // freeze last frame
+      decayTick();
     }
 
     // ── Audio setup ───────────────────────────────────────────────────────
@@ -120,6 +143,7 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
         analyser.minDecibels = -90;
         analyser.maxDecibels = -10;
         freqData = new Uint8Array(analyser.frequencyBinCount);
+        decayBuf = new Float32Array(analyser.frequencyBinCount);
 
         // Route: mediaElement → source → analyser → destination (pass-through)
         const src = audioCtx.createMediaElementSource(mediaEl);

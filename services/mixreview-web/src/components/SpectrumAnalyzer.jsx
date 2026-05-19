@@ -9,7 +9,12 @@ const bands = [
 export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
   const canvasRef = useRef(null);
   const [levels, setLevels] = useState({ High: 0, Low: 0, Mid: 0 });
+  const isPlayingRef = useRef(isPlaying);
   const frequencyLabels = useMemo(() => ["20", "50", "100", "250", "500", "1k", "2k", "5k", "10k", "20k"], []);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -23,6 +28,8 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
     let analyser;
     let disposed = false;
     let resumeContext;
+    let displayData = null;
+    let renderBuf = null;
 
     async function setupAnalyzer() {
       const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
@@ -35,6 +42,8 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
       analyser = context.createAnalyser();
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.84;
+      displayData = new Float32Array(analyser.frequencyBinCount);
+      renderBuf = new Uint8Array(analyser.frequencyBinCount);
       resumeContext = () => context?.resume?.();
       mediaElement.addEventListener("play", resumeContext);
 
@@ -51,7 +60,7 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
     }
 
     function draw() {
-      if (disposed || !analyser) {
+      if (disposed || !analyser || !displayData) {
         return;
       }
 
@@ -61,13 +70,28 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
       canvas.height = Math.max(1, Math.floor(rect.height * dpr));
 
       const ctx = canvas.getContext("2d");
-      const data = new Uint8Array(analyser.frequencyBinCount);
-      analyser.getByteFrequencyData(data);
-
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       drawGrid(ctx, canvas);
-      drawSpectrum(ctx, canvas, data, context.sampleRate);
-      updateBandLevels(data, context.sampleRate);
+
+      if (isPlayingRef.current) {
+        analyser.getByteFrequencyData(renderBuf);
+        for (let i = 0; i < renderBuf.length; i++) displayData[i] = renderBuf[i];
+        drawSpectrum(ctx, canvas, renderBuf, context.sampleRate);
+        updateBandLevels(renderBuf, context.sampleRate);
+      } else {
+        let anyActive = false;
+        for (let i = 0; i < displayData.length; i++) {
+          displayData[i] *= 0.82;
+          if (displayData[i] > 0.5) anyActive = true;
+          renderBuf[i] = (displayData[i] + 0.5) | 0;
+        }
+        if (anyActive) {
+          drawSpectrum(ctx, canvas, renderBuf, context.sampleRate);
+          updateBandLevels(renderBuf, context.sampleRate);
+        } else {
+          setLevels({ High: 0, Low: 0, Mid: 0 });
+        }
+      }
 
       animationFrame = requestAnimationFrame(draw);
     }
@@ -100,12 +124,6 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
       context?.close?.();
     };
   }, [mediaElement]);
-
-  useEffect(() => {
-    if (!mediaElement || !isPlaying) {
-      drawIdle(canvasRef.current);
-    }
-  }, [isPlaying, mediaElement]);
 
   return (
     <section className="spectrum-panel" aria-label="Frequency analyzer">
