@@ -40,8 +40,8 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
 
       context = new AudioContextConstructor();
       analyser = context.createAnalyser();
-      analyser.fftSize = 4096;
-      analyser.smoothingTimeConstant = 0.82;
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.84;
       displayData = new Float32Array(analyser.frequencyBinCount);
       renderBuf = new Uint8Array(analyser.frequencyBinCount);
       resumeContext = () => context?.resume?.();
@@ -76,7 +76,7 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
       if (isPlayingRef.current) {
         analyser.getByteFrequencyData(renderBuf);
         for (let i = 0; i < renderBuf.length; i++) displayData[i] = renderBuf[i];
-        drawBars(ctx, canvas, renderBuf, context.sampleRate);
+        drawSpectrum(ctx, canvas, renderBuf, context.sampleRate);
         updateBandLevels(renderBuf, context.sampleRate);
       } else {
         let anyActive = false;
@@ -86,7 +86,7 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
           renderBuf[i] = (displayData[i] + 0.5) | 0;
         }
         if (anyActive) {
-          drawBars(ctx, canvas, renderBuf, context.sampleRate);
+          drawSpectrum(ctx, canvas, renderBuf, context.sampleRate);
           updateBandLevels(renderBuf, context.sampleRate);
         } else {
           setLevels({ High: 0, Low: 0, Mid: 0 });
@@ -165,50 +165,32 @@ function drawGrid(ctx, canvas) {
   }
 }
 
-const BAND_COUNT = 96;
-const MIN_BAR_H = 2;
-
-function getWeightedBandHeight(index, rawValue, canvasHeight) {
-  const position = index / BAND_COUNT;
-  const lowWeight = 1.25 - position * 0.45;
-  const musicalVariance =
-    0.72 +
-    Math.sin(index * 0.73) * 0.18 +
-    Math.sin(index * 1.91) * 0.1;
-  const maxH = canvasHeight * 0.88;
-  const height = rawValue * lowWeight * musicalVariance * maxH;
-  return Math.max(MIN_BAR_H, Math.min(maxH, height));
-}
-
-function drawBars(ctx, canvas, data, sampleRate) {
-  const W = canvas.width;
-  const H = canvas.height;
-
-  // Thin bars: 40% of slot, 60% gap — tighter and more refined
-  const slotW = W / BAND_COUNT;
-  const barW = Math.max(1, Math.floor(slotW * 0.40));
-  const offset = (slotW - barW) / 2;
-
-  // Vertical gold gradient: dark amber at base → bright gold at peaks
-  const grad = ctx.createLinearGradient(0, H, 0, 0);
-  grad.addColorStop(0,    "hsl(38, 75%, 18%)");
-  grad.addColorStop(0.35, "hsl(40, 85%, 32%)");
-  grad.addColorStop(0.70, "hsl(43, 92%, 50%)");
-  grad.addColorStop(1,    "hsl(46, 98%, 64%)");
-  ctx.fillStyle = grad;
-
-  ctx.shadowColor = "rgba(240, 185, 50, 0.42)";
-  ctx.shadowBlur = 7;
-
-  for (let i = 0; i < BAND_COUNT; i++) {
-    const pct = i / (BAND_COUNT - 1);
-    const freq = 20 * (1000 ** pct);
-    const binIdx = frequencyToIndex(freq, sampleRate, data.length);
-    const rawValue = data[binIdx] / 255;
-    const h = getWeightedBandHeight(i, rawValue, H);
-    ctx.fillRect((i * slotW + offset) | 0, (H - h) | 0, barW, Math.ceil(h));
+function drawSpectrum(ctx, canvas, data, sampleRate) {
+  const points = 84;
+  ctx.beginPath();
+  for (let i = 0; i < points; i += 1) {
+    const percent = i / (points - 1);
+    const frequency = 20 * (1000 ** percent);
+    const index = frequencyToIndex(frequency, sampleRate, data.length);
+    const value = data[index] / 255;
+    const x = percent * canvas.width;
+    const y = canvas.height - value * canvas.height * 0.9;
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
   }
 
+  const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+  gradient.addColorStop(0, "#8ec78f");
+  gradient.addColorStop(0.45, "#f1c15e");
+  gradient.addColorStop(1, "#ffe0a3");
+  ctx.strokeStyle = gradient;
+  ctx.lineWidth = 2;
+  ctx.shadowColor = "rgba(241, 193, 94, 0.38)";
+  ctx.shadowBlur = 16;
+  ctx.stroke();
   ctx.shadowBlur = 0;
 }
 
