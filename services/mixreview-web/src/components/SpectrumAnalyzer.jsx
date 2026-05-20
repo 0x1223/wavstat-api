@@ -40,7 +40,7 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
 
       context = new AudioContextConstructor();
       analyser = context.createAnalyser();
-      analyser.fftSize = 2048;
+      analyser.fftSize = 4096;
       analyser.smoothingTimeConstant = 0.82;
       displayData = new Float32Array(analyser.frequencyBinCount);
       renderBuf = new Uint8Array(analyser.frequencyBinCount);
@@ -165,8 +165,8 @@ function drawGrid(ctx, canvas) {
   }
 }
 
-const BAND_COUNT = 64;
-const MIN_BAR_H = 3;
+const BAND_COUNT = 96;
+const MIN_BAR_H = 2;
 
 function getWeightedBandHeight(index, rawValue, canvasHeight) {
   const position = index / BAND_COUNT;
@@ -184,19 +184,21 @@ function drawBars(ctx, canvas, data, sampleRate) {
   const W = canvas.width;
   const H = canvas.height;
 
-  // Thin bars with tight gaps: bar occupies 52% of each slot
+  // Thin bars: 40% of slot, 60% gap — tighter and more refined
   const slotW = W / BAND_COUNT;
-  const barW = Math.max(1, Math.floor(slotW * 0.52));
+  const barW = Math.max(1, Math.floor(slotW * 0.40));
   const offset = (slotW - barW) / 2;
 
-  // Smooth rainbow gradient mapped across the full canvas width
-  const grad = ctx.createLinearGradient(0, 0, W, 0);
-  grad.addColorStop(0,    "hsl(158, 72%, 44%)");
-  grad.addColorStop(0.28, "hsl(118, 68%, 40%)");
-  grad.addColorStop(0.52, "hsl(58,  82%, 50%)");
-  grad.addColorStop(0.72, "hsl(30,  88%, 52%)");
-  grad.addColorStop(1,    "hsl(2,   80%, 55%)");
+  // Vertical gold gradient: dark amber at base → bright gold at peaks
+  const grad = ctx.createLinearGradient(0, H, 0, 0);
+  grad.addColorStop(0,    "hsl(38, 75%, 18%)");
+  grad.addColorStop(0.35, "hsl(40, 85%, 32%)");
+  grad.addColorStop(0.70, "hsl(43, 92%, 50%)");
+  grad.addColorStop(1,    "hsl(46, 98%, 64%)");
   ctx.fillStyle = grad;
+
+  ctx.shadowColor = "rgba(240, 185, 50, 0.42)";
+  ctx.shadowBlur = 7;
 
   for (let i = 0; i < BAND_COUNT; i++) {
     const pct = i / (BAND_COUNT - 1);
@@ -206,6 +208,8 @@ function drawBars(ctx, canvas, data, sampleRate) {
     const h = getWeightedBandHeight(i, rawValue, H);
     ctx.fillRect((i * slotW + offset) | 0, (H - h) | 0, barW, Math.ceil(h));
   }
+
+  ctx.shadowBlur = 0;
 }
 
 function drawIdle(canvas) {

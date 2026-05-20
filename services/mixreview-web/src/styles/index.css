@@ -1900,8 +1900,8 @@ h2 {
 .band-meter i {
   block-size: 5px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #8ec78f, #f1c15e);
-  box-shadow: 0 0 14px rgba(241, 193, 94, 0.28);
+  background: linear-gradient(90deg, #7a5010, #f5c842);
+  box-shadow: 0 0 12px rgba(245, 200, 66, 0.32);
 }
 
 .spectrum-canvas-wrap {
@@ -2280,13 +2280,13 @@ h2 {
   }
 
   .reviewer-mode .review-console {
-  display: flex;
-  width: 100%;
-  justify-content: center;
-  align-items: center;
-  padding-top: 10px;
-  margin-top: 8px;
-}
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    align-items: center;
+    padding-top: 10px;
+    margin-top: 8px;
+  }
 .tool-label {
   font-size: 0.72rem;
   font-weight: 700;
