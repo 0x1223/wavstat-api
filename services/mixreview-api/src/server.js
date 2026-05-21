@@ -124,6 +124,15 @@ async function handleAudioUpload(req, res, next) {
       return res.status(400).json({ error: "Audio file is required." });
     }
 
+    const uploadExt = path.extname(audioFile.originalname).toLowerCase();
+    console.log("[MixReview] Upload received", {
+      fileName: audioFile.originalname,
+      extension: uploadExt,
+      mimeType: audioFile.mimetype,
+      size: audioFile.size,
+      sizeMB: (audioFile.size / 1_048_576).toFixed(2),
+    });
+
     const validation = validateStereoReviewAudio(audioFile);
     if (!validation.ok) {
       return res.status(415).json({ error: validation.error });
@@ -153,6 +162,14 @@ async function handleAudioUpload(req, res, next) {
     if (sessionId) {
       await attachAudioToSession(sessionId, audioPayload, versionId, trackId);
     }
+
+    console.log("[MixReview] Upload stored", {
+      fileName: audioFile.originalname,
+      contentType: validation.contentType,
+      storage: storageResult.storage,
+      key: objectKey,
+      playbackUrl: storageResult.playbackUrl.slice(0, 120),
+    });
 
     return res.status(201).json({
       ok: true,
@@ -191,12 +208,32 @@ async function uploadAudioToR2(objectKey, audioFile, contentType, req) {
   };
 }
 
+// Map file extensions to MIME types for content-type fallback when R2 omits the header.
+const AUDIO_MIME_BY_EXT = {
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
+};
+
 async function streamAudioPlayback(req, res, next) {
   try {
     const objectKey = decodeURIComponent(req.params.encodedKey || "");
     if (!objectKey || objectKey.includes("..")) {
       return res.status(400).json({ error: "Valid audio key is required." });
     }
+
+    // Derive a content-type from the file extension as a guaranteed fallback.
+    const extMatch = objectKey.match(/\.([a-z0-9]+)(?:\?|$)/i);
+    const extContentType = extMatch ? (AUDIO_MIME_BY_EXT[extMatch[1].toLowerCase()] ?? null) : null;
+
+    console.log("[MixReview] Playback request", {
+      objectKey,
+      extension: extMatch?.[1] ?? "(none)",
+      range: req.headers.range ?? "(none)",
+    });
 
     if (!hasR2Config) {
       return res.redirect(302, `/uploads/${objectKey}`);
@@ -213,9 +250,14 @@ async function streamAudioPlayback(req, res, next) {
     const statusCode = req.headers.range && response.ContentRange ? 206 : 200;
     res.status(statusCode);
     res.setHeader("Accept-Ranges", "bytes");
-    if (response.ContentType) {
-      res.setHeader("Content-Type", response.ContentType);
-    }
+
+    // Prefer R2's stored ContentType; fall back to extension-derived type;
+    // last resort application/octet-stream.
+    const contentType = response.ContentType || extContentType || "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+
+    console.log("[MixReview] Playback serving", { objectKey, contentType, statusCode });
+
     if (response.ContentLength) {
       res.setHeader("Content-Length", response.ContentLength);
     }

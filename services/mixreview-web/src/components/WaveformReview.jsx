@@ -96,6 +96,20 @@ export function WaveformReview({
     callbacksRef.current.onPlaybackChange(false);
 
     const playbackUrl = audioSource?.playbackUrl || audioSource?.url;
+
+    // ── Load-start logging ──────────────────────────────────────────────
+    const ext = (playbackUrl ?? "").split("?")[0].split(".").pop().toLowerCase();
+    const fileSize = audioSource?.size
+      ? `${(audioSource.size / 1_048_576).toFixed(1)} MB`
+      : "(unknown)";
+    console.log("[WaveformReview] Audio source changed", {
+      fileName: audioSource?.fileName ?? "(unknown)",
+      extension: ext,
+      mimeType: audioSource?.mimeType ?? audioSource?.type ?? "(unknown)",
+      fileSize,
+      url: (playbackUrl ?? "").slice(0, 120),
+    });
+
     if (!playbackUrl) {
       setIsLoading(false);
       callbacksRef.current.onReady(null);
@@ -109,14 +123,25 @@ export function WaveformReview({
 
     if (isMobileViewport()) {
       // Mobile: singleton engine — survives React re-renders and comment state changes
+      console.log("[WaveformReview] Mobile decode start", { url: playbackUrl.slice(0, 100) });
       const ws = mountMobileEngine(containerRef.current, playbackUrl, {
         onReady: (player) => {
+          console.log("[WaveformReview] Mobile decode success");
           setIsLoading(false);
           callbacksRef.current.onReady(player);
         },
-        onError: () => {
+        // Called when waveform decode fails/times out but the audio element
+        // can still play. Player interface is functional; waveform is empty.
+        onWaveformUnavailable: (player, reason) => {
+          console.log("[WaveformReview] Waveform unavailable — audio-only mode", { reason });
           setIsLoading(false);
-          setLoadError("This audio file could not be decoded. Try a WAV, MP3, M4A, or AAC file.");
+          setLoadError("Waveform unavailable — tap ▶ to listen");
+          callbacksRef.current.onReady(player);
+        },
+        onError: (err) => {
+          console.warn("[WaveformReview] Mobile decode failure", err?.message);
+          setIsLoading(false);
+          setLoadError("This audio file could not be decoded. Try a WAV or MP3 file.");
           callbacksRef.current.onReady(null);
           callbacksRef.current.onDurationChange(0);
           callbacksRef.current.onPlaybackChange(false);
@@ -136,10 +161,14 @@ export function WaveformReview({
       };
     }
 
-    // Desktop: inline WaveSurfer — unchanged
+    // Desktop: inline WaveSurfer instance
     let isDisposed = false;
     let hasLoaded = false;
-    console.log("WaveSurfer load start", { playbackUrl });
+    console.log("[WaveformReview] Desktop decode start", {
+      url: playbackUrl.slice(0, 120),
+      ext,
+      fileSize,
+    });
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
       url: playbackUrl,
@@ -160,12 +189,53 @@ export function WaveformReview({
 
     wavesurferRef.current = wavesurfer;
 
+    // ── Desktop decode timeout ──────────────────────────────────────────
+    // If WaveSurfer's fetch or decodeAudioData stalls, surface a clear message
+    // rather than leaving the UI stuck on "Preparing waveform" forever.
+    const DESKTOP_TIMEOUT_MS = 20_000;
+    const decodeTimeout = setTimeout(() => {
+      if (isDisposed || hasLoaded) return;
+      hasLoaded = true;
+      console.warn("[WaveformReview] Desktop decode timeout after", DESKTOP_TIMEOUT_MS, "ms");
+      const mediaEl = wavesurfer.getMediaElement?.();
+      if (mediaEl && !mediaEl.error && mediaEl.readyState >= 2) {
+        // Audio element has data even though waveform decode stalled — audio-only
+        mediaEl.muted = false;
+        mediaEl.volume = 1;
+        const dur = Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0;
+        setDuration(dur);
+        setIsLoading(false);
+        setLoadError("Waveform unavailable — audio is ready to play");
+        callbacksRef.current.onDurationChange(dur);
+        callbacksRef.current.onReady({
+          wavesurfer,
+          mediaElement: mediaEl,
+          play: async () => { await wavesurfer.play(); },
+          pause: () => wavesurfer.pause(),
+          playPause: async () => { await wavesurfer.playPause(); },
+          skip: (s) => wavesurfer.skip(s),
+          seekToTime: (time) => {
+            const t = Math.min(Math.max(time, 0), wavesurfer.getDuration());
+            wavesurfer.setTime(t);
+            callbacksRef.current.onTimeUpdate(t);
+          },
+        });
+      } else {
+        setIsLoading(false);
+        setLoadError("Waveform generation timed out — please refresh and try again.");
+        callbacksRef.current.onReady(null);
+        callbacksRef.current.onDurationChange(0);
+        callbacksRef.current.onPlaybackChange(false);
+      }
+    }, DESKTOP_TIMEOUT_MS);
+
     wavesurfer.on("ready", () => {
       if (isDisposed) {
         return;
       }
 
       hasLoaded = true;
+      clearTimeout(decodeTimeout);
       const audioDuration = wavesurfer.getDuration();
       const mediaElement = wavesurfer.getMediaElement();
       if (mediaElement) {
@@ -173,28 +243,19 @@ export function WaveformReview({
         mediaElement.volume = 1;
         mediaElement.preload = "auto";
       }
-      console.log("WaveSurfer ready", {
+      console.log("[WaveformReview] Desktop decode success", {
         duration: audioDuration,
-        muted: mediaElement?.muted,
-        volume: mediaElement?.volume,
-        readyState: mediaElement?.readyState
+        readyState: mediaElement?.readyState,
       });
-      console.log("WaveSurfer decoded duration", audioDuration);
       setDuration(audioDuration);
       setIsLoading(false);
       callbacksRef.current.onDurationChange(audioDuration);
       callbacksRef.current.onReady({
         wavesurfer,
         mediaElement,
-        play: async () => {
-          await wavesurfer.play();
-          console.log("WaveSurfer play state", { isPlaying: wavesurfer.isPlaying() });
-        },
+        play: async () => { await wavesurfer.play(); },
         pause: () => wavesurfer.pause(),
-        playPause: async () => {
-          await wavesurfer.playPause();
-          console.log("WaveSurfer play state", { isPlaying: wavesurfer.isPlaying() });
-        },
+        playPause: async () => { await wavesurfer.playPause(); },
         skip: (seconds) => wavesurfer.skip(seconds),
         seekToTime: (time) => {
           const nextTime = Math.min(Math.max(time, 0), wavesurfer.getDuration());
@@ -209,9 +270,11 @@ export function WaveformReview({
         return;
       }
 
-      console.error("WaveSurfer error", error);
+      hasLoaded = true;
+      clearTimeout(decodeTimeout);
+      console.warn("[WaveformReview] Desktop decode failure", error?.message ?? String(error));
       setIsLoading(false);
-      setLoadError("This audio file could not be decoded. Try a WAV, MP3, M4A, or AAC file.");
+      setLoadError("This audio file could not be decoded. Try a WAV or MP3 file.");
       callbacksRef.current.onReady(null);
       callbacksRef.current.onDurationChange(0);
       callbacksRef.current.onPlaybackChange(false);
@@ -224,26 +287,18 @@ export function WaveformReview({
     });
 
     wavesurfer.on("play", () => {
-      if (!isDisposed) {
-        console.log("WaveSurfer play state", { isPlaying: true });
-        callbacksRef.current.onPlaybackChange(true);
-      }
+      if (!isDisposed) callbacksRef.current.onPlaybackChange(true);
     });
     wavesurfer.on("pause", () => {
-      if (!isDisposed) {
-        console.log("WaveSurfer play state", { isPlaying: false });
-        callbacksRef.current.onPlaybackChange(false);
-      }
+      if (!isDisposed) callbacksRef.current.onPlaybackChange(false);
     });
     wavesurfer.on("finish", () => {
-      if (!isDisposed) {
-        console.log("WaveSurfer play state", { isPlaying: false, finished: true });
-        callbacksRef.current.onPlaybackChange(false);
-      }
+      if (!isDisposed) callbacksRef.current.onPlaybackChange(false);
     });
 
     return () => {
       isDisposed = true;
+      clearTimeout(decodeTimeout);
       if (wavesurferRef.current === wavesurfer) {
         wavesurferRef.current = null;
       }
