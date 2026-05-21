@@ -614,10 +614,22 @@ export default function App() {
       setIsPlayerReady(false);
       setMobileNoteDraft(null);
       playerRef.current = null;
+
+      // Eagerly persist the full session with the new track. The debounced
+      // auto-save won't fire if the admin navigates to the dashboard within
+      // its 450ms window, so we build the updated snapshot manually here
+      // (sessionSnapshot still reflects pre-setTracks state in this closure).
+      const savedSnapshot = {
+        ...sessionSnapshot,
+        activeTrackId: nextTrackId,
+        activeVersionId: nextVersionId,
+        tracks: [...sessionSnapshot.tracks, toStoredTrack(nextTrack)],
+      };
+      await saveSessionToApi(savedSnapshot).catch(() => {});
     } catch (error) {
       setUploadError(error.message || "Track upload failed.");
     }
-  }, [currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId]);
+  }, [currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, sessionSnapshot]);
 
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
@@ -717,6 +729,11 @@ export default function App() {
     playerRef.current?.pause();
     setIsPlaying(false);
     setIsPlayerReady(false);
+    // Flush any unsaved workspace state before the auto-save is cancelled by
+    // setHasStarted(false). Fire-and-forget: the UI transition is instant.
+    if (hasStarted && sessionSnapshot?.id) {
+      saveSessionToApi(sessionSnapshot).catch(() => {});
+    }
     setHasStarted(false);
     setIsSessionSynced(true);
     setAppView("admin");
@@ -724,7 +741,7 @@ export default function App() {
     saveAccessState({ mode: "admin", sessionId });
     clearWorkspaceRoute();
     refreshAdminSessions();
-  }, [refreshAdminSessions, sessionId]);
+  }, [hasStarted, refreshAdminSessions, sessionId, sessionSnapshot]);
 
   const openStoredSession = useCallback(async (targetSessionId, reviewer = "Engineer") => {
     const storedSession = await loadSessionFromApi(targetSessionId);
