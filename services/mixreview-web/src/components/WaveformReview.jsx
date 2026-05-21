@@ -43,6 +43,16 @@ export function WaveformReview({
   const meterThrottleRef = useRef(0);
   const meterBufRef = useRef(null);
 
+  // ── Mobile pinch-to-zoom ────────────────────────────────────────────────
+  // State drives the render; refs give synchronous access inside passive-false
+  // touch listeners (closures capture the ref, not stale state values).
+  const [zoomScale, setZoomScale] = useState(1.0);
+  const [zoomScrollX, setZoomScrollX] = useState(0);
+  const zoomScaleRef = useRef(1.0);
+  const zoomScrollXRef = useRef(0);
+  const gestureRef = useRef(null); // tracks active pinch or pan gesture
+  const zoomInnerRef = useRef(null); // the zoom-transform wrapper div
+
   // Called on every animation frame tick from MobileSpectrumAnalyzer's RAF loop.
   // Reads time-domain data from the already-running analyser — no new audio graph nodes.
   const handleMeterFrame = useCallback((analyser) => {
@@ -71,6 +81,10 @@ export function WaveformReview({
     } catch (_) {}
   }, []);
 
+  // Keep refs in sync so touch-listener closures always read current values.
+  zoomScaleRef.current = zoomScale;
+  zoomScrollXRef.current = zoomScrollX;
+
   useEffect(() => {
     callbacksRef.current = {
       onDurationChange,
@@ -87,6 +101,12 @@ export function WaveformReview({
     if (!containerRef.current) {
       return undefined;
     }
+
+    // Reset zoom whenever audio source changes.
+    setZoomScale(1.0);
+    setZoomScrollX(0);
+    zoomScaleRef.current = 1.0;
+    zoomScrollXRef.current = 0;
 
     setIsLoading(true);
     setLoadError("");
@@ -309,6 +329,95 @@ export function WaveformReview({
     };
   }, [audioSource?.playbackUrl, audioSource?.url]);
 
+  // ── Pinch-to-zoom touch listeners (mobile only) ─────────────────────────
+  // Registered with passive:false so e.preventDefault() actually works.
+  // Reads state only through refs so the closure never goes stale.
+  useEffect(() => {
+    const el = zoomInnerRef.current;
+    if (!el || !isMobileViewport()) return;
+
+    function dist2(touches) {
+      return Math.hypot(
+        touches[0].clientX - touches[1].clientX,
+        touches[0].clientY - touches[1].clientY,
+      );
+    }
+
+    // Natural (un-zoomed) width of the waveform canvas area, in px.
+    function outerW() {
+      if (!containerRef.current) return 1;
+      return containerRef.current.getBoundingClientRect().width /
+        Math.max(1, zoomScaleRef.current);
+    }
+
+    function onTouchStart(e) {
+      if (e.touches.length === 2) {
+        gestureRef.current = {
+          mode: "pinch",
+          startDist: dist2(e.touches),
+          startScale: zoomScaleRef.current,
+          startScrollX: zoomScrollXRef.current,
+          outerW: outerW(),
+        };
+        e.preventDefault();
+      } else if (e.touches.length === 1 && zoomScaleRef.current > 1) {
+        gestureRef.current = {
+          mode: "pan",
+          startX: e.touches[0].clientX,
+          startScrollX: zoomScrollXRef.current,
+          outerW: outerW(),
+        };
+      } else {
+        gestureRef.current = null;
+      }
+    }
+
+    function onTouchMove(e) {
+      const g = gestureRef.current;
+      if (!g) return;
+
+      if (g.mode === "pinch" && e.touches.length === 2) {
+        const newDist = dist2(e.touches);
+        const ratio = g.startDist > 0 ? newDist / g.startDist : 1;
+        const newScale = Math.min(8, Math.max(1, g.startScale * ratio));
+
+        // Preserve proportional scroll position as scale changes.
+        const oldMax = g.outerW * Math.max(0, g.startScale - 1);
+        const newMax = g.outerW * Math.max(0, newScale - 1);
+        const pct = oldMax > 0 ? g.startScrollX / oldMax : 0;
+        const newScrollX = Math.min(newMax, Math.max(0, pct * newMax));
+
+        zoomScaleRef.current = newScale;
+        zoomScrollXRef.current = newScrollX;
+        setZoomScale(newScale);
+        setZoomScrollX(newScrollX);
+        e.preventDefault();
+      } else if (g.mode === "pan" && e.touches.length === 1) {
+        const dx = e.touches[0].clientX - g.startX;
+        const maxScroll = g.outerW * Math.max(0, zoomScaleRef.current - 1);
+        const newScrollX = Math.min(maxScroll, Math.max(0, g.startScrollX - dx));
+        zoomScrollXRef.current = newScrollX;
+        setZoomScrollX(newScrollX);
+        e.preventDefault();
+      }
+    }
+
+    function onTouchEnd(e) {
+      // Clear gesture state once fewer than 2 fingers remain.
+      if (e.touches.length < 2) gestureRef.current = null;
+    }
+
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+    };
+  }, []); // register once on mount; all state is accessed via refs
+
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
     if (!wavesurfer || duration <= 0) {
@@ -409,9 +518,19 @@ export function WaveformReview({
   {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
 
   <div
+    ref={zoomInnerRef}
+    className="waveform-zoom-inner"
+    style={isMobileViewport() ? {
+      width: `${zoomScale * 100}%`,
+      transform: zoomScrollX !== 0 ? `translateX(${-zoomScrollX}px)` : undefined,
+      willChange: zoomScale > 1 ? "transform" : undefined,
+    } : undefined}
+  >
+  <div
   ref={containerRef}
   className="waveform"
   onTouchMove={(event) => {
+    if (gestureRef.current) return;
     const touch = event.changedTouches?.[0];
     if (!touch || !containerRef.current || !duration) return;
 
@@ -421,9 +540,7 @@ export function WaveformReview({
       Math.max(0, (touch.clientX - rect.left) / rect.width)
     );
 
-    const nextTime = ratio * duration;
-
-    seekToTime(nextTime);
+    seekToTime(ratio * duration);
   }}
 />
         {duration > 0 && (
@@ -485,6 +602,7 @@ export function WaveformReview({
             })}
           </div>
         )}
+  </div>
       </div>
 
       {(duration > 0 || (isReviewerMode && isMobileViewport())) && (
