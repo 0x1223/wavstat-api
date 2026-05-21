@@ -393,7 +393,7 @@ export function WaveformReview({
         )}
       </div>
 
-      {duration > 0 && (
+      {(duration > 0 || (isReviewerMode && isMobileViewport())) && (
         <div className="review-console">
           {pendingMarker ? (
             <div className="desktop-comment-box">

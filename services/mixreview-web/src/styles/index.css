@@ -2698,6 +2698,21 @@ h2 {
     border-radius: 4px;
   }
 
+  /* Pin the REVIEW button fixed above the spectrum so it can never be
+     overlapped or pushed off-screen by the fixed transport/spectrum stack.
+     spectrum = bottom:60px + 72px canvas = top at 132px from bottom.
+     review console sits in the 10px gap above that. */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: 142px;
+    z-index: 46;
+    padding-top: 0;
+    margin-top: 0;
+    pointer-events: auto;
+  }
+
   /* ─ Loudness meter in multitrack transport ──────────────────────────── */
   .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness {
     display: flex;
