@@ -426,24 +426,55 @@ export function WaveformReview({
 />
         {duration > 0 && (
           <div className="marker-layer">
-            {markerItems.map((comment) => (
-              <button
-                type="button"
-                className={`wave-marker${comment.resolved ? " resolved" : ""}${
-                  comment.id === selectedCommentId ? " selected" : ""
-                }${comment.isPreview ? " preview" : ""}`}
-                key={comment.id}
-                data-time={formatTimecode(comment.time)}
-                style={{ left: comment.left }}
-                aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (!comment || comment.isPreview) return;
-                  if (!isMobileViewport()) seekToTime(comment.time);
-                  onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
-                }}
-              />
-            ))}
+            {markerItems.map((comment) => {
+              // Precompute bubble visibility and alignment once per marker.
+              // Bubble only appears for real saved comments that have text,
+              // in reviewer mode on mobile — never on preview/pending markers.
+              const showBubble =
+                isReviewerMode &&
+                isMobileViewport() &&
+                !comment.isPreview &&
+                Boolean(comment.text);
+              // Flip bubble to the left when the marker is in the right 38%
+              // of the waveform, so the bubble stays inside the visible area.
+              const bubbleAlign =
+                showBubble && waveformWidth > 0 && parseFloat(comment.left) / waveformWidth > 0.62
+                  ? "right"
+                  : "left";
+              const bubbleText =
+                showBubble && comment.text.length > 30
+                  ? `${comment.text.slice(0, 30).trimEnd()}…`
+                  : comment.text;
+
+              return (
+                <button
+                  type="button"
+                  className={`wave-marker${comment.resolved ? " resolved" : ""}${
+                    comment.id === selectedCommentId ? " selected" : ""
+                  }${comment.isPreview ? " preview" : ""}`}
+                  key={comment.id}
+                  data-time={formatTimecode(comment.time)}
+                  data-bubble-align={bubbleAlign}
+                  style={{ left: comment.left }}
+                  aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (!comment || comment.isPreview) return;
+                    if (!isMobileViewport()) seekToTime(comment.time);
+                    onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
+                  }}
+                >
+                  {showBubble && (
+                    <span
+                      className={`marker-bubble${comment.resolved ? " marker-bubble--resolved" : ""}`}
+                      aria-hidden="true"
+                    >
+                      {bubbleText}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

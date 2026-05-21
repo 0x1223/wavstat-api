@@ -2410,6 +2410,67 @@ h2 {
     border-color: #120d05;
   }
 
+  /* ── Mobile comment bubble ─────────────────────────────────────────── */
+  /* Compact SoundCloud-style text flag pinned beside each marker dot.    */
+  /* The button ::before = dot, ::after = vertical bar (both unchanged).  */
+  /* The bubble is a real child span so it is always inside the hit area. */
+
+  .reviewer-mode .wave-marker .marker-bubble {
+    /* Position beside the dot. The button is 36 × 36 px, dot center is
+       at 50 % / 50 %. We shift the bubble 10 px right of dot center so
+       there is a small gap between the dot edge and the bubble left edge. */
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(10px, -50%);
+
+    /* Compact pill — wide enough for ~30 chars of small text */
+    max-width: 132px;
+    padding: 3px 7px;
+    border: 1px solid rgba(215, 163, 84, 0.36);
+    border-radius: 4px;
+    background: rgba(8, 6, 3, 0.88);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.52);
+
+    /* Typography */
+    font-size: 0.6rem;
+    font-weight: 650;
+    line-height: 1.35;
+    letter-spacing: 0.01em;
+    color: rgba(255, 232, 168, 0.9);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    /* Does not absorb touch events — the button itself handles taps */
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  /* Flip bubble to the LEFT for markers in the right portion of the
+     waveform so the text stays within the visible area */
+  .reviewer-mode .wave-marker[data-bubble-align="right"] .marker-bubble {
+    left: auto;
+    right: 50%;
+    transform: translate(-10px, -50%);
+  }
+
+  /* Resolved variant — subtle green tint */
+  .reviewer-mode .wave-marker .marker-bubble.marker-bubble--resolved {
+    border-color: rgba(127, 210, 145, 0.3);
+    color: rgba(180, 240, 192, 0.88);
+  }
+
+  /* Selected marker — bubble gets a stronger glow to match the selected dot */
+  .reviewer-mode .wave-marker.selected .marker-bubble {
+    border-color: rgba(241, 193, 94, 0.62);
+    background: rgba(12, 9, 4, 0.92);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(241, 193, 94, 0.18);
+    color: #ffe8aa;
+  }
+
   .mobile-comment-drawer-header {
     display: flex;
     align-items: center;
