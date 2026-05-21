@@ -1,12 +1,5 @@
 import { formatTimecode } from "../lib/time.js";
 
-// Map a dB value to a 0–100 fill percentage over a given range.
-function dbToFill(str, lo, hi) {
-  const n = parseFloat(str);
-  if (!isFinite(n)) return 0;
-  return Math.min(100, Math.max(0, ((n - lo) / (hi - lo)) * 100));
-}
-
 export function TransportBar({
   currentTime,
   duration,
@@ -62,33 +55,17 @@ export function TransportBar({
       </div>
 
       {loudnessMeta && (
-        <div className="transport-loudness-meters" aria-label="Loudness metrics">
-          {/* LUFS — bar + value */}
+        <div className="transport-loudness" aria-label="Loudness metrics">
           <div className="transport-loudness-row">
             <span className="transport-loudness-label">LUFS</span>
-            <span className="transport-loudness-bar">
-              <span
-                className="transport-loudness-fill"
-                style={{ "--meter-fill": `${dbToFill(loudnessMeta.lufs, -40, 0).toFixed(1)}%` }}
-              />
-            </span>
             <span className="transport-loudness-value">{loudnessMeta.lufs}</span>
           </div>
-          {/* LRA — value only */}
-          <div className="transport-loudness-row lra">
+          <div className="transport-loudness-row">
             <span className="transport-loudness-label">LRA</span>
-            <span className="transport-loudness-bar" />
             <span className="transport-loudness-value">{loudnessMeta.lra}</span>
           </div>
-          {/* TP — bar + value */}
           <div className="transport-loudness-row">
             <span className="transport-loudness-label">TP</span>
-            <span className="transport-loudness-bar">
-              <span
-                className="transport-loudness-fill"
-                style={{ "--meter-fill": `${dbToFill(loudnessMeta.tp, -40, 0).toFixed(1)}%` }}
-              />
-            </span>
             <span className="transport-loudness-value">{loudnessMeta.tp}</span>
           </div>
         </div>

@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import { registerAudioSource, releaseAudioSource } from "../lib/mobileAudioTap.js";
 
 // Standard ISO 1/3-octave center frequencies, 25 Hz – 20 kHz (30 bands)
 const CENTERS = [
@@ -150,9 +149,6 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
         const src = audioCtx.createMediaElementSource(mediaEl);
         src.connect(audioCtx.destination);
         src.connect(analyser);
-        // Register tap so other modules can share this source without
-        // calling createMediaElementSource() a second time.
-        registerAudioSource(audioCtx, src);
       } catch (e) {
         console.warn("[MobileSpectrum] audio connect failed:", e.message);
         return false;
@@ -199,7 +195,6 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
         if (rafId != null) cancelAnimationFrame(rafId);
         detachWs?.();
         try { analyser?.disconnect(); } catch (_) {}
-        releaseAudioSource();
         ro.disconnect();
       };
     }
@@ -209,7 +204,6 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
       if (rafId != null) cancelAnimationFrame(rafId);
       detachWs?.();
       try { analyser?.disconnect(); } catch (_) {}
-      releaseAudioSource();
       ro.disconnect();
     };
   }, [wsRef]);

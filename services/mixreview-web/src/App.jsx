@@ -9,7 +9,6 @@ import { SpectrumAnalyzer } from "./components/SpectrumAnalyzer.jsx";
 import { StartScreen } from "./components/StartScreen.jsx";
 import { TrackList } from "./components/TrackList.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
-import { useLoudnessMeter } from "./lib/useLoudnessMeter.js";
 import { WaveformReview } from "./components/WaveformReview.jsx";
 import {
   deleteSessionFromApi,
@@ -156,11 +155,6 @@ export default function App() {
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
-  // Ref for loudness meter — avoids restarting the metering effect on every play/pause toggle
-  const isPlayingRef = useRef(false);
-  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
-  const isMobileMultitrack = isReviewerMode && tracks.length > 1 && isMobileViewport();
-  const liveMeters = useLoudnessMeter(isPlayingRef, isMobileMultitrack);
 
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
@@ -1631,7 +1625,9 @@ export default function App() {
         onPlayPause={() => playerRef.current?.playPause()}
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}
-        loudnessMeta={isMobileMultitrack ? liveMeters : null}
+        loudnessMeta={isReviewerMode && tracks.length > 1
+          ? { lufs: "-14.2", lra: "6.8", tp: "-1.0" }
+          : null}
       />
 
       {isReviewerMode && mobileNoteDraft && (

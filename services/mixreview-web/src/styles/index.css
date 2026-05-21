@@ -2699,71 +2699,41 @@ h2 {
   }
 
   /* ─ Loudness meter in multitrack transport ──────────────────────────── */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-meters {
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness {
     display: flex;
     flex-direction: column;
     justify-content: center;
+    align-items: flex-end;
     gap: 2px;
     grid-column: 3;
-    align-self: center;
-    margin-right: 10px;
-    padding-right: 2px;
-    min-width: 108px;
-    max-width: 118px;
-    border-left: 1px solid rgba(255, 255, 255, 0.07);
     padding-left: 8px;
+    border-left: 1px solid rgba(255, 255, 255, 0.07);
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-row {
-    display: grid;
-    grid-template-columns: 32px 1fr 38px;
-    align-items: center;
-    column-gap: 4px;
-    height: 13px;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-label {
-    font-size: 9px;
-    line-height: 1;
+    font-size: 0.5rem;
     font-weight: 800;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: rgba(215, 173, 98, 0.6);
-    text-align: left;
-    opacity: 0.85;
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-value {
-    font-size: 9px;
-    line-height: 1;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    color: #fff4db;
+    color: rgba(215, 173, 98, 0.55);
+    min-width: 26px;
     text-align: right;
   }
 
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-bar {
-    height: 4px;
-    border-radius: 999px;
-    overflow: hidden;
-    background: rgba(255, 255, 255, 0.14);
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-fill {
-    display: block;
-    height: 100%;
-    width: var(--meter-fill, 0%);
-    border-radius: inherit;
-    background: linear-gradient(
-      90deg,
-      rgba(197, 151, 63, 0.65),
-      rgba(255, 214, 102, 0.95)
-    );
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-row.lra
-    .transport-loudness-bar {
-    visibility: hidden;
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-value {
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    color: #fff4db;
+    min-width: 32px;
+    text-align: right;
   }
 }
 
