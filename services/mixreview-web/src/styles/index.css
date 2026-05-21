@@ -2497,7 +2497,7 @@ h2 {
     flex-direction: column;
     gap: 4px;
     overflow-y: auto;
-    max-height: 34vh;
+    max-height: 160px;
     padding: 1px;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
@@ -2674,6 +2674,10 @@ h2 {
     flex: 1;
     min-height: 0;
     gap: 6px;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .mobile-track-nav {
+    flex-shrink: 0;
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
