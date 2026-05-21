@@ -1625,6 +1625,9 @@ export default function App() {
         onPlayPause={() => playerRef.current?.playPause()}
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}
+        loudnessMeta={isReviewerMode && tracks.length > 1
+          ? { lufs: "-14.2", lra: "6.8", tp: "-1.0" }
+          : null}
       />
 
       {isReviewerMode && mobileNoteDraft && (

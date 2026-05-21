@@ -7,7 +7,8 @@ export function TransportBar({
   isDisabled,
   onPlayPause,
   onSkipBackward,
-  onSkipForward
+  onSkipForward,
+  loudnessMeta = null
 }) {
   return (
     <footer className="transport" aria-label="Playback controls">
@@ -52,6 +53,23 @@ export function TransportBar({
         <span>24-bit</span>
         <span>Local audio</span>
       </div>
+
+      {loudnessMeta && (
+        <div className="transport-loudness" aria-label="Loudness metrics">
+          <div className="transport-loudness-row">
+            <span className="transport-loudness-label">LUFS</span>
+            <span className="transport-loudness-value">{loudnessMeta.lufs}</span>
+          </div>
+          <div className="transport-loudness-row">
+            <span className="transport-loudness-label">LRA</span>
+            <span className="transport-loudness-value">{loudnessMeta.lra}</span>
+          </div>
+          <div className="transport-loudness-row">
+            <span className="transport-loudness-label">TP</span>
+            <span className="transport-loudness-value">{loudnessMeta.tp}</span>
+          </div>
+        </div>
+      )}
     </footer>
   );
 }

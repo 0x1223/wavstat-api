@@ -2697,6 +2697,44 @@ h2 {
     background: rgba(10, 10, 10, 0.94);
     border-radius: 4px;
   }
+
+  /* ─ Loudness meter in multitrack transport ──────────────────────────── */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 2px;
+    grid-column: 3;
+    padding-left: 8px;
+    border-left: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-row {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-label {
+    font-size: 0.5rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(215, 173, 98, 0.55);
+    min-width: 26px;
+    text-align: right;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-value {
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    color: #fff4db;
+    min-width: 32px;
+    text-align: right;
+  }
 }
 
 @keyframes drawer-slide-in {
