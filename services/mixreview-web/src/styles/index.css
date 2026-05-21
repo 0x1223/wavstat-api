@@ -2476,20 +2476,31 @@ h2 {
 
   /* ─ Mobile multitrack navigator — only when tracks.length > 1 ─────── */
   .mobile-track-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     overflow: hidden;
     animation: rise-in 460ms ease both;
   }
 
+  .mobile-track-nav-label {
+    font-size: 0.6rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.3);
+    padding: 0 2px;
+  }
+
   .mobile-track-nav-list {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(128px, 52vw);
-    gap: 6px;
-    overflow-x: auto;
-    padding: 1px 1px 4px;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    overflow-y: auto;
+    max-height: 34vh;
+    padding: 1px;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
 
   .mobile-track-nav-list::-webkit-scrollbar {
@@ -2498,36 +2509,64 @@ h2 {
 
   .mobile-track-nav-item {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-    min-height: 52px;
-    padding: 10px 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 8px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
     color: #e7dcc8;
     background: rgba(255, 255, 255, 0.04);
     cursor: pointer;
-    scroll-snap-align: start;
     text-align: left;
+    width: 100%;
     transition:
       border-color 160ms ease,
-      background 160ms ease;
+      background 160ms ease,
+      box-shadow 160ms ease;
   }
 
   .mobile-track-nav-item.active {
     border-color: rgba(215, 173, 98, 0.56);
-    background: rgba(215, 173, 98, 0.13);
+    background: rgba(215, 173, 98, 0.1);
+    box-shadow: 0 0 0 1px rgba(215, 173, 98, 0.18), inset 0 0 12px rgba(215, 173, 98, 0.06);
+  }
+
+  .mobile-track-nav-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 5px;
+    flex-shrink: 0;
+    font-size: 0.68rem;
+    font-weight: 800;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.4);
+  }
+
+  .mobile-track-nav-item.active .mobile-track-nav-badge {
+    background: rgba(215, 173, 98, 0.22);
+    color: #ffd889;
+  }
+
+  .mobile-track-nav-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
   }
 
   .mobile-track-nav-title {
     font-size: 0.82rem;
-    font-weight: 800;
+    font-weight: 700;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 100%;
-    color: #fff4db;
+    color: rgba(255, 255, 255, 0.55);
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-title {
@@ -2535,20 +2574,39 @@ h2 {
   }
 
   .mobile-track-nav-status {
-    font-size: 0.68rem;
+    font-size: 0.64rem;
     font-weight: 700;
-    opacity: 0.6;
+    opacity: 0.4;
     white-space: nowrap;
   }
 
   .mobile-track-nav-status.status-approved {
     color: #79d28d;
-    opacity: 1;
+    opacity: 0.8;
   }
 
   .mobile-track-nav-status.status-needs-review {
     color: #ff9d6e;
-    opacity: 1;
+    opacity: 0.8;
+  }
+
+  .mobile-track-nav-bars {
+    display: flex;
+    align-items: center;
+    gap: 1.5px;
+    flex-shrink: 0;
+    opacity: 0.18;
+  }
+
+  .mobile-track-nav-item.active .mobile-track-nav-bars {
+    opacity: 0.65;
+  }
+
+  .mobile-track-nav-bars i {
+    display: block;
+    width: 2px;
+    border-radius: 1px;
+    background: currentColor;
   }
 
   /* Hide the compact TrackList when the premium MobileTrackNav is active */
