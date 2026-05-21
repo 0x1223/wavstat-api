@@ -2514,10 +2514,10 @@ h2 {
     gap: 6px;
     min-height: 36px;
     padding: 0 6px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(200, 50, 50, 0.55);
     border-radius: 6px;
-    color: #e7dcc8;
-    background: rgba(255, 255, 255, 0.04);
+    color: #d94444;
+    background: rgba(180, 40, 40, 0.08);
     cursor: pointer;
     text-align: left;
     width: 100%;
@@ -2545,8 +2545,8 @@ h2 {
     flex-shrink: 0;
     font-size: 0.64rem;
     font-weight: 800;
-    background: rgba(255, 255, 255, 0.07);
-    color: rgba(255, 255, 255, 0.35);
+    background: rgba(180, 40, 40, 0.2);
+    color: rgba(240, 110, 110, 0.85);
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-badge {
@@ -2560,7 +2560,7 @@ h2 {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: rgba(255, 255, 255, 0.45);
+    color: rgba(230, 90, 90, 0.85);
     min-width: 76px;
     max-width: 76px;
     flex-shrink: 0;
@@ -2579,7 +2579,7 @@ h2 {
     align-items: center;
     overflow: hidden;
     border-radius: 3px;
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(180, 40, 40, 0.07);
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-lane {
@@ -2595,7 +2595,7 @@ h2 {
     font-weight: 800;
     letter-spacing: 0.03em;
     white-space: nowrap;
-    color: rgba(255, 255, 255, 0.15);
+    color: rgba(220, 80, 80, 0.35);
     z-index: 2;
     pointer-events: none;
   }
@@ -2611,7 +2611,7 @@ h2 {
     align-items: center;
     gap: 1.5px;
     padding: 2px 3px;
-    opacity: 0.22;
+    opacity: 0.5;
     overflow: hidden;
   }
 
@@ -2634,13 +2634,13 @@ h2 {
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(200, 50, 50, 0.4);
     border-radius: 3px;
     padding: 0 3px;
     font-size: 0.6rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
-    color: rgba(255, 255, 255, 0.28);
+    color: rgba(230, 90, 90, 0.7);
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-count {
