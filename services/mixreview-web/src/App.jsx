@@ -128,6 +128,7 @@ export default function App() {
   );
   const [adminSessions, setAdminSessions] = useState([]);
   const [isAdminSessionsLoading, setIsAdminSessionsLoading] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
   const [shareId, setShareId] = useState(shareRoute?.shareId || restoredSession?.shareId || null);
   const [isSharePanelOpen, setIsSharePanelOpen] = useState(false);
   const [hasStarted, setHasStarted] = useState(
@@ -284,6 +285,7 @@ export default function App() {
     setMobileNoteDraft(null);
     setHasStarted(true);
     setIsSessionSynced(true);
+    setIsDirty(false);
     playerRef.current = null;
   }, [isEngineerUnlocked]);
 
@@ -411,11 +413,18 @@ export default function App() {
       return;
     }
 
+    // Only mark dirty after the first successful save has established a
+    // baseline — avoids a false "Unsaved changes" flash on initial load.
+    if (lastSavedSessionRef.current !== "") {
+      setIsDirty(true);
+    }
+
     const timeoutId = window.setTimeout(() => {
       saveSessionToApi(sessionSnapshot)
         .then(() => {
           lastSavedSessionRef.current = serializedSession;
           setIsSessionSynced(true);
+          setIsDirty(false);
         })
         .catch((error) => {
           setIsSessionSynced(false);
@@ -471,6 +480,7 @@ export default function App() {
     try {
       await saveSessionToApi(session);
       setIsSessionSynced(true);
+      setIsDirty(false);
       return session.id;
     } catch (error) {
       setIsSessionSynced(false);
@@ -479,6 +489,12 @@ export default function App() {
       setIsSessionSaving(false);
     }
   }, [sessionSnapshot]);
+
+  const handleForceSave = useCallback(() => {
+    ensureSessionPersisted().catch((error) => {
+      setSessionMessage(error.message || "Session could not be saved.");
+    });
+  }, [ensureSessionPersisted]);
 
   const handleAudioUpload = useCallback(async (file) => {
     if (!permissions.canEdit) {
@@ -1430,6 +1446,18 @@ export default function App() {
             onClose={() => setIsSharePanelOpen(false)}
           />
         )}
+        {isEngineerMode && hasStarted && (
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "0.82rem" }}>
+            <span style={{ opacity: 0.55 }}>
+              {isSessionSaving ? "Saving…" : isDirty ? "Unsaved changes" : "Saved"}
+            </span>
+            <div className="session-actions">
+              <button type="button" onClick={handleForceSave} disabled={isSessionSaving || !isDirty}>
+                Save Changes
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <section className="review-layout" aria-label="Mix review workspace">
@@ -1662,9 +1690,14 @@ function AdminDashboard({
     return groups;
   }, {});
   const draftSessions = buckets.Draft || [];
-  const pendingSessions = buckets["Pending Review"] || [];
   const needsReviewSessions = buckets["Needs Review"] || [];
   const approvedSessions = buckets.Approved || [];
+  // Count non-approved tracks across all sessions so the tile reflects
+  // individual track workload, not just session count.
+  const pendingTrackCount = sessions.reduce(
+    (sum, s) => sum + Math.max(0, (s.trackCount || 0) - (s.approvedTrackCount || 0)),
+    0
+  );
 
   return (
     <main className="app-shell admin-shell">
@@ -1699,7 +1732,7 @@ function AdminDashboard({
       <section className="admin-dashboard" aria-label="Admin dashboard">
         <div className="summary-grid">
           <SummaryTile label="Draft" value={draftSessions.length} />
-          <SummaryTile label="Pending Reviews" value={pendingSessions.length} />
+          <SummaryTile label="Pending Reviews" value={pendingTrackCount} />
           <SummaryTile label="Needs Review" value={needsReviewSessions.length} />
           <SummaryTile label="Approved" value={approvedSessions.length} />
         </div>
