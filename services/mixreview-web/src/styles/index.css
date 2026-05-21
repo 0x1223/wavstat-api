@@ -2555,6 +2555,34 @@ h2 {
   .reviewer-mode .review-main:has(.mobile-track-nav) .track-list-panel {
     display: none;
   }
+
+  /* ─ Full-height flex layout for multitrack mobile reviewer ─────────── */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-layout {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 6px;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
+    flex: 1;
+    min-height: 0;
+  }
 }
 
 @keyframes drawer-slide-in {
