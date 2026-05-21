@@ -3094,3 +3094,47 @@ h2 {
     display: none;
   }
 }
+
+/* ── Small-height mobile: keep fixed stack clear of scrollable content ─── */
+/* Targets portrait phones with short viewports (iPhone SE, 13 mini, etc.) */
+@media (max-width: 768px) and (max-height: 720px) {
+
+  /* 1. Push the multitrack flex container's bottom edge above the
+        full fixed stack. Stack heights from bottom:
+          transport  : 8px + 50px  = 58px
+          spectrum   : 60px + 72px = 132px
+          review btn : 142px + ~62px = 204px
+        Adding 12px breathing room → 216px.
+        The waveform panel box now ends above the review button and
+        cannot visually bleed into the transport zone. */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) {
+    padding-bottom: 216px;
+  }
+
+  /* 2. With the panel box now smaller, allow waveform content to
+        overflow visually below the box edge. The fixed layers
+        (review btn z-46, spectrum z-45, transport z-50) paint on
+        top, so the waveform remains visible in the usable region
+        and is masked only by the UI chrome below. */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
+    overflow: visible;
+  }
+
+  /* 3. Comment/note drawer: lift its bottom edge above the transport
+        bar top (~60px). Cap max-height so the drawer fits entirely
+        within the usable viewport on short screens. */
+  .mobile-comment-drawer {
+    bottom: 68px;
+    max-height: calc(100svh - 200px);
+  }
+
+  /* 4. Replace overflow-x:hidden with clip on the reviewer shell.
+        overflow:hidden creates a scroll container which in Safari iOS
+        can trap position:fixed children (drawers, panels) inside the
+        element's paint region rather than the viewport. overflow:clip
+        gives the same visual clipping without creating a scroll
+        container, so fixed elements position correctly to the viewport. */
+  .app-shell.reviewer-mode {
+    overflow-x: clip;
+  }
+}
