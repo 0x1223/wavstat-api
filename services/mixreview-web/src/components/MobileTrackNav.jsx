@@ -2,7 +2,7 @@ const BAR_HEIGHTS = [4, 7, 11, 16, 19, 13, 17, 10, 8, 14, 18, 12, 6, 15, 5, 9, 2
 
 function abbrev(str) {
   if (!str) return "Untitled";
-  return str.length > 10 ? str.slice(0, 9) + "…" : str;
+  return str.length > 11 ? str.slice(0, 11) + "…" : str;
 }
 
 function StemLane({ seed, label }) {
@@ -26,6 +26,8 @@ export function MobileTrackNav({ tracks, activeTrackId, onTrackSelect }) {
         {tracks.map((track, index) => {
           const isActive = track.id === activeTrackId;
           const title = abbrev(track.title || "Untitled Track");
+          const activeVersion = track.versions.find(v => v.id === track.activeVersionId) || track.versions[0];
+          const commentCount = activeVersion?.comments?.length ?? 0;
           return (
             <button
               key={track.id}
@@ -37,6 +39,7 @@ export function MobileTrackNav({ tracks, activeTrackId, onTrackSelect }) {
               <span className="mobile-track-nav-badge">{index + 1}</span>
               <span className="mobile-track-nav-name">{title}</span>
               <StemLane seed={index} label={title} />
+              <span className="mobile-track-nav-count">{commentCount}</span>
             </button>
           );
         })}
