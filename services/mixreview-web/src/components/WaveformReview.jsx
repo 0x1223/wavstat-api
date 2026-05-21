@@ -38,6 +38,8 @@ export function WaveformReview({
   const [loadError, setLoadError] = useState("");
   const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
   const [pendingMarker, setPendingMarker] = useState(null);
+  // Mobile-only: which marker's text bubble is currently expanded (tap-to-reveal)
+  const [activeBubbleId, setActiveBubbleId] = useState(null);
   const meterThrottleRef = useRef(0);
   const meterBufRef = useRef(null);
 
@@ -454,13 +456,19 @@ export function WaveformReview({
                   }${comment.isPreview ? " preview" : ""}`}
                   key={comment.id}
                   data-time={formatTimecode(comment.time)}
-                  data-bubble-align={bubbleAlign}
+                  data-bubble-align={showBubble ? bubbleAlign : undefined}
+                  data-bubble-active={showBubble && activeBubbleId === comment.id ? "true" : undefined}
                   style={{ left: comment.left }}
                   aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
                   onClick={(event) => {
                     event.stopPropagation();
                     if (!comment || comment.isPreview) return;
-                    if (!isMobileViewport()) seekToTime(comment.time);
+                    // Mobile: toggle the text bubble for this marker; desktop: seek
+                    if (isMobileViewport() && isReviewerMode) {
+                      setActiveBubbleId((prev) => (prev === comment.id ? null : comment.id));
+                    } else {
+                      seekToTime(comment.time);
+                    }
                     onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
                   }}
                 >
