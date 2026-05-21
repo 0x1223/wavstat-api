@@ -2511,16 +2511,17 @@ h2 {
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 10px;
-    min-height: 44px;
-    padding: 8px 12px;
+    gap: 6px;
+    min-height: 36px;
+    padding: 0 6px;
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
+    border-radius: 6px;
     color: #e7dcc8;
     background: rgba(255, 255, 255, 0.04);
     cursor: pointer;
     text-align: left;
     width: 100%;
+    overflow: hidden;
     transition:
       border-color 160ms ease,
       background 160ms ease,
@@ -2537,14 +2538,14 @@ h2 {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 5px;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
     flex-shrink: 0;
-    font-size: 0.68rem;
+    font-size: 0.64rem;
     font-weight: 800;
-    background: rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.35);
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-badge {
@@ -2552,59 +2553,75 @@ h2 {
     color: #ffd889;
   }
 
-  .mobile-track-nav-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .mobile-track-nav-title {
-    font-size: 0.82rem;
+  .mobile-track-nav-name {
+    font-size: 0.72rem;
     font-weight: 700;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: rgba(255, 255, 255, 0.55);
+    color: rgba(255, 255, 255, 0.45);
+    min-width: 52px;
+    max-width: 52px;
+    flex-shrink: 0;
   }
 
-  .mobile-track-nav-item.active .mobile-track-nav-title {
+  .mobile-track-nav-item.active .mobile-track-nav-name {
     color: #ffd889;
   }
 
-  .mobile-track-nav-status {
-    font-size: 0.64rem;
-    font-weight: 700;
-    opacity: 0.4;
+  .mobile-track-nav-lane {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .mobile-track-nav-item.active .mobile-track-nav-lane {
+    background: rgba(215, 173, 98, 0.06);
+  }
+
+  .mobile-track-nav-lane-label {
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.03em;
     white-space: nowrap;
+    color: rgba(255, 255, 255, 0.15);
+    z-index: 2;
+    pointer-events: none;
   }
 
-  .mobile-track-nav-status.status-approved {
-    color: #79d28d;
-    opacity: 0.8;
-  }
-
-  .mobile-track-nav-status.status-needs-review {
-    color: #ff9d6e;
-    opacity: 0.8;
+  .mobile-track-nav-item.active .mobile-track-nav-lane-label {
+    color: rgba(215, 173, 98, 0.38);
   }
 
   .mobile-track-nav-bars {
+    position: absolute;
+    inset: 0;
     display: flex;
     align-items: center;
     gap: 1.5px;
-    flex-shrink: 0;
-    opacity: 0.18;
+    padding: 2px 3px;
+    opacity: 0.22;
+    overflow: hidden;
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-bars {
-    opacity: 0.65;
+    opacity: 0.6;
   }
 
   .mobile-track-nav-bars i {
     display: block;
     width: 2px;
+    flex-shrink: 0;
     border-radius: 1px;
     background: currentColor;
   }
