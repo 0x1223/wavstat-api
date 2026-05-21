@@ -56,7 +56,7 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
       ctx.clearRect(0, 0, W, H);
 
       const slotW = W / N;
-      const barW = Math.max(1, (slotW * 0.74) | 0);
+      const barW = Math.max(1, slotW - 1);
       const sampleRate = audioCtx.sampleRate;
       const binHz = sampleRate / FFT_SIZE;
       const M = freqData.length;
