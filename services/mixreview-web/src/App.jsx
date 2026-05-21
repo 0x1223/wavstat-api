@@ -143,6 +143,7 @@ export default function App() {
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [mediaElement, setMediaElement] = useState(null);
   const [mobileNoteDraft, setMobileNoteDraft] = useState(null);
+  const [meterValues, setMeterValues] = useState(null);
   const [mobileCommentDrawerId, setMobileCommentDrawerId] = useState(null);
   const [mobileCommentDraft, setMobileCommentDraft] = useState("");
   const [deleteConfirmPending, setDeleteConfirmPending] = useState(false);
@@ -1246,6 +1247,10 @@ export default function App() {
     updateActiveVersion((version) => ({ ...version, duration: nextDuration }));
   }, [updateActiveVersion]);
 
+  const handleMeterUpdate = useCallback((vals) => {
+    setMeterValues(vals);
+  }, []);
+
   const handlePlaybackTimeUpdate = useCallback((time) => {
     setCurrentTime(time);
 
@@ -1505,6 +1510,7 @@ export default function App() {
             onPlaybackChange={setIsPlaying}
             isReviewerMode={isReviewerMode}
             onMobileNoteRequest={openMobileNote}
+            onMeterUpdate={isReviewerMode && tracks.length > 1 ? handleMeterUpdate : undefined}
           />
           <SpectrumAnalyzer mediaElement={mediaElement} isPlaying={isPlaying} />
         </div>
@@ -1626,7 +1632,7 @@ export default function App() {
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}
         loudnessMeta={isReviewerMode && tracks.length > 1
-          ? { lufs: "-14.2", lra: "6.8", tp: "-1.0" }
+          ? (meterValues ?? { lufs: "–", lra: "–", tp: "–" })
           : null}
       />
 

@@ -2703,17 +2703,23 @@ h2 {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    align-items: flex-end;
-    gap: 2px;
+    align-items: stretch;
+    gap: 3px;
     grid-column: 3;
     padding-left: 8px;
+    margin-right: 10px;
     border-left: 1px solid rgba(255, 255, 255, 0.07);
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-row {
-    display: flex;
-    align-items: baseline;
+    display: grid;
+    grid-template-columns: 26px 1fr 38px;
+    align-items: center;
     gap: 4px;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-row--lra {
+    grid-template-columns: 26px 38px;
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-label {
@@ -2722,7 +2728,6 @@ h2 {
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: rgba(215, 173, 98, 0.55);
-    min-width: 26px;
     text-align: right;
   }
 
@@ -2734,6 +2739,23 @@ h2 {
     color: #fff4db;
     min-width: 32px;
     text-align: right;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-bar {
+    height: 3px;
+    background: rgba(215, 173, 98, 0.12);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-fill {
+    position: absolute;
+    inset: 0;
+    width: calc(var(--meter-fill, 0) * 100%);
+    background: linear-gradient(to right, rgba(80, 168, 100, 0.9), rgba(215, 163, 84, 0.9));
+    border-radius: 2px;
+    transition: width 0.08s linear;
   }
 }
 

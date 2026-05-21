@@ -18,8 +18,14 @@ const FREQ_LABELS = [
   [16, "1k"], [19, "2k"], [22, "4k"], [25, "8k"], [28, "16kHz"],
 ];
 
-export function MobileSpectrumAnalyzer({ wsRef }) {
+export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
   const canvasRef = useRef(null);
+  const onFrameRef = useRef(onFrame);
+
+  // Keep onFrameRef.current in sync without re-running the audio effect
+  useEffect(() => {
+    onFrameRef.current = onFrame;
+  }, [onFrame]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -99,6 +105,7 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
     function tick() {
       if (!alive || !isPlaying) return;
       paint();
+      try { if (onFrameRef.current) onFrameRef.current(analyser); } catch (_) {}
       rafId = requestAnimationFrame(tick);
     }
 
