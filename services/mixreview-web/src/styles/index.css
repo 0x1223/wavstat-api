@@ -2093,7 +2093,9 @@ h2 {
   .app-shell.reviewer-mode {
     display: block;
     padding: 8px 8px 76px;
-    overflow-x: hidden;
+    /* clip doesn't create a scroll container, so iOS Safari doesn't
+       trap position:fixed drawers inside this element's paint region */
+    overflow-x: clip;
   }
 
   .reviewer-mode .top-stack {
@@ -2341,7 +2343,8 @@ h2 {
     position: fixed;
     left: 8px;
     right: 8px;
-    bottom: 8px;
+    /* sit above the iOS home-indicator on notched phones */
+    bottom: max(8px, env(safe-area-inset-bottom, 8px));
     z-index: 50;
     min-height: 50px;
     display: grid;
@@ -2472,6 +2475,14 @@ h2 {
     width: 100%;
     height: 72px;
     border-radius: 3px;
+  }
+
+  /* Comment drawer must always clear the fixed transport.
+     transport bottom = max(8px, safe-area); transport height ≈ 50–66px.
+     Adding 70px offset guarantees ≥7px gap even on notched phones. */
+  .reviewer-mode .mobile-comment-drawer {
+    bottom: calc(max(8px, env(safe-area-inset-bottom, 0px)) + 70px);
+    max-height: 50vh;
   }
 
   /* ─ Mobile multitrack navigator — only when tracks.length > 1 ─────── */
@@ -2654,11 +2665,14 @@ h2 {
   }
 
   /* ─ Full-height flex layout for multitrack mobile reviewer ─────────── */
+  /* Transport is fixed at the bottom; everything else is in normal flow.
+     padding-bottom reserves space for the transport + safe area so the
+     card never slides behind the transport on any phone size. */
   .app-shell.reviewer-mode:has(.mobile-track-nav) {
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
     min-height: 100dvh;
+    padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-layout {
@@ -2680,37 +2694,46 @@ h2 {
     flex-shrink: 0;
   }
 
+  /* Waveform card becomes a flex column so its children stack in order:
+     mix-strip → waveform-stage (fills remaining space) → review-console → spectrum */
   .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
     flex: 1;
     min-height: 0;
-    align-content: start;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
+  /* Waveform stage grows to fill whatever height the card has after the
+     other flex siblings claim their natural sizes. WaveSurfer's 180px
+     canvas is clipped here if the viewport is very short — intentional. */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Review console — back in normal flow inside the card */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    flex-shrink: 0;
+    padding: 6px 0;
+    margin: 0;
+    pointer-events: auto;
+  }
+
+  /* Spectrum — back in normal flow inside the card */
   .app-shell.reviewer-mode:has(.mobile-track-nav) .mobile-spectrum-container {
-    position: fixed;
-    left: 8px;
-    right: 8px;
-    bottom: 60px;
-    z-index: 45;
-    margin-top: 0;
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    flex-shrink: 0;
+    margin: 0;
     padding: 0;
     background: rgba(10, 10, 10, 0.94);
     border-radius: 4px;
-  }
-
-  /* Pin the REVIEW button fixed above the spectrum so it can never be
-     overlapped or pushed off-screen by the fixed transport/spectrum stack.
-     spectrum = bottom:60px + 72px canvas = top at 132px from bottom.
-     review console sits in the 10px gap above that. */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
-    position: fixed;
-    left: 8px;
-    right: 8px;
-    bottom: 142px;
-    z-index: 46;
-    padding-top: 0;
-    margin-top: 0;
-    pointer-events: auto;
   }
 
   /* ─ Loudness meter in multitrack transport ──────────────────────────── */
@@ -3095,46 +3118,11 @@ h2 {
   }
 }
 
-/* ── Small-height mobile: keep fixed stack clear of scrollable content ─── */
-/* Targets portrait phones with short viewports (iPhone SE, 13 mini, etc.) */
+/* ── Small-height mobile: tighten comment drawer max-height ─────────── */
+/* Spectrum and review console are now in normal flow so no fixed-stack
+   padding hacks are needed here. Just cap the drawer on short screens. */
 @media (max-width: 768px) and (max-height: 720px) {
-
-  /* 1. Push the multitrack flex container's bottom edge above the
-        full fixed stack. Stack heights from bottom:
-          transport  : 8px + 50px  = 58px
-          spectrum   : 60px + 72px = 132px
-          review btn : 142px + ~62px = 204px
-        Adding 12px breathing room → 216px.
-        The waveform panel box now ends above the review button and
-        cannot visually bleed into the transport zone. */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) {
-    padding-bottom: 216px;
-  }
-
-  /* 2. With the panel box now smaller, allow waveform content to
-        overflow visually below the box edge. The fixed layers
-        (review btn z-46, spectrum z-45, transport z-50) paint on
-        top, so the waveform remains visible in the usable region
-        and is masked only by the UI chrome below. */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
-    overflow: visible;
-  }
-
-  /* 3. Comment/note drawer: lift its bottom edge above the transport
-        bar top (~60px). Cap max-height so the drawer fits entirely
-        within the usable viewport on short screens. */
-  .mobile-comment-drawer {
-    bottom: 68px;
-    max-height: calc(100svh - 200px);
-  }
-
-  /* 4. Replace overflow-x:hidden with clip on the reviewer shell.
-        overflow:hidden creates a scroll container which in Safari iOS
-        can trap position:fixed children (drawers, panels) inside the
-        element's paint region rather than the viewport. overflow:clip
-        gives the same visual clipping without creating a scroll
-        container, so fixed elements position correctly to the viewport. */
-  .app-shell.reviewer-mode {
-    overflow-x: clip;
+  .reviewer-mode .mobile-comment-drawer {
+    max-height: calc(100svh - 160px);
   }
 }
