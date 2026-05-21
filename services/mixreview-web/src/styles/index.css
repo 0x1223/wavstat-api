@@ -1861,16 +1861,15 @@ h2 {
 }
 
 .spectrum-panel {
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 8px;
   padding: 18px 22px;
   background:
-    linear-gradient(155deg, rgba(255, 255, 255, 0.055) 0%, transparent 38%),
-    rgba(11, 11, 13, 0.93);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 42%),
+    rgba(13, 13, 13, 0.9);
   box-shadow:
-    0 28px 90px rgba(0, 0, 0, 0.44),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  backdrop-filter: blur(12px);
+    0 20px 70px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
   animation: rise-in 460ms ease both;
 }
 
@@ -1901,25 +1900,21 @@ h2 {
 .band-meter i {
   block-size: 5px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #7fd9a0, #f5c86a, #ffd080);
-  box-shadow: 0 0 10px rgba(241, 193, 94, 0.38), 0 0 24px rgba(241, 193, 94, 0.14);
+  background: linear-gradient(90deg, #8ec78f, #f1c15e);
+  box-shadow: 0 0 14px rgba(241, 193, 94, 0.28);
 }
 
 .spectrum-canvas-wrap {
   position: relative;
   min-height: 164px;
   margin-top: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   overflow: hidden;
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(180deg, #111115, #080809);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(180deg, #151515, #0c0c0c);
   background-size: 72px 100%, 100% 100%;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.4),
-    0 8px 32px rgba(0, 0, 0, 0.28);
 }
 
 .spectrum-canvas-wrap canvas {

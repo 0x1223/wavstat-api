@@ -61,66 +61,26 @@ export function MobileSpectrumAnalyzer({ wsRef }) {
       const binHz = sampleRate / FFT_SIZE;
       const M = freqData.length;
 
-      const r = Math.min((barW / 2) | 0, 3);
-
-      const amps = new Float32Array(N);
       for (let i = 0; i < N; i++) {
         const fc = CENTERS[i];
         const bLo = Math.max(0, Math.floor((fc / HALF_BW) / binHz));
         const bHi = Math.min(M - 1, Math.ceil((fc * HALF_BW) / binHz));
+
         let peak = 0;
-        for (let b = bLo; b <= bHi; b++) if (data[b] > peak) peak = data[b];
-        amps[i] = peak / 255;
-      }
+        for (let b = bLo; b <= bHi; b++) {
+          if (data[b] > peak) peak = data[b];
+        }
 
-      // Bloom pass
-      ctx.save();
-      ctx.globalAlpha = 0.18;
-      for (let i = 0; i < N; i++) {
-        if (amps[i] < 0.02) continue;
+        const amp = peak / 255;
+        // blue(240°) lows → cyan(180°) → green(120°) → yellow(60°) → red(0°) highs
         const hue = (240 - (i / (N - 1)) * 240) | 0;
-        const x = (i * slotW + (slotW - barW) / 2) | 0;
-        const h = Math.max(2, (amps[i] * H) | 0);
-        ctx.shadowColor = `hsl(${hue},100%,68%)`;
-        ctx.shadowBlur = 12;
-        ctx.fillStyle = `hsl(${hue},90%,60%)`;
-        ctx.fillRect(x - 2, H - h, barW + 4, h);
-      }
-      ctx.restore();
+        const lit = (28 + amp * 42) | 0;
+        ctx.fillStyle = `hsl(${hue},88%,${lit}%)`;
 
-      // blue(240°) lows → cyan(180°) → green(120°) → yellow(60°) → red(0°) highs
-      ctx.save();
-      for (let i = 0; i < N; i++) {
-        const amp = amps[i];
-        if (amp < 0.005) continue;
-        const hue = (240 - (i / (N - 1)) * 240) | 0;
         const x = (i * slotW + (slotW - barW) / 2) | 0;
         const h = Math.max(2, (amp * H) | 0);
-        const y = H - h;
-        const grad = ctx.createLinearGradient(0, y, 0, H);
-        grad.addColorStop(0, `hsl(${hue},96%,75%)`);
-        grad.addColorStop(0.45, `hsl(${hue},88%,52%)`);
-        grad.addColorStop(1, `hsl(${hue},78%,22%)`);
-        ctx.shadowColor = `hsl(${hue},95%,65%)`;
-        ctx.shadowBlur = 5;
-        ctx.fillStyle = grad;
-        const rx = r < h ? r : 0;
-        if (rx) {
-          ctx.beginPath();
-          ctx.moveTo(x + rx, y);
-          ctx.lineTo(x + barW - rx, y);
-          ctx.arcTo(x + barW, y, x + barW, y + rx, rx);
-          ctx.lineTo(x + barW, H);
-          ctx.lineTo(x, H);
-          ctx.lineTo(x, y + rx);
-          ctx.arcTo(x, y, x + rx, y, rx);
-          ctx.closePath();
-          ctx.fill();
-        } else {
-          ctx.fillRect(x, y, barW, h);
-        }
+        ctx.fillRect(x, H - h, barW, h);
       }
-      ctx.restore();
 
       ctx.save();
       ctx.font = "bold 8px monospace";

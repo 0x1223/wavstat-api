@@ -167,68 +167,31 @@ function drawGrid(ctx, canvas) {
 
 function drawSpectrum(ctx, canvas, data, sampleRate) {
   const points = 84;
-  const W = canvas.width;
-  const H = canvas.height;
-  const slotW = W / points;
-  const barW = Math.max(1, Math.round(slotW * 0.68));
-  const r = Math.min(barW / 2, 3);
-
-  const amps = new Float32Array(points);
-  for (let i = 0; i < points; i++) {
-    const freq = 20 * (1000 ** (i / (points - 1)));
-    amps[i] = data[frequencyToIndex(freq, sampleRate, data.length)] / 255;
-  }
-
-  // Bloom pass
-  ctx.save();
-  ctx.globalAlpha = 0.16;
-  for (let i = 0; i < points; i++) {
-    if (amps[i] < 0.02) continue;
-    const cx = (i / (points - 1)) * W;
-    const barH = amps[i] * H * 0.9;
-    const hue = Math.round(150 - (i / (points - 1)) * 100);
-    ctx.shadowColor = `hsl(${hue},100%,68%)`;
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = `hsl(${hue},90%,60%)`;
-    ctx.fillRect(cx - barW, H - barH, barW * 2, barH);
-  }
-  ctx.restore();
-
-  // Bars with vertical gradient and rounded tops
-  ctx.save();
-  for (let i = 0; i < points; i++) {
-    const v = amps[i];
-    if (v < 0.005) continue;
-    const cx = (i / (points - 1)) * W;
-    const x = cx - barW / 2;
-    const barH = Math.max(2, v * H * 0.9);
-    const y = H - barH;
-    const hue = Math.round(150 - (i / (points - 1)) * 100);
-    const grad = ctx.createLinearGradient(0, y, 0, H);
-    grad.addColorStop(0, `hsl(${hue},96%,75%)`);
-    grad.addColorStop(0.45, `hsl(${hue},88%,54%)`);
-    grad.addColorStop(1, `hsl(${hue},78%,22%)`);
-    ctx.shadowColor = `hsl(${hue},95%,65%)`;
-    ctx.shadowBlur = 6;
-    ctx.fillStyle = grad;
-    fillRoundedTop(ctx, x, y, barW, barH, r);
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-function fillRoundedTop(ctx, x, y, w, h, r) {
-  const rx = Math.min(r, w / 2, h);
-  if (!rx) { ctx.beginPath(); ctx.rect(x, y, w, h); return; }
   ctx.beginPath();
-  ctx.moveTo(x + rx, y);
-  ctx.lineTo(x + w - rx, y);
-  ctx.arcTo(x + w, y, x + w, y + rx, rx);
-  ctx.lineTo(x + w, y + h);
-  ctx.lineTo(x, y + h);
-  ctx.lineTo(x, y + rx);
-  ctx.arcTo(x, y, x + rx, y, rx);
-  ctx.closePath();
+  for (let i = 0; i < points; i += 1) {
+    const percent = i / (points - 1);
+    const frequency = 20 * (1000 ** percent);
+    const index = frequencyToIndex(frequency, sampleRate, data.length);
+    const value = data[index] / 255;
+    const x = percent * canvas.width;
+    const y = canvas.height - value * canvas.height * 0.9;
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+
+  const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+  gradient.addColorStop(0, "#8ec78f");
+  gradient.addColorStop(0.45, "#f1c15e");
+  gradient.addColorStop(1, "#ffe0a3");
+  ctx.strokeStyle = gradient;
+  ctx.lineWidth = 2;
+  ctx.shadowColor = "rgba(241, 193, 94, 0.38)";
+  ctx.shadowBlur = 16;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
 }
 
 function drawIdle(canvas) {
