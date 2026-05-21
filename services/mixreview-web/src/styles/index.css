@@ -2473,6 +2473,88 @@ h2 {
     height: 72px;
     border-radius: 3px;
   }
+
+  /* ─ Mobile multitrack navigator — only when tracks.length > 1 ─────── */
+  .mobile-track-nav {
+    overflow: hidden;
+    animation: rise-in 460ms ease both;
+  }
+
+  .mobile-track-nav-list {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(128px, 52vw);
+    gap: 6px;
+    overflow-x: auto;
+    padding: 1px 1px 4px;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .mobile-track-nav-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobile-track-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    min-height: 52px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #e7dcc8;
+    background: rgba(255, 255, 255, 0.04);
+    cursor: pointer;
+    scroll-snap-align: start;
+    text-align: left;
+    transition:
+      border-color 160ms ease,
+      background 160ms ease;
+  }
+
+  .mobile-track-nav-item.active {
+    border-color: rgba(215, 173, 98, 0.56);
+    background: rgba(215, 173, 98, 0.13);
+  }
+
+  .mobile-track-nav-title {
+    font-size: 0.82rem;
+    font-weight: 800;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    color: #fff4db;
+  }
+
+  .mobile-track-nav-item.active .mobile-track-nav-title {
+    color: #ffd889;
+  }
+
+  .mobile-track-nav-status {
+    font-size: 0.68rem;
+    font-weight: 700;
+    opacity: 0.6;
+    white-space: nowrap;
+  }
+
+  .mobile-track-nav-status.status-approved {
+    color: #79d28d;
+    opacity: 1;
+  }
+
+  .mobile-track-nav-status.status-needs-review {
+    color: #ff9d6e;
+    opacity: 1;
+  }
+
+  /* Hide the compact TrackList when the premium MobileTrackNav is active */
+  .reviewer-mode .review-main:has(.mobile-track-nav) .track-list-panel {
+    display: none;
+  }
 }
 
 @keyframes drawer-slide-in {
@@ -2790,7 +2872,8 @@ h2 {
 
 @media (min-width: 769px) {
   .mobile-comment-drawer,
-  .mobile-comment-drawer-backdrop {
+  .mobile-comment-drawer-backdrop,
+  .mobile-track-nav {
     display: none;
   }
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AudioUpload } from "./components/AudioUpload.jsx";
 import { CommentSidebar } from "./components/CommentSidebar.jsx";
 import { Header } from "./components/Header.jsx";
+import { MobileTrackNav } from "./components/MobileTrackNav.jsx";
 import { ReviewDashboard } from "./components/ReviewDashboard.jsx";
 import { SharePanel } from "./components/SharePanel.jsx";
 import { SpectrumAnalyzer } from "./components/SpectrumAnalyzer.jsx";
@@ -1462,6 +1463,14 @@ export default function App() {
 
       <section className="review-layout" aria-label="Mix review workspace">
         <div className="review-main">
+          {isReviewerMode && tracks.length > 1 && (
+            <MobileTrackNav
+              tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
+              activeTrackId={activeTrackId}
+              onTrackSelect={selectTrack}
+            />
+          )}
+
           <TrackList
             tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
             activeTrackId={activeTrackId}
