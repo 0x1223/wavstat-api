@@ -40,7 +40,6 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     let audioCtx = null;
     let detachWs = null;
     let reconnectIv = null;
-    let connectPending = false; // guard: only one tryConnect() in-flight at a time
     let frameCount = 0;
 
     // ── Drawing ──────────────────────────────────────────────────────────
@@ -148,7 +147,6 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     // stop audio routed through them).
     function tearDownAudio() {
       stopAnim();
-      connectPending = false; // abort any in-flight async connect attempt
       detachWs?.();
       detachWs = null;
       try { analyser?.disconnect(); } catch (_) {}
@@ -166,27 +164,13 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       if (reconnectIv != null) { clearInterval(reconnectIv); reconnectIv = null; }
     }
 
-    // Kick off one async connect attempt if none is already in-flight.
-    function _runConnect() {
-      if (connectPending || !alive || audioCtx) return;
-      connectPending = true;
-      tryConnect().then((ok) => {
-        connectPending = false;
-        if (ok) clearReconnect();
-      }).catch(() => {
-        connectPending = false;
-      });
-    }
-
     function startReconnectLoop() {
       clearReconnect();
-      connectPending = false;
-      _runConnect(); // first attempt immediately
+      if (tryConnect()) return;
       reconnectIv = setInterval(() => {
         if (!alive) { clearReconnect(); return; }
-        if (audioCtx) { clearReconnect(); return; } // already connected
-        _runConnect();
-      }, 300);
+        if (tryConnect()) clearReconnect();
+      }, 80);
     }
 
     // ── Audio setup ───────────────────────────────────────────────────────
@@ -194,56 +178,18 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     // createMediaElementSource() routes the element's audio through the context;
     // we connect to both destination (so the user hears audio) and analyser.
     //
-    // IMPORTANT: On iOS a new AudioContext always starts in "suspended" state.
-    // Calling createMediaElementSource() on a suspended context silences the
-    // media element even though mediaEl.paused === false — the "playing but
-    // silent" bug after background/sleep restore.  We therefore attempt
-    // ctx.resume() first and bail out — WITHOUT touching the media element —
-    // if the context cannot reach "running" state.  This keeps native playback
-    // alive while the reconnect loop retries on a subsequent user-gesture tick.
-    //
-    // This binding is released when tearDownAudio() calls audioCtx.close().
-    // After close(), the element plays natively again.
-    async function tryConnect() {
+    // IMPORTANT: this binding is released when tearDownAudio() calls
+    // audioCtx.close().  After close(), the element plays natively again.
+    function tryConnect() {
       const ws = wsRef.current;
       if (!ws) return false;
       const mediaEl = ws.getMediaElement?.();
       if (!mediaEl) return false;
-      if (audioCtx) return true; // already connected
 
-      // ── Create and warm up the AudioContext ─────────────────────────────
-      let ctx;
       try {
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
-        console.log("[MobileSpectrum] new AudioContext state:", ctx.state);
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        if (ctx.state !== "running") {
-          try { await ctx.resume(); } catch (_) {}
-          // Give the browser up to 80 ms to flip the state.
-          await new Promise((r) => setTimeout(r, 80));
-        }
-
-        if (ctx.state !== "running") {
-          // Still suspended — connecting now would silence the media element.
-          // Close it so the element stays on the native output path, and let
-          // the reconnect loop retry on the next user-gesture tick.
-          console.warn(
-            "[MobileSpectrum] AudioContext not running after resume — state:",
-            ctx.state,
-            "— deferring connect to preserve native audio",
-          );
-          ctx.close().catch(() => {});
-          return false;
-        }
-      } catch (e) {
-        console.warn("[MobileSpectrum] AudioContext creation failed:", e.message);
-        try { ctx?.close(); } catch (_) {}
-        return false;
-      }
-
-      // ── Wire the audio graph ────────────────────────────────────────────
-      try {
-        analyser = ctx.createAnalyser();
+        analyser = audioCtx.createAnalyser();
         analyser.fftSize = liteMode ? 1024 : FFT_SIZE;
         analyser.smoothingTimeConstant = 0.78;
         analyser.minDecibels = -90;
@@ -253,40 +199,14 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
 
         // Route: mediaElement → source → destination (pass-through to speakers)
         //                              → analyser    (spectrum data)
-        const src = ctx.createMediaElementSource(mediaEl);
-        src.connect(ctx.destination);
+        const src = audioCtx.createMediaElementSource(mediaEl);
+        src.connect(audioCtx.destination);
         src.connect(analyser);
-        audioCtx = ctx;
-        console.log("[MobileSpectrum] analyser connected, ctx state:", ctx.state);
       } catch (e) {
-        console.warn("[MobileSpectrum] audio graph wiring failed:", e.message);
-        try { ctx.close(); } catch (_) {}
-        analyser = null;
-        freqData = null;
-        decayBuf = null;
+        console.warn("[MobileSpectrum] audio connect failed:", e.message);
+        tearDownAudio();
         return false;
       }
-
-      // ── Monitor context for late suspensions ────────────────────────────
-      // e.g. incoming call, brief re-background before reconnect loop fires
-      ctx.addEventListener("statechange", () => {
-        if (!alive) return;
-        console.log("[MobileSpectrum] AudioContext statechange →", ctx.state);
-        if (ctx.state === "suspended" && isPlaying) {
-          console.log("[MobileSpectrum] context suspended mid-play — attempting resume");
-          ctx.resume().catch(() => {});
-        }
-        if (ctx.state === "closed") {
-          // Closed externally — drop our references so the next reconnect
-          // loop tick creates a fresh context.
-          if (audioCtx === ctx) {
-            audioCtx = null;
-            analyser = null;
-            freqData = null;
-            decayBuf = null;
-          }
-        }
-      });
 
       // Subscribe to WaveSurfer play/pause events
       function onPlay() { if (alive) startAnim(); }

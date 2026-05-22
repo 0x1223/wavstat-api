@@ -24,45 +24,6 @@ function _getMediaEl() {
   return null;
 }
 
-/**
- * Schedule a deferred check that audio is actually advancing after a
- * foreground / bfcache restore.  If currentTime has not moved after 1.5 s
- * while the element reports !paused, the AudioContext is likely suspended
- * (playing-but-silent).  We log the failure and attempt a no-op seek to
- * unstick potential buffering stalls.
- *
- * We do NOT seek to a different position or restart — that would break
- * in-progress scrubbing.  MobileSpectrumAnalyzer's own statechange listener
- * handles re-resuming the AudioContext on the visual side.
- */
-function _schedulePlaybackVerification(mediaEl) {
-  const t0 = mediaEl.currentTime;
-  setTimeout(() => {
-    if (!mediaEl || mediaEl.paused) return; // paused in the meantime — OK
-    const t1 = mediaEl.currentTime;
-    if (Math.abs(t1 - t0) < 0.05) {
-      // currentTime did not advance — stalled or AudioContext suspended.
-      console.warn("[MixReview] Playback verification FAILED — currentTime stalled", {
-        t0: t0.toFixed(2),
-        t1: t1.toFixed(2),
-        paused: mediaEl.paused,
-        readyState: mediaEl.readyState,
-        networkState: mediaEl.networkState,
-        error: mediaEl.error
-          ? { code: mediaEl.error.code, message: mediaEl.error.message }
-          : null,
-      });
-      // No-op seek: can unstick a buffering stall without changing position.
-      try { mediaEl.currentTime = mediaEl.currentTime; } catch (_) {}
-    } else {
-      console.log("[MixReview] Playback verification passed — audio advancing", {
-        t0: t0.toFixed(2),
-        t1: t1.toFixed(2),
-      });
-    }
-  }, 1500);
-}
-
 if (typeof document !== "undefined") {
   // ── visibilitychange ──────────────────────────────────────────────────────
   // Goal: keep the native audio element playing through background/lock-screen.
@@ -87,11 +48,6 @@ if (typeof document !== "undefined") {
       mode: _mobileMode,
       paused,
       currentTime: t != null ? t.toFixed(2) : null,
-      readyState: mediaEl?.readyState ?? null,
-      networkState: mediaEl?.networkState ?? null,
-      error: mediaEl?.error
-        ? { code: mediaEl.error.code, message: mediaEl.error.message }
-        : null,
     });
 
     if (document.hidden) {
@@ -102,7 +58,6 @@ if (typeof document !== "undefined") {
         wasPlaying: _wasPlayingOnHide,
         nowPaused: paused,
         currentTime: t != null ? t.toFixed(2) : null,
-        readyState: mediaEl?.readyState ?? null,
       });
       // Only restart if audio actually stopped while backgrounded (OS killed it
       // or the element errored). If it is still playing, leave it alone.
@@ -117,12 +72,6 @@ if (typeof document !== "undefined") {
             console.warn("[MixReview] native play restore failed", e.message)
           );
         }
-      }
-      // If the element is already playing on restore, schedule a deferred
-      // check to catch the "playing but silent" case where the AudioContext
-      // is suspended but mediaEl.paused is still false.
-      if (!paused && mediaEl) {
-        _schedulePlaybackVerification(mediaEl);
       }
       _wasPlayingOnHide = false;
     }
@@ -140,40 +89,12 @@ if (typeof document !== "undefined") {
 
   document.addEventListener("pageshow", (e) => {
     const mediaEl = _getMediaEl();
-    const t = mediaEl?.currentTime;
-    const paused = mediaEl?.paused ?? true;
     console.log("[MixReview] pageshow", {
       persisted: e.persisted,
       mode: _mobileMode,
-      paused,
-      currentTime: t != null ? t.toFixed(2) : null,
-      readyState: mediaEl?.readyState ?? null,
-      networkState: mediaEl?.networkState ?? null,
-      error: mediaEl?.error
-        ? { code: mediaEl.error.code, message: mediaEl.error.message }
-        : null,
+      paused: mediaEl?.paused,
+      currentTime: mediaEl?.currentTime?.toFixed(2) ?? null,
     });
-
-    // bfcache restore: the page was frozen and re-shown without a reload.
-    // The media element's paused state is frozen in place — restart playback
-    // if we were playing when the page froze.
-    if (e.persisted && _wasPlayingOnHide && paused && mediaEl) {
-      console.log("[MixReview] pageshow bfcache restore — restarting audio");
-      if (_ws) {
-        _ws.play().catch((err) =>
-          console.warn("[MixReview] ws.play bfcache restore failed", err.message)
-        );
-      } else if (_nativeAudio) {
-        _nativeAudio.play().catch((err) =>
-          console.warn("[MixReview] native play bfcache restore failed", err.message)
-        );
-      }
-    }
-    // If already playing after a persisted restore, check for silent playback
-    // (AudioContext may have been re-suspended by the browser during freeze).
-    if (e.persisted && !paused && mediaEl) {
-      _schedulePlaybackVerification(mediaEl);
-    }
   });
 }
 
