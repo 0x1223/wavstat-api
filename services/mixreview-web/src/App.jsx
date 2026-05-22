@@ -1511,9 +1511,7 @@ export default function App() {
             onMobileNoteRequest={openMobileNote}
             onMeterUpdate={isReviewerMode && tracks.length > 1 ? handleMeterUpdate : undefined}
           />
-          {!isMobileViewport() && (
-            <SpectrumAnalyzer mediaElement={mediaElement} isPlaying={isPlaying} />
-          )}
+          <SpectrumAnalyzer mediaElement={mediaElement} isPlaying={isPlaying} />
         </div>
 
         <div className="review-side">
