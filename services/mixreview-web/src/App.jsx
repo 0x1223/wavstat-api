@@ -93,6 +93,26 @@ const initialReviewer =
     : restoredSession?.currentReviewer ||
       (window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ? "Engineer" : "Artist");
 
+// Unlock the iOS audio session so that AudioContext.resume() succeeds from
+// non-gesture contexts (e.g. auto-next, analyzer reconnect). Called once from
+// the first user Play tap. On iOS, resuming any AudioContext under a user
+// gesture unlocks the audio session for the whole page, allowing subsequent
+// AudioContext.resume() calls (such as from MobileSpectrumAnalyzer) to succeed
+// without needing their own gesture token. Harmless on Android / desktop.
+function unlockAudioSession() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    const ctx = new Ctx();
+    const p = ctx.resume();
+    if (p && typeof p.then === "function") {
+      p.then(() => { try { ctx.close(); } catch (_) {} }).catch(() => {});
+    } else {
+      try { ctx.close(); } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 export default function App() {
   const [sessionId, setSessionId] = useState(
     restoredSession?.id || createSessionId(),
@@ -157,10 +177,12 @@ export default function App() {
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
   // Mobile auto-play-next refs (mobile reviewer only).
-  // userHasPlayedRef: true once the user has tapped Play at least once.
-  // autoPlayNextRef:  true when a track ends naturally → play next when ready.
+  // userHasPlayedRef:       true once the user has tapped Play at least once.
+  // autoPlayNextRef:        true when a track ends naturally → play next when ready.
+  // autoplayAttemptedRef:   prevents double-fire of the isPlayerReady effect per track.
   const userHasPlayedRef = useRef(false);
   const autoPlayNextRef = useRef(false);
+  const autoplayAttemptedRef = useRef(false);
 
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
@@ -1283,23 +1305,38 @@ export default function App() {
   //    play attempt. If the browser blocks it, we stay in ready (paused) state
   //    and never fake a playing state.
 
-  // When the player is ready for an auto-advanced track, attempt play.
-  // Fires only if autoPlayNextRef was set by the native ended handler below.
+  // Reset the per-track autoplay-attempt flag whenever the active track changes
+  // so each track gets exactly one autoplay attempt when it becomes ready.
+  useEffect(() => {
+    autoplayAttemptedRef.current = false;
+  }, [activeTrackId, activeVersionId]);
+
+  // When the player is ready, attempt play if:
+  //  • autoPlayNextRef is set (track ended naturally → auto-advance), OR
+  //  • userHasPlayedRef is set (user has tapped Play before → manual selection).
+  // autoplayAttemptedRef prevents firing twice for the same track load.
   useEffect(() => {
     if (!isReviewerMode || !isPlayerReady) return;
     if (!isMobileViewport()) return;
-    if (!autoPlayNextRef.current) return;
-    autoPlayNextRef.current = false;
+    if (autoplayAttemptedRef.current) return;
+
+    const isAutoNext = Boolean(autoPlayNextRef.current);
+    if (isAutoNext) autoPlayNextRef.current = false;
+
+    // Only autoplay if this is an auto-next advance OR the user has played before.
+    if (!isAutoNext && !userHasPlayedRef.current) return;
+
+    autoplayAttemptedRef.current = true;
     (async () => {
       try {
         await playerRef.current?.play();
       } catch (e) {
-        // Browser policy blocked auto-play-next. Show ready (paused) state —
+        // Browser policy blocked autoplay. Show ready (paused) state —
         // user must tap Play. Do not set isPlaying; native audio drives state.
-        console.log("[MixReview] Auto-play-next blocked by browser — waiting for Play tap", e?.name);
+        console.log("[MixReview] Autoplay blocked — waiting for Play tap", e?.name);
       }
     })();
-  }, [isPlayerReady, isReviewerMode]);
+  }, [isPlayerReady, isReviewerMode, activeTrackId, activeVersionId]);
 
   // Listen to the native ended event on the active media element.
   // Only auto-advances if the user has already tapped Play once this session.
@@ -1693,6 +1730,9 @@ export default function App() {
           // user is about to start playback.
           if (isMobileViewport() && isReviewerMode && !isPlaying) {
             userHasPlayedRef.current = true;
+            // Prime the iOS audio session so that AudioContext.resume() calls
+            // in MobileSpectrumAnalyzer succeed without their own gesture token.
+            unlockAudioSession();
           }
           playerRef.current?.playPause();
         }}
