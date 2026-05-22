@@ -38,13 +38,47 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
         return;
       }
 
+      // DIAG: log whether this desktop analyzer is mounting on a mobile viewport
+      const _isMobile = window.matchMedia?.("(max-width: 768px)")?.matches ?? false;
+      const _hasCaptureStream = typeof mediaElement.captureStream === "function";
+      console.log("[SpectrumAnalyzer] DIAG setupAnalyzer", {
+        isMobile: _isMobile,
+        hasCaptureStream: _hasCaptureStream,
+        mediaElSrc: (mediaElement.currentSrc || mediaElement.src || "").slice(0, 80),
+        mediaElPaused: mediaElement.paused,
+        mediaElMuted: mediaElement.muted,
+      });
+      // END DIAG
+
       context = new AudioContextConstructor();
+
+      // DIAG: monitor context state changes — critical for detecting suspension events
+      context.addEventListener("statechange", () => {
+        console.log("[SpectrumAnalyzer] DIAG AudioContext statechange →", context.state, {
+          isMobile: window.matchMedia?.("(max-width: 768px)")?.matches,
+          mediaElPaused: mediaElement?.paused,
+          mediaElMuted: mediaElement?.muted,
+        });
+      });
+      // END DIAG
+
       analyser = context.createAnalyser();
       analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.84;
       displayData = new Float32Array(analyser.frequencyBinCount);
       renderBuf = new Uint8Array(analyser.frequencyBinCount);
-      resumeContext = () => context?.resume?.();
+
+      // DIAG: log context state before and after resume attempt triggered by play
+      resumeContext = () => {
+        console.log("[SpectrumAnalyzer] DIAG resumeContext called, ctx.state before:", context?.state);
+        context?.resume?.().then(() => {
+          console.log("[SpectrumAnalyzer] DIAG context.resume() resolved, new state:", context?.state);
+        }).catch((e) => {
+          console.warn("[SpectrumAnalyzer] DIAG context.resume() rejected:", e.message);
+        });
+      };
+      // END DIAG
+
       mediaElement.addEventListener("play", resumeContext);
 
       if (mediaElement.captureStream) {
@@ -54,6 +88,17 @@ export function SpectrumAnalyzer({ mediaElement, isPlaying }) {
         source = context.createMediaElementSource(mediaElement);
         source.connect(analyser);
         analyser.connect(context.destination);
+        // DIAG: confirm this path ran — on iOS captureStream is unavailable so this
+        // claims full ownership of the media element via MediaElementAudioSourceNode
+        console.log("[SpectrumAnalyzer] DIAG createMediaElementSource succeeded", {
+          isMobile: window.matchMedia?.("(max-width: 768px)")?.matches,
+          ctxState: context.state,
+          mediaElPaused: mediaElement.paused,
+          warning: window.matchMedia?.("(max-width: 768px)")?.matches
+            ? "MOBILE: media element now owned by SpectrumAnalyzer AudioContext — MobileSpectrumAnalyzer will get InvalidStateError"
+            : null,
+        });
+        // END DIAG
       }
 
       draw();

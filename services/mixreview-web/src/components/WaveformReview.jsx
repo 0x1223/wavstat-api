@@ -160,7 +160,20 @@ export function WaveformReview({
         onPlaybackChange: (p) => callbacksRef.current.onPlaybackChange(p),
       }, mobileMode);
       wavesurferRef.current = ws;
+      // DIAG: log when the new WS is assigned so we can see timing vs MobileSpectrumAnalyzer mount
+      console.log("[WaveformReview] DIAG wavesurferRef set", {
+        mode: mobileMode,
+        hasMediaEl: Boolean(ws?.getMediaElement?.()),
+        mediaElSrc: (ws?.getMediaElement?.()?.currentSrc || ws?.getMediaElement?.()?.src || "").slice(0, 80),
+      });
+      // END DIAG
       return () => {
+        // DIAG: log cleanup order — MobileSpectrumAnalyzer cleanup runs before this
+        console.log("[WaveformReview] DIAG mobile cleanup — disposeMobileEngine", {
+          analyzerDiag: window.__mixreviewDiag?.analyzer?.() ?? null,
+          engineDiag: window.__mixreviewDiag?.engine?.() ?? null,
+        });
+        // END DIAG
         if (wavesurferRef.current === ws) wavesurferRef.current = null;
         resizeObserver.disconnect();
         disposeMobileEngine();

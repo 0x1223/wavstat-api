@@ -1,5 +1,14 @@
 import { useEffect, useRef } from "react";
 
+// DIAG: module-level state exposed via window.__mixreviewDiag.analyzer()
+// so the full audio state can be read from the browser console at any moment.
+const _msDiag = { audioCtxState: "none", analyserConnected: false, tryConnectAttempts: 0, lastError: null };
+if (typeof window !== "undefined") {
+  window.__mixreviewDiag = window.__mixreviewDiag || {};
+  window.__mixreviewDiag.analyzer = () => ({ ..._msDiag });
+}
+// END DIAG
+
 // Standard ISO 1/3-octave center frequencies, 25 Hz – 20 kHz (30 bands)
 const CENTERS = [
   25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200,
@@ -152,10 +161,37 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     // Those listeners stay alive across reconnects so that the next play
     // gesture can trigger tryConnect() in the right call-stack context.
     function tearDownAudioCtx() {
+      // DIAG: capture state before teardown so we can see what was connected
+      const _mediaEl = wsRef.current?.getMediaElement?.();
+      console.log("[MobileSpectrum] DIAG tearDownAudioCtx", {
+        ctxState: audioCtx?.state ?? "null",
+        analyserConnected: Boolean(analyser),
+        mediaElPaused: _mediaEl?.paused ?? null,
+        mediaElMuted: _mediaEl?.muted ?? null,
+        mediaElSrc: (_mediaEl?.currentSrc || _mediaEl?.src || "").slice(0, 80),
+      });
+      _msDiag.audioCtxState = "tearing-down";
+      _msDiag.analyserConnected = false;
+      // END DIAG
+
       stopAnim();
       try { analyser?.disconnect(); } catch (_) {}
       if (audioCtx && audioCtx.state !== "closed") {
-        audioCtx.close().catch(() => {});
+        // DIAG: track when the async close actually resolves
+        const _ctxRef = audioCtx;
+        const _ctxStateAtClose = audioCtx.state;
+        _ctxRef.close().then(() => {
+          const _el = wsRef.current?.getMediaElement?.();
+          console.log("[MobileSpectrum] DIAG AudioContext.close() resolved", {
+            stateAtCloseCall: _ctxStateAtClose,
+            finalCtxState: _ctxRef.state,
+            mediaElPaused: _el?.paused ?? null,
+            mediaElMuted: _el?.muted ?? null,
+            mediaElSrc: (_el?.currentSrc || _el?.src || "").slice(0, 80),
+          });
+          _msDiag.audioCtxState = "closed";
+        }).catch(() => {});
+        // END DIAG
       }
       audioCtx = null;
       analyser = null;
@@ -202,6 +238,16 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       const ws = wsRef.current;
       if (!ws || detachWs) return; // already attached or WaveSurfer not ready
 
+      // DIAG: log when listeners are actually attached so we can see timing relative to mount
+      const _mediaEl = ws.getMediaElement?.();
+      console.log("[MobileSpectrum] DIAG attachWsListeners", {
+        wsIsPlaying: ws.isPlaying?.() ?? null,
+        mediaElSrc: (_mediaEl?.currentSrc || _mediaEl?.src || "").slice(0, 80),
+        mediaElPaused: _mediaEl?.paused ?? null,
+        audioCtxState: audioCtx?.state ?? "none",
+      });
+      // END DIAG
+
       function onPlay() {
         if (!alive) return;
         // Gesture-driven connect: if no context, try now while inside gesture.
@@ -246,6 +292,16 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       const mediaEl = ws.getMediaElement?.();
       if (!mediaEl) return false;
 
+      // DIAG: log each attempt so we can count failures and see media element state
+      _msDiag.tryConnectAttempts += 1;
+      console.log("[MobileSpectrum] DIAG tryConnect attempt #" + _msDiag.tryConnectAttempts, {
+        mediaElSrc: (mediaEl.currentSrc || mediaEl.src || "").slice(0, 80),
+        mediaElPaused: mediaEl.paused,
+        mediaElMuted: mediaEl.muted,
+        hidden: document.hidden,
+      });
+      // END DIAG
+
       let ctx;
       try {
         ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -286,8 +342,26 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
         src.connect(analyser);
         audioCtx = ctx;
         console.log("[MobileSpectrum] analyser connected, ctx state:", ctx.state);
+        // DIAG
+        _msDiag.audioCtxState = ctx.state;
+        _msDiag.analyserConnected = true;
+        _msDiag.lastError = null;
+        // END DIAG
       } catch (e) {
-        console.warn("[MobileSpectrum] audio graph wiring failed:", e.message);
+        // DIAG: InvalidStateError here means the media element is already owned
+        // by another AudioContext (most likely SpectrumAnalyzer on mobile)
+        console.warn("[MobileSpectrum] DIAG audio graph wiring FAILED —", e.name + ":", e.message, {
+          ctxState: ctx.state,
+          mediaElSrc: (mediaEl.currentSrc || mediaEl.src || "").slice(0, 80),
+          mediaElPaused: mediaEl.paused,
+          mediaElMuted: mediaEl.muted,
+          hint: e.name === "InvalidStateError"
+            ? "Media element already owned by another AudioContext — check [SpectrumAnalyzer] DIAG logs"
+            : "",
+        });
+        _msDiag.lastError = e.name + ": " + e.message;
+        _msDiag.audioCtxState = "wiring-failed";
+        // END DIAG
         ctx.close().catch(() => {});
         analyser = null;
         freqData = null;
@@ -300,7 +374,16 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       // output before iOS silences audio through the suspended graph.
       ctx.addEventListener("statechange", () => {
         if (!alive || audioCtx !== ctx) return;
-        console.log("[MobileSpectrum] AudioContext statechange →", ctx.state);
+        // DIAG: log full media element state at suspension time
+        const _el = wsRef.current?.getMediaElement?.();
+        console.log("[MobileSpectrum] DIAG AudioContext statechange →", ctx.state, {
+          mediaElPaused: _el?.paused ?? null,
+          mediaElMuted: _el?.muted ?? null,
+          mediaElCurrentTime: _el?.currentTime != null ? _el.currentTime.toFixed(2) : null,
+          hidden: document.hidden,
+        });
+        _msDiag.audioCtxState = ctx.state;
+        // END DIAG
         if (ctx.state === "suspended") {
           tearDownAudioCtx(); // release media element to native output
           // Restart reconnect loop; reattaches after next user gesture.
@@ -323,10 +406,33 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     function handleVisibilityChange() {
       if (!alive) return;
       if (document.hidden) {
+        // DIAG: snapshot full state at the moment we go hidden
+        const _el = wsRef.current?.getMediaElement?.();
+        console.log("[MobileSpectrum] DIAG page hidden — pre-teardown state", {
+          ctxState: audioCtx?.state ?? "none (not connected)",
+          analyserConnected: Boolean(analyser),
+          mediaElPaused: _el?.paused ?? null,
+          mediaElMuted: _el?.muted ?? null,
+          mediaElCurrentTime: _el?.currentTime != null ? _el.currentTime.toFixed(2) : null,
+          lastError: _msDiag.lastError,
+        });
+        // END DIAG
         console.log("[MobileSpectrum] page hidden — releasing AudioContext");
         clearReconnect();
         tearDownAudioCtx(); // WaveSurfer listeners (detachWs) kept alive
       } else {
+        // DIAG: snapshot state on restore — is the AudioContext already gone?
+        const _el = wsRef.current?.getMediaElement?.();
+        console.log("[MobileSpectrum] DIAG page visible — restore state", {
+          ctxState: audioCtx?.state ?? "none (torn down)",
+          analyserConnected: Boolean(analyser),
+          mediaElPaused: _el?.paused ?? null,
+          mediaElMuted: _el?.muted ?? null,
+          mediaElCurrentTime: _el?.currentTime != null ? _el.currentTime.toFixed(2) : null,
+          lastError: _msDiag.lastError,
+          tryConnectAttempts: _msDiag.tryConnectAttempts,
+        });
+        // END DIAG
         console.log("[MobileSpectrum] page visible — starting analyser reconnect loop");
         startReconnectLoop();
       }
