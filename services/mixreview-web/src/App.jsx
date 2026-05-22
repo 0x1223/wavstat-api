@@ -156,11 +156,14 @@ export default function App() {
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
-  // Mobile auto-play-next refs (mobile reviewer only).
-  // userHasPlayedRef: true once the user has tapped Play at least once.
-  // autoPlayNextRef:  true when a track ends naturally → play next when ready.
+  // Mobile playback refs (mobile reviewer only).
+  // userHasPlayedRef:    true once the user has tapped Play at least once.
+  // autoPlayNextRef:     true when a track ends naturally → play next when ready.
+  // autoplayAttemptedRef: true once play has been attempted for the current track,
+  //                        prevents double-fire if isPlayerReady toggles.
   const userHasPlayedRef = useRef(false);
   const autoPlayNextRef = useRef(false);
+  const autoplayAttemptedRef = useRef(false);
 
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
@@ -1275,28 +1278,44 @@ export default function App() {
 
   // ── Mobile auto-play-next ─────────────────────────────────────────────────
   // Rules:
-  //  • No autoplay on initial load or manual track selection.
-  //  • userHasPlayedRef is set only when the user explicitly taps Play.
-  //  • autoPlayNextRef is set only when a track ends naturally (native ended
-  //    event) and the user has already played at least once this session.
-  //  • When the next track's player becomes ready, autoPlayNextRef gates the
-  //    play attempt. If the browser blocks it, we stay in ready (paused) state
-  //    and never fake a playing state.
+  //  • No autoplay on initial page load (userHasPlayedRef is false).
+  //  • After the user taps Play once, any subsequent track that becomes
+  //    ready (via manual selection OR track-end advance) autoplays.
+  //  • autoPlayNextRef is set by the native ended handler; manual taps in
+  //    MobileTrackNav clear it so the correct path fires.
+  //  • If the browser blocks a play attempt, stay in paused/ready state.
+  //    Never fake isPlaying; native audio events drive transport state.
 
-  // When the player is ready for an auto-advanced track, attempt play.
-  // Fires only if autoPlayNextRef was set by the native ended handler below.
+  // Reset the per-track "attempted" flag whenever the active track changes.
+  useEffect(() => {
+    autoplayAttemptedRef.current = false;
+    // Do NOT reset autoPlayNextRef here — it is set before selectTrack() is
+    // called and must survive the activeTrackId state update.
+  }, [activeTrackId, activeVersionId]);
+
+  // When the player is ready: play if the user has previously pressed Play
+  // (covers both manual track selection and auto-advance on track end).
   useEffect(() => {
     if (!isReviewerMode || !isPlayerReady) return;
     if (!isMobileViewport()) return;
-    if (!autoPlayNextRef.current) return;
-    autoPlayNextRef.current = false;
+    if (autoplayAttemptedRef.current) return; // Already attempted for this track
+
+    // Determine why we're here: auto-advance vs. manual track select.
+    const isAutoNext = autoPlayNextRef.current;
+    if (isAutoNext) autoPlayNextRef.current = false;
+
+    // Only play if the user has tapped Play at least once this session,
+    // OR this is an explicit auto-next triggered by a track ending.
+    if (!isAutoNext && !userHasPlayedRef.current) return;
+
+    autoplayAttemptedRef.current = true;
     (async () => {
       try {
         await playerRef.current?.play();
       } catch (e) {
-        // Browser policy blocked auto-play-next. Show ready (paused) state —
-        // user must tap Play. Do not set isPlaying; native audio drives state.
-        console.log("[MixReview] Auto-play-next blocked by browser — waiting for Play tap", e?.name);
+        // Browser policy blocked play. Show ready (paused) state — user must
+        // tap Play. Do not set isPlaying; native audio events drive state.
+        console.log("[MixReview] Autoplay attempt blocked by browser — waiting for Play tap", e?.name);
       }
     })();
   }, [isPlayerReady, isReviewerMode]);
