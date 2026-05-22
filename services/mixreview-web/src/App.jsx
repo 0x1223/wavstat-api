@@ -156,7 +156,13 @@ export default function App() {
     Boolean(!forceStartScreen && (shareRoute || restoredSession || routeMode)),
   );
   const [isSessionHydrating, setIsSessionHydrating] = useState(
-    Boolean(!forceStartScreen && routeSessionId && !restoredSession),
+    // Start hydrating whenever a session ID is present in the URL, even if a
+    // local cache was found. The old value (`&& !restoredSession`) allowed the
+    // auto-save effect to fire before the API verification GET completed, which
+    // could recreate a server-deleted session from a reviewer's localStorage
+    // cache on slow networks. By starting as true unconditionally, the auto-save
+    // is blocked until the API confirms the session still exists (or marks it gone).
+    Boolean(!forceStartScreen && routeSessionId),
   );
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
