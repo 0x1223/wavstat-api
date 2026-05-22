@@ -156,8 +156,11 @@ export default function App() {
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
-  const pendingAutoplayRef = useRef(false);
-  const autoplayAttemptedRef = useRef(false);
+  // Mobile auto-play-next refs (mobile reviewer only).
+  // userHasPlayedRef: true once the user has tapped Play at least once.
+  // autoPlayNextRef:  true when a track ends naturally → play next when ready.
+  const userHasPlayedRef = useRef(false);
+  const autoPlayNextRef = useRef(false);
 
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
@@ -1270,49 +1273,53 @@ export default function App() {
     }
   }, [comments, updateActiveVersion]);
 
-  // ── Mobile autoplay ──────────────────────────────────────────────────────
-  // Reset attempt flag whenever the active track/version changes so autoplay
-  // fires again for each newly loaded track.
-  useEffect(() => {
-    autoplayAttemptedRef.current = false;
-    pendingAutoplayRef.current = false;
-  }, [activeTrackId, activeVersionId]);
+  // ── Mobile auto-play-next ─────────────────────────────────────────────────
+  // Rules:
+  //  • No autoplay on initial load or manual track selection.
+  //  • userHasPlayedRef is set only when the user explicitly taps Play.
+  //  • autoPlayNextRef is set only when a track ends naturally (native ended
+  //    event) and the user has already played at least once this session.
+  //  • When the next track's player becomes ready, autoPlayNextRef gates the
+  //    play attempt. If the browser blocks it, we stay in ready (paused) state
+  //    and never fake a playing state.
 
-  // Once the player is ready on mobile reviewer, attempt autoplay once.
-  // If the browser blocks it (NotAllowedError / AbortError), set the pending flag.
+  // When the player is ready for an auto-advanced track, attempt play.
+  // Fires only if autoPlayNextRef was set by the native ended handler below.
   useEffect(() => {
     if (!isReviewerMode || !isPlayerReady) return;
     if (!isMobileViewport()) return;
-    if (autoplayAttemptedRef.current) return;
-    autoplayAttemptedRef.current = true;
+    if (!autoPlayNextRef.current) return;
+    autoPlayNextRef.current = false;
     (async () => {
       try {
         await playerRef.current?.play();
       } catch (e) {
-        if (e?.name === "NotAllowedError" || e?.name === "AbortError") {
-          pendingAutoplayRef.current = true;
-        }
+        // Browser policy blocked auto-play-next. Show ready (paused) state —
+        // user must tap Play. Do not set isPlaying; native audio drives state.
+        console.log("[MixReview] Auto-play-next blocked by browser — waiting for Play tap", e?.name);
       }
     })();
   }, [isPlayerReady, isReviewerMode]);
 
-  // On the first meaningful user interaction, retry any pending autoplay.
-  // Listeners are passive and cleaned up on unmount.
+  // Listen to the native ended event on the active media element.
+  // Only auto-advances if the user has already tapped Play once this session.
   useEffect(() => {
-    if (!isReviewerMode) return;
-    if (!isMobileViewport()) return;
-    function handleInteraction() {
-      if (!pendingAutoplayRef.current) return;
-      pendingAutoplayRef.current = false;
-      try { playerRef.current?.play()?.catch?.(() => {}); } catch (_) {}
+    if (!isReviewerMode || !isMobileViewport()) return;
+    if (!mediaElement) return;
+
+    function handleNativeEnded() {
+      if (!userHasPlayedRef.current) return; // No play yet — never auto-advance
+      const currentIdx = tracks.findIndex((t) => t.id === activeTrackId);
+      if (currentIdx < 0 || currentIdx >= tracks.length - 1) return; // Last track
+      const nextTrack = tracks[currentIdx + 1];
+      console.log("[MixReview] Track ended — auto-advancing to:", nextTrack.title);
+      autoPlayNextRef.current = true;
+      selectTrack(nextTrack.id);
     }
-    document.addEventListener("touchstart", handleInteraction, { passive: true });
-    document.addEventListener("click", handleInteraction, { passive: true });
-    return () => {
-      document.removeEventListener("touchstart", handleInteraction);
-      document.removeEventListener("click", handleInteraction);
-    };
-  }, [isReviewerMode]);
+
+    mediaElement.addEventListener("ended", handleNativeEnded);
+    return () => mediaElement.removeEventListener("ended", handleNativeEnded);
+  }, [mediaElement, isReviewerMode, tracks, activeTrackId, selectTrack]);
   // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1519,7 +1526,12 @@ export default function App() {
             <MobileTrackNav
               tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
               activeTrackId={activeTrackId}
-              onTrackSelect={selectTrack}
+              onTrackSelect={(trackId) => {
+                // User manually selected a track — clear any pending auto-next
+                // so the new track does not autoplay on load.
+                autoPlayNextRef.current = false;
+                selectTrack(trackId);
+              }}
             />
           )}
 
@@ -1675,7 +1687,15 @@ export default function App() {
         duration={duration}
         isPlaying={isPlaying}
         isDisabled={!isPlayerReady}
-        onPlayPause={() => playerRef.current?.playPause()}
+        onPlayPause={() => {
+          // Record the first real user Play tap (not a Pause press).
+          // isPlaying reflects the current state, so !isPlaying means the
+          // user is about to start playback.
+          if (isMobileViewport() && isReviewerMode && !isPlaying) {
+            userHasPlayedRef.current = true;
+          }
+          playerRef.current?.playPause();
+        }}
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}
         loudnessMeta={isReviewerMode && tracks.length > 1
