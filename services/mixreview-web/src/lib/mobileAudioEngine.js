@@ -107,19 +107,14 @@ if (typeof document !== "undefined") {
       });
 
       if (_wasPlayingOnHide) {
-        if (restoredPaused && restoredMediaEl) {
-          // Audio actually stopped while backgrounded — restart it.
-          console.log("[MixReview] Audio stopped in background — restarting");
-          if (_ws) {
-            _ws.play().catch((e) =>
-              console.warn("[MixReview] ws.play restore failed", e.message)
-            );
-          } else if (_nativeAudio) {
-            _nativeAudio.play().catch((e) =>
-              console.warn("[MixReview] native play restore failed", e.message)
-            );
-          }
-        } else if (!restoredPaused) {
+        if (restoredPaused) {
+          // Audio stopped while backgrounded — sync UI to stopped/ready.
+          // Do NOT auto-restart: play() outside a user gesture is either
+          // silently rejected by iOS or routes through a suspended AudioContext.
+          // The user must tap Play to restart.
+          console.log("[MixReview] Audio stopped in background — showing ready state");
+          _handlers.current?.onPlaybackChange?.(false);
+        } else {
           // Audio is still playing (iOS resumed it natively), but the UI
           // may be stuck at isPlaying=false because we suppressed the
           // background pause event below.  Force-sync UI to playing.
@@ -161,18 +156,12 @@ if (typeof document !== "undefined") {
     });
 
     // bfcache restore (persisted === true): the page was frozen and re-shown.
-    // The media element's state is frozen — restart if we were playing.
-    if (e.persisted && _wasPlayingOnHide && paused && mediaEl) {
-      console.log("[MixReview] pageshow bfcache restore — restarting audio");
-      if (_ws) {
-        _ws.play().catch((err) =>
-          console.warn("[MixReview] ws.play bfcache restore failed", err.message)
-        );
-      } else if (_nativeAudio) {
-        _nativeAudio.play().catch((err) =>
-          console.warn("[MixReview] native play bfcache restore failed", err.message)
-        );
-      }
+    // Do NOT auto-restart — play() outside a user gesture is silently rejected
+    // by iOS or routes through a suspended AudioContext.
+    // Sync UI to the actual media element state; user must tap Play to restart.
+    if (e.persisted && _wasPlayingOnHide && paused) {
+      console.log("[MixReview] pageshow bfcache restore — audio stopped, showing ready state");
+      _handlers.current?.onPlaybackChange?.(false);
     }
     // If already playing after a persisted restore, verify audio is advancing.
     if (e.persisted && !paused && mediaEl) _schedulePlaybackVerification(mediaEl);

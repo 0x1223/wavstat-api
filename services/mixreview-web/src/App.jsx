@@ -156,9 +156,6 @@ export default function App() {
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
-  const pendingAutoplayRef = useRef(false);
-  const autoplayAttemptedRef = useRef(false);
-
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
     [activeTrackId, tracks],
@@ -1269,51 +1266,6 @@ export default function App() {
       }));
     }
   }, [comments, updateActiveVersion]);
-
-  // ── Mobile autoplay ──────────────────────────────────────────────────────
-  // Reset attempt flag whenever the active track/version changes so autoplay
-  // fires again for each newly loaded track.
-  useEffect(() => {
-    autoplayAttemptedRef.current = false;
-    pendingAutoplayRef.current = false;
-  }, [activeTrackId, activeVersionId]);
-
-  // Once the player is ready on mobile reviewer, attempt autoplay once.
-  // If the browser blocks it (NotAllowedError / AbortError), set the pending flag.
-  useEffect(() => {
-    if (!isReviewerMode || !isPlayerReady) return;
-    if (!isMobileViewport()) return;
-    if (autoplayAttemptedRef.current) return;
-    autoplayAttemptedRef.current = true;
-    (async () => {
-      try {
-        await playerRef.current?.play();
-      } catch (e) {
-        if (e?.name === "NotAllowedError" || e?.name === "AbortError") {
-          pendingAutoplayRef.current = true;
-        }
-      }
-    })();
-  }, [isPlayerReady, isReviewerMode]);
-
-  // On the first meaningful user interaction, retry any pending autoplay.
-  // Listeners are passive and cleaned up on unmount.
-  useEffect(() => {
-    if (!isReviewerMode) return;
-    if (!isMobileViewport()) return;
-    function handleInteraction() {
-      if (!pendingAutoplayRef.current) return;
-      pendingAutoplayRef.current = false;
-      try { playerRef.current?.play()?.catch?.(() => {}); } catch (_) {}
-    }
-    document.addEventListener("touchstart", handleInteraction, { passive: true });
-    document.addEventListener("click", handleInteraction, { passive: true });
-    return () => {
-      document.removeEventListener("touchstart", handleInteraction);
-      document.removeEventListener("click", handleInteraction);
-    };
-  }, [isReviewerMode]);
-  // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     function handleKeyDown(event) {
