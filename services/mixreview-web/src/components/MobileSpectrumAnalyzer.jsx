@@ -38,7 +38,7 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     let freqData = null;
     let decayBuf = null;
     let audioCtx = null;
-    let detachWs = null;
+    let detachWs = null;   // WaveSurfer event unsubscribe fn — outlives AudioContext reconnects
     let reconnectIv = null;
     let frameCount = 0;
 
@@ -111,7 +111,7 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       if (!alive || !isPlaying) return;
       if (!liteMode || ++frameCount % 4 === 0) {
         paint();
-        try { if (onFrameRef.current) onFrameRef.current(analyser); } catch (_) {}
+        try { if (onFrameRef.current && analyser) onFrameRef.current(analyser); } catch (_) {}
       }
       rafId = requestAnimationFrame(tick);
     }
@@ -129,7 +129,12 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
 
     function startAnim() {
       isPlaying = true;
-      if (audioCtx?.state === "suspended") audioCtx.resume().catch(() => {});
+      // If there is no AudioContext yet, try to connect now.
+      // When startAnim() is called from the WaveSurfer "play" event (which
+      // fires within the user gesture call stack), ctx.resume() will succeed
+      // on iOS — this is the primary path for analyzer reconnect after
+      // a background/restore cycle.
+      if (!audioCtx && !document.hidden) tryConnect();
       if (rafId == null) tick();
     }
 
@@ -139,16 +144,15 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       decayTick();
     }
 
-    // ── Audio teardown ────────────────────────────────────────────────────
+    // ── AudioContext teardown ─────────────────────────────────────────────
     // Closes the AudioContext, which releases the HTMLMediaElement from the
-    // Web Audio graph.  After close(), the media element reverts to its native
-    // audio output path so it can keep playing while the page is backgrounded
-    // (iOS suspends AudioContexts in the background, which would otherwise
-    // stop audio routed through them).
-    function tearDownAudio() {
+    // Web Audio graph so it reverts to native audio output.
+    //
+    // Deliberately does NOT remove WaveSurfer event listeners (detachWs).
+    // Those listeners stay alive across reconnects so that the next play
+    // gesture can trigger tryConnect() in the right call-stack context.
+    function tearDownAudioCtx() {
       stopAnim();
-      detachWs?.();
-      detachWs = null;
       try { analyser?.disconnect(); } catch (_) {}
       if (audioCtx && audioCtx.state !== "closed") {
         audioCtx.close().catch(() => {});
@@ -159,6 +163,14 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       decayBuf = null;
     }
 
+    // Full teardown including WaveSurfer listeners.
+    // Used only on component unmount or full audio engine reset.
+    function tearDownAll() {
+      tearDownAudioCtx();
+      detachWs?.();
+      detachWs = null;
+    }
+
     // ── Reconnect management ──────────────────────────────────────────────
     function clearReconnect() {
       if (reconnectIv != null) { clearInterval(reconnectIv); reconnectIv = null; }
@@ -166,30 +178,100 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
 
     function startReconnectLoop() {
       clearReconnect();
+      // Ensure WaveSurfer listeners are attached first — they survive
+      // AudioContext restarts and give us a gesture entry point.
+      if (!detachWs) attachWsListeners();
       if (tryConnect()) return;
+      // Poll until tryConnect() succeeds.  It will succeed the first time
+      // it runs from inside a user gesture (play button tap).
       reconnectIv = setInterval(() => {
         if (!alive) { clearReconnect(); return; }
+        if (!detachWs) attachWsListeners();
         if (tryConnect()) clearReconnect();
-      }, 80);
+      }, 500);
     }
 
-    // ── Audio setup ───────────────────────────────────────────────────────
-    // Connects the WaveSurfer media element to a new AudioContext for analysis.
-    // createMediaElementSource() routes the element's audio through the context;
-    // we connect to both destination (so the user hears audio) and analyser.
+    // ── WaveSurfer event subscription ─────────────────────────────────────
+    // Kept separate from AudioContext wiring so listeners survive reconnects.
     //
-    // IMPORTANT: this binding is released when tearDownAudio() calls
-    // audioCtx.close().  After close(), the element plays natively again.
+    // The onPlay handler runs inside the WaveSurfer play event, which fires
+    // synchronously from the play-button click handler — i.e., within the
+    // user gesture call stack.  This is the only context in which iOS allows
+    // AudioContext.resume() to actually change state to "running".
+    function attachWsListeners() {
+      const ws = wsRef.current;
+      if (!ws || detachWs) return; // already attached or WaveSurfer not ready
+
+      function onPlay() {
+        if (!alive) return;
+        // Gesture-driven connect: if no context, try now while inside gesture.
+        if (!audioCtx && !document.hidden) tryConnect();
+        startAnim();
+      }
+      function onStop() { stopAnim(); }
+
+      ws.on("play", onPlay);
+      ws.on("pause", onStop);
+      ws.on("finish", onStop);
+      detachWs = () => {
+        try { ws.un("play", onPlay); ws.un("pause", onStop); ws.un("finish", onStop); }
+        catch (_) {}
+      };
+
+      // If already playing when we attach, kick off animation immediately.
+      if (ws.isPlaying?.()) onPlay();
+    }
+
+    // ── AudioContext + graph setup ────────────────────────────────────────
+    // Creates a new AudioContext and wires the WaveSurfer media element
+    // through it for spectrum analysis.
+    //
+    // Critical invariant: the media element must NEVER be left connected to
+    // a suspended AudioContext — that routes all audio to a silent output.
+    //
+    // Enforcement:
+    //   1. After creating the context, resume() is called immediately.
+    //      On iOS this only changes state if we are inside a user gesture.
+    //   2. If the state is not "running" after the resume() call, we close
+    //      the context WITHOUT touching the media element and return false.
+    //      Audio continues playing natively.  The reconnect loop retries.
+    //   3. Once connected, a statechange listener monitors the context.
+    //      If it is ever suspended (incoming call, OS enforcement), the
+    //      context is closed immediately so the media element reverts to
+    //      native output at once.
     function tryConnect() {
       const ws = wsRef.current;
       if (!ws) return false;
+      if (audioCtx) return true; // already connected
       const mediaEl = ws.getMediaElement?.();
       if (!mediaEl) return false;
 
+      let ctx;
       try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+      } catch (e) {
+        console.warn("[MobileSpectrum] AudioContext creation failed:", e.message);
+        return false;
+      }
 
-        analyser = audioCtx.createAnalyser();
+      // On iOS: resume() changes ctx.state synchronously when called within
+      // a user gesture.  Outside a gesture the state stays "suspended" and
+      // we bail out without connecting the media element.
+      if (ctx.state !== "running") {
+        ctx.resume().catch(() => {});
+      }
+
+      if (ctx.state !== "running") {
+        // Not running — connecting would silence the media element.
+        // Close and let the reconnect loop retry on the next gesture.
+        console.log("[MobileSpectrum] AudioContext not running — deferring connect, state:", ctx.state);
+        ctx.close().catch(() => {});
+        return false;
+      }
+
+      // Context confirmed running — safe to wire the media element.
+      try {
+        analyser = ctx.createAnalyser();
         analyser.fftSize = liteMode ? 1024 : FFT_SIZE;
         analyser.smoothingTimeConstant = 0.78;
         analyser.minDecibels = -90;
@@ -199,47 +281,53 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
 
         // Route: mediaElement → source → destination (pass-through to speakers)
         //                              → analyser    (spectrum data)
-        const src = audioCtx.createMediaElementSource(mediaEl);
-        src.connect(audioCtx.destination);
+        const src = ctx.createMediaElementSource(mediaEl);
+        src.connect(ctx.destination);
         src.connect(analyser);
+        audioCtx = ctx;
+        console.log("[MobileSpectrum] analyser connected, ctx state:", ctx.state);
       } catch (e) {
-        console.warn("[MobileSpectrum] audio connect failed:", e.message);
-        tearDownAudio();
+        console.warn("[MobileSpectrum] audio graph wiring failed:", e.message);
+        ctx.close().catch(() => {});
+        analyser = null;
+        freqData = null;
+        decayBuf = null;
         return false;
       }
 
-      // Subscribe to WaveSurfer play/pause events
-      function onPlay() { if (alive) startAnim(); }
-      function onStop() { stopAnim(); }
-      ws.on("play", onPlay);
-      ws.on("pause", onStop);
-      ws.on("finish", onStop);
-      detachWs = () => {
-        try { ws.un("play", onPlay); ws.un("pause", onStop); ws.un("finish", onStop); }
-        catch (_) {}
-      };
-
-      if (ws.isPlaying?.()) startAnim();
-      else paint(); // draw silent initial frame
+      // Monitor for unexpected suspensions after wiring.
+      // Close the context immediately so the media element reverts to native
+      // output before iOS silences audio through the suspended graph.
+      ctx.addEventListener("statechange", () => {
+        if (!alive || audioCtx !== ctx) return;
+        console.log("[MobileSpectrum] AudioContext statechange →", ctx.state);
+        if (ctx.state === "suspended") {
+          tearDownAudioCtx(); // release media element to native output
+          // Restart reconnect loop; reattaches after next user gesture.
+          if (!document.hidden) startReconnectLoop();
+        }
+      });
 
       return true;
     }
 
     // ── Background / foreground handling ──────────────────────────────────
-    // On page hide: tear down the AudioContext so the media element is
-    //   released back to native output.  Audio keeps playing in background.
-    //   The analyser simply pauses — that's acceptable.
-    // On page show: recreate the AudioContext and reconnect the analyser.
-    //   The audio element may still be playing (never stopped), so we just
-    //   reattach the visual layer on top of it.
+    // On page hide: close the AudioContext so the media element is released
+    //   to native output before iOS suspends the AudioContext and would
+    //   otherwise silence audio routed through it.
+    //   WaveSurfer listeners stay attached — they fire on restore so that
+    //   the first play gesture reconnects the analyzer automatically.
+    // On page show: start the reconnect loop.  The AudioContext wiring
+    //   will succeed on the first user gesture; until then audio plays
+    //   natively without the analyzer.
     function handleVisibilityChange() {
       if (!alive) return;
       if (document.hidden) {
-        console.log("[MobileSpectrum] page hidden — closing AudioContext");
+        console.log("[MobileSpectrum] page hidden — releasing AudioContext");
         clearReconnect();
-        tearDownAudio();
+        tearDownAudioCtx(); // WaveSurfer listeners (detachWs) kept alive
       } else {
-        console.log("[MobileSpectrum] page visible — reconnecting analyser");
+        console.log("[MobileSpectrum] page visible — starting analyser reconnect loop");
         startReconnectLoop();
       }
     }
@@ -268,7 +356,7 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       alive = false;
       clearReconnect();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      tearDownAudio();
+      tearDownAll();
       ro.disconnect();
     };
   }, [wsRef, liteMode]);
