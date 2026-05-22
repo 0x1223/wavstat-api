@@ -4,29 +4,42 @@ import WaveSurfer from "wavesurfer.js";
 // so comment state changes and re-renders never cause WaveSurfer to be
 // destroyed or re-created.
 
-// How long to wait for WaveSurfer's waveform decode (fetch + decodeAudioData)
-// before activating the audio-only fallback.
+// How long to wait for WaveSurfer's waveform decode before activating the
+// audio-only fallback.
 const WAVEFORM_TIMEOUT_MS = 12_000;
+// Shorter timeout for lite mode (weak devices) — fail faster to audio-only.
+const WAVEFORM_TIMEOUT_LITE_MS = 6_000;
 
 let _ws = null;
+let _nativeAudio = null; // compat mode: native <audio> element
 let _url = null;
+let _mobileMode = "standard"; // "standard" | "lite" | "compat"
 let _wasPlayingOnHide = false;
 const _handlers = { current: null };
 
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
-    if (!_ws) return;
-    if (document.hidden) {
-      _wasPlayingOnHide = _ws.isPlaying();
-    } else {
-      // Resume a suspended AudioContext when returning from background (iOS)
-      try {
-        const ac = _ws.options?.audioContext;
-        if (ac?.state === "suspended") ac.resume();
-      } catch (_) {}
-      if (_wasPlayingOnHide) {
+    if (_ws) {
+      if (document.hidden) {
+        _wasPlayingOnHide = _ws.isPlaying();
+      } else {
+        // Resume a suspended AudioContext when returning from background (iOS)
+        try {
+          const ac = _ws.options?.audioContext;
+          if (ac?.state === "suspended") ac.resume();
+        } catch (_) {}
+        if (_wasPlayingOnHide) {
+          _wasPlayingOnHide = false;
+          _ws.play().catch(() => {});
+        }
+      }
+    } else if (_nativeAudio) {
+      // Compat mode: resume native audio after backgrounding
+      if (document.hidden) {
+        _wasPlayingOnHide = !_nativeAudio.paused;
+      } else if (_wasPlayingOnHide) {
         _wasPlayingOnHide = false;
-        _ws.play().catch(() => {});
+        _nativeAudio.play().catch(() => {});
       }
     }
   });
@@ -52,13 +65,146 @@ async function probeAudioUrl(url) {
   }
 }
 
+// ── Device / capability detection ─────────────────────────────────────────
+
+/**
+ * Detect which mobile playback mode to use for this device.
+ *
+ * "compat"   — Old iOS (< 15) or no WebAudio API: skip WaveSurfer entirely
+ *              and use a native HTMLAudioElement for MP3 playback. No waveform,
+ *              no analyzer — but playback starts immediately without a decode
+ *              step.
+ *
+ * "lite"     — Weak or low-memory device: use WaveSurfer but with a shorter
+ *              decode timeout (fail faster to audio-only) and signal the
+ *              analyzer to run at a reduced frame rate.
+ *
+ * "standard" — Full experience.
+ */
+export function detectMobileMode() {
+  if (typeof navigator === "undefined") return "standard";
+  const ua = navigator.userAgent;
+
+  // Old iOS (< 15): WebAudio decode is unreliable; native audio is safer.
+  const iosMatch = ua.match(/(?:iPhone|iPad|iPod).+OS (\d+)[_.]/);
+  const iosMajor = iosMatch ? parseInt(iosMatch[1], 10) : null;
+  if (iosMajor !== null && iosMajor < 15) return "compat";
+
+  // No Web Audio API at all.
+  if (typeof AudioContext === "undefined" && typeof webkitAudioContext === "undefined") {
+    return "compat";
+  }
+
+  // Weak device signals: low RAM, or few CPU cores on an older iOS build.
+  const lowMem = typeof navigator.deviceMemory === "number" && navigator.deviceMemory < 2;
+  const fewCores = typeof navigator.hardwareConcurrency === "number" && navigator.hardwareConcurrency <= 2;
+  const olderIOS = iosMajor !== null && iosMajor < 17;
+
+  if (lowMem || (fewCores && olderIOS)) return "lite";
+
+  return "standard";
+}
+
+/** Returns the mode currently active for the mounted engine session. */
+export function getMobileMode() {
+  return _mobileMode;
+}
+
+// ── Native audio path (compat mode) ───────────────────────────────────────
+
+/**
+ * Create and load a native HTMLAudioElement for compat mode.
+ * Fires onWaveformUnavailable(player, "compat") as soon as canplay fires —
+ * no WaveSurfer decode step, no WebAudio required.
+ * Fires onError only if the element itself reports a load failure.
+ */
+function _mountNativeAudio(url, handlers) {
+  if (_nativeAudio) {
+    _nativeAudio.pause();
+    _nativeAudio.src = "";
+    _nativeAudio = null;
+  }
+
+  const audio = new Audio();
+  audio.preload = "auto";
+  _nativeAudio = audio;
+
+  let didSettle = false;
+
+  const player = {
+    wavesurfer: null,
+    mediaElement: audio,
+    play: async () => { await audio.play(); },
+    pause: () => { audio.pause(); },
+    playPause: async () => {
+      if (audio.paused) { await audio.play(); } else { audio.pause(); }
+    },
+    skip: (s) => {
+      audio.currentTime = Math.max(0, audio.currentTime + s);
+    },
+    seekToTime: (time) => {
+      const t = Math.max(0, Math.min(time, Number.isFinite(audio.duration) ? audio.duration : 0));
+      audio.currentTime = t;
+      _handlers.current?.onTimeUpdate?.(t);
+    },
+  };
+
+  audio.addEventListener("durationchange", () => {
+    if (_nativeAudio !== audio) return;
+    const d = audio.duration;
+    if (Number.isFinite(d) && d > 0) _handlers.current?.onDurationChange?.(d);
+  });
+
+  audio.addEventListener("canplay", () => {
+    if (_nativeAudio !== audio || didSettle) return;
+    didSettle = true;
+    const d = Number.isFinite(audio.duration) ? audio.duration : 0;
+    if (d > 0) _handlers.current?.onDurationChange?.(d);
+    audio.muted = false;
+    audio.volume = 1;
+    console.log("[MixReview] Compat mode: native audio ready", {
+      duration: d,
+      readyState: audio.readyState,
+    });
+    _handlers.current?.onWaveformUnavailable?.(player, "compat");
+  }, { once: true });
+
+  audio.addEventListener("timeupdate", () => {
+    if (_nativeAudio !== audio) return;
+    _handlers.current?.onTimeUpdate?.(audio.currentTime);
+  });
+
+  audio.addEventListener("play", () => {
+    if (_nativeAudio === audio) _handlers.current?.onPlaybackChange?.(true);
+  });
+  audio.addEventListener("pause", () => {
+    if (_nativeAudio === audio) _handlers.current?.onPlaybackChange?.(false);
+  });
+  audio.addEventListener("ended", () => {
+    if (_nativeAudio === audio) _handlers.current?.onPlaybackChange?.(false);
+  });
+
+  audio.addEventListener("error", () => {
+    if (_nativeAudio !== audio || didSettle) return;
+    didSettle = true;
+    console.warn("[MixReview] Compat mode: native audio failed", audio.error?.message);
+    _handlers.current?.onError?.(new Error("Audio failed to load"));
+  }, { once: true });
+
+  // Set src last so all listeners are attached before load begins.
+  audio.src = url;
+  audio.load();
+}
+
 // ── Engine ─────────────────────────────────────────────────────────────────
 
 /**
- * Mount or reuse the singleton WaveSurfer instance.
- * Returns the WaveSurfer instance synchronously; it may not be ready yet.
+ * Mount or reuse the singleton audio engine.
+ * Returns the WaveSurfer instance (standard/lite modes) or null (compat mode).
  * If called with the same URL as the currently loaded instance, existing
  * playback is preserved and only the handlers are updated.
+ *
+ * mode: "standard" | "lite" | "compat"
  *
  * handlers: {
  *   onReady, onWaveformUnavailable, onError,
@@ -67,19 +213,26 @@ async function probeAudioUrl(url) {
  *
  * onReady            — waveform decoded and rendered successfully
  * onWaveformUnavailable(player, reason) — waveform failed/timed out but
- *                      audio element is playable; player interface provided
+ *                      audio is playable; player interface provided.
+ *                      reason === "compat" means old-device native-audio mode.
  * onError            — both waveform and audio are unavailable
  */
-export function mountMobileEngine(container, url, handlers) {
+export function mountMobileEngine(container, url, handlers, mode = "standard") {
   _handlers.current = handlers;
+  _mobileMode = mode;
 
-  if (_url === url && _ws) {
-    return _ws;
+  if (_url === url && (_ws || _nativeAudio)) {
+    return _mobileMode === "compat" ? null : _ws;
   }
 
   if (_ws) {
     _ws.destroy();
     _ws = null;
+  }
+  if (_nativeAudio) {
+    _nativeAudio.pause();
+    _nativeAudio.src = "";
+    _nativeAudio = null;
   }
 
   _url = url;
@@ -88,10 +241,18 @@ export function mountMobileEngine(container, url, handlers) {
 
   // ── Logging ────────────────────────────────────────────────────────────
   const ext = url.split("?")[0].split(".").pop().toLowerCase();
-  console.log("[MixReview] MobileEngine mount", { ext, url: url.slice(0, 120) });
+  console.log("[MixReview] MobileEngine mount", { mode, ext, url: url.slice(0, 120) });
   probeAudioUrl(url).catch(() => {}); // background, non-blocking
 
-  // ── WaveSurfer instance ────────────────────────────────────────────────
+  // ── Compat mode: native <audio>, no WaveSurfer ────────────────────────
+  if (mode === "compat") {
+    _mountNativeAudio(url, handlers);
+    return null;
+  }
+
+  // ── WaveSurfer instance (standard / lite) ─────────────────────────────
+  const decodeTimeoutMs = mode === "lite" ? WAVEFORM_TIMEOUT_LITE_MS : WAVEFORM_TIMEOUT_MS;
+
   const ws = WaveSurfer.create({
     container,
     url,
@@ -120,9 +281,9 @@ export function mountMobileEngine(container, url, handlers) {
   // ── Fallback timer ─────────────────────────────────────────────────────
   const fallbackTimer = setTimeout(() => {
     if (didSettle || _ws !== ws) return;
-    console.warn("[MixReview] Waveform decode timeout after", WAVEFORM_TIMEOUT_MS, "ms — attempting audio-only fallback");
+    console.warn("[MixReview] Waveform decode timeout after", decodeTimeoutMs, "ms — attempting audio-only fallback");
     activateFallback("timeout");
-  }, WAVEFORM_TIMEOUT_MS);
+  }, decodeTimeoutMs);
 
   // ── Audio-only fallback ────────────────────────────────────────────────
 
@@ -348,7 +509,13 @@ export function disposeMobileEngine() {
     _ws.destroy();
     _ws = null;
   }
+  if (_nativeAudio) {
+    _nativeAudio.pause();
+    _nativeAudio.src = "";
+    _nativeAudio = null;
+  }
   _url = null;
+  _mobileMode = "standard";
   _wasPlayingOnHide = false;
   _handlers.current = null;
 }

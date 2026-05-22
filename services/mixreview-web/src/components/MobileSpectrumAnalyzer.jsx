@@ -18,7 +18,7 @@ const FREQ_LABELS = [
   [16, "1k"], [19, "2k"], [22, "4k"], [25, "8k"], [28, "16kHz"],
 ];
 
-export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
+export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
   const canvasRef = useRef(null);
   const onFrameRef = useRef(onFrame);
 
@@ -102,10 +102,15 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
     }
 
     // ── RAF loop ─────────────────────────────────────────────────────────
+    // Lite mode: paint at ~15 fps (every 4th frame) instead of 60 fps to
+    // reduce canvas draw workload on weak/low-memory devices.
+    let frameCount = 0;
     function tick() {
       if (!alive || !isPlaying) return;
-      paint();
-      try { if (onFrameRef.current) onFrameRef.current(analyser); } catch (_) {}
+      if (!liteMode || ++frameCount % 4 === 0) {
+        paint();
+        try { if (onFrameRef.current) onFrameRef.current(analyser); } catch (_) {}
+      }
       rafId = requestAnimationFrame(tick);
     }
 

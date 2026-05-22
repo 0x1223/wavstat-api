@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
-import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
+import { detectMobileMode, getMobileMode, disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
 import { MobileSpectrumAnalyzer } from "./MobileSpectrumAnalyzer.jsx";
 
 export function WaveformReview({
@@ -144,8 +144,9 @@ export function WaveformReview({
     resizeObserver.observe(containerRef.current);
 
     if (isMobileViewport()) {
-      // Mobile: singleton engine — survives React re-renders and comment state changes
-      console.log("[WaveformReview] Mobile decode start", { url: playbackUrl.slice(0, 100) });
+      // Detect device capability once per source load, then mount accordingly.
+      const mobileMode = detectMobileMode();
+      console.log("[WaveformReview] Mobile mode:", mobileMode, "| url:", playbackUrl.slice(0, 100));
       const ws = mountMobileEngine(containerRef.current, playbackUrl, {
         onReady: (player) => {
           console.log("[WaveformReview] Mobile decode success");
@@ -154,10 +155,13 @@ export function WaveformReview({
         },
         // Called when waveform decode fails/times out but the audio element
         // can still play. Player interface is functional; waveform is empty.
+        // reason === "compat" means old-device native-audio path — no warning needed.
         onWaveformUnavailable: (player, reason) => {
-          console.log("[WaveformReview] Waveform unavailable — audio-only mode", { reason });
+          console.log("[WaveformReview] Waveform unavailable", { reason });
           setIsLoading(false);
-          setLoadError("Waveform unavailable — tap ▶ to listen");
+          if (reason !== "compat") {
+            setLoadError("Waveform unavailable — tap ▶ to listen");
+          }
           callbacksRef.current.onReady(player);
         },
         onError: (err) => {
@@ -174,7 +178,7 @@ export function WaveformReview({
         },
         onTimeUpdate: (t) => callbacksRef.current.onTimeUpdate(t),
         onPlaybackChange: (p) => callbacksRef.current.onPlaybackChange(p),
-      });
+      }, mobileMode);
       wavesurferRef.current = ws;
       return () => {
         if (wavesurferRef.current === ws) wavesurferRef.current = null;
@@ -668,12 +672,13 @@ export function WaveformReview({
         </div>
       )}
 
-      {isReviewerMode && isMobileViewport() && duration > 0 && (
+      {isReviewerMode && isMobileViewport() && duration > 0 && getMobileMode() !== "compat" && (
         <div className="mobile-spectrum-container">
           <MobileSpectrumAnalyzer
             key={audioSource?.playbackUrl || audioSource?.url}
             wsRef={wavesurferRef}
             onFrame={handleMeterFrame}
+            liteMode={getMobileMode() === "lite"}
           />
         </div>
       )}
