@@ -1877,7 +1877,7 @@ function AdminDashboard({
               onLogout();
             }}
           >
-            Back to Start
+            Logout
           </button>
         </div>
       </header>
