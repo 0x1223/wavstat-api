@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
-import { detectMobileMode, getMobileMode, disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
+import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
 import { MobileSpectrumAnalyzer } from "./MobileSpectrumAnalyzer.jsx";
 
 export function WaveformReview({
@@ -38,8 +38,6 @@ export function WaveformReview({
   const [loadError, setLoadError] = useState("");
   const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
   const [pendingMarker, setPendingMarker] = useState(null);
-  // Mobile-only: which marker's text bubble is currently expanded (tap-to-reveal)
-  const [activeBubbleId, setActiveBubbleId] = useState(null);
   const meterThrottleRef = useRef(0);
   const meterBufRef = useRef(null);
 
@@ -124,9 +122,8 @@ export function WaveformReview({
     resizeObserver.observe(containerRef.current);
 
     if (isMobileViewport()) {
-      // Detect device capability once per source load, then mount accordingly.
-      const mobileMode = detectMobileMode();
-      console.log("[WaveformReview] Mobile mode:", mobileMode, "| url:", playbackUrl.slice(0, 100));
+      // Mobile: singleton engine — survives React re-renders and comment state changes
+      console.log("[WaveformReview] Mobile decode start", { url: playbackUrl.slice(0, 100) });
       const ws = mountMobileEngine(containerRef.current, playbackUrl, {
         onReady: (player) => {
           console.log("[WaveformReview] Mobile decode success");
@@ -135,13 +132,10 @@ export function WaveformReview({
         },
         // Called when waveform decode fails/times out but the audio element
         // can still play. Player interface is functional; waveform is empty.
-        // reason === "compat" means old-device native-audio path — no warning needed.
         onWaveformUnavailable: (player, reason) => {
-          console.log("[WaveformReview] Waveform unavailable", { reason });
+          console.log("[WaveformReview] Waveform unavailable — audio-only mode", { reason });
           setIsLoading(false);
-          if (reason !== "compat") {
-            setLoadError("Waveform unavailable — tap ▶ to listen");
-          }
+          setLoadError("Waveform unavailable — tap ▶ to listen");
           callbacksRef.current.onReady(player);
         },
         onError: (err) => {
@@ -158,7 +152,7 @@ export function WaveformReview({
         },
         onTimeUpdate: (t) => callbacksRef.current.onTimeUpdate(t),
         onPlaybackChange: (p) => callbacksRef.current.onPlaybackChange(p),
-      }, mobileMode);
+      });
       wavesurferRef.current = ws;
       return () => {
         if (wavesurferRef.current === ws) wavesurferRef.current = null;
@@ -432,61 +426,24 @@ export function WaveformReview({
 />
         {duration > 0 && (
           <div className="marker-layer">
-            {markerItems.map((comment) => {
-              // Precompute bubble visibility and alignment once per marker.
-              // Bubble only appears for real saved comments that have text,
-              // in reviewer mode on mobile — never on preview/pending markers.
-              const showBubble =
-                isReviewerMode &&
-                isMobileViewport() &&
-                !comment.isPreview &&
-                Boolean(comment.text);
-              // Flip bubble to the left when the marker is in the right 38%
-              // of the waveform, so the bubble stays inside the visible area.
-              const bubbleAlign =
-                showBubble && waveformWidth > 0 && parseFloat(comment.left) / waveformWidth > 0.62
-                  ? "right"
-                  : "left";
-              const bubbleText =
-                showBubble && comment.text.length > 30
-                  ? `${comment.text.slice(0, 30).trimEnd()}…`
-                  : comment.text;
-
-              return (
-                <button
-                  type="button"
-                  className={`wave-marker${comment.resolved ? " resolved" : ""}${
-                    comment.id === selectedCommentId ? " selected" : ""
-                  }${comment.isPreview ? " preview" : ""}`}
-                  key={comment.id}
-                  data-time={formatTimecode(comment.time)}
-                  data-bubble-align={showBubble ? bubbleAlign : undefined}
-                  data-bubble-active={showBubble && activeBubbleId === comment.id ? "true" : undefined}
-                  style={{ left: comment.left }}
-                  aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    if (!comment || comment.isPreview) return;
-                    // Mobile: toggle the text bubble for this marker; desktop: seek
-                    if (isMobileViewport() && isReviewerMode) {
-                      setActiveBubbleId((prev) => (prev === comment.id ? null : comment.id));
-                    } else {
-                      seekToTime(comment.time);
-                    }
-                    onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
-                  }}
-                >
-                  {showBubble && (
-                    <span
-                      className={`marker-bubble${comment.resolved ? " marker-bubble--resolved" : ""}`}
-                      aria-hidden="true"
-                    >
-                      {bubbleText}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+            {markerItems.map((comment) => (
+              <button
+                type="button"
+                className={`wave-marker${comment.resolved ? " resolved" : ""}${
+                  comment.id === selectedCommentId ? " selected" : ""
+                }${comment.isPreview ? " preview" : ""}`}
+                key={comment.id}
+                data-time={formatTimecode(comment.time)}
+                style={{ left: comment.left }}
+                aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (!comment || comment.isPreview) return;
+                  if (!isMobileViewport()) seekToTime(comment.time);
+                  onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
+                }}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -554,13 +511,12 @@ export function WaveformReview({
         </div>
       )}
 
-      {isReviewerMode && isMobileViewport() && duration > 0 && getMobileMode() !== "compat" && (
+      {isReviewerMode && isMobileViewport() && duration > 0 && (
         <div className="mobile-spectrum-container">
           <MobileSpectrumAnalyzer
             key={audioSource?.playbackUrl || audioSource?.url}
             wsRef={wavesurferRef}
             onFrame={handleMeterFrame}
-            liteMode={getMobileMode() === "lite"}
           />
         </div>
       )}

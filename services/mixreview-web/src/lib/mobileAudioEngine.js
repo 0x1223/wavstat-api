@@ -4,167 +4,31 @@ import WaveSurfer from "wavesurfer.js";
 // so comment state changes and re-renders never cause WaveSurfer to be
 // destroyed or re-created.
 
-// How long to wait for WaveSurfer's waveform decode before activating the
-// audio-only fallback.
+// How long to wait for WaveSurfer's waveform decode (fetch + decodeAudioData)
+// before activating the audio-only fallback.
 const WAVEFORM_TIMEOUT_MS = 12_000;
-// Shorter timeout for lite mode (weak devices) — fail faster to audio-only.
-const WAVEFORM_TIMEOUT_LITE_MS = 6_000;
 
 let _ws = null;
-let _nativeAudio = null; // compat mode: native <audio> element
 let _url = null;
-let _mobileMode = "standard"; // "standard" | "lite" | "compat"
 let _wasPlayingOnHide = false;
 const _handlers = { current: null };
 
-// Returns the live HTMLMediaElement for whichever engine is active.
-function _getMediaEl() {
-  if (_ws) return _ws.getMediaElement?.() ?? null;
-  if (_nativeAudio) return _nativeAudio;
-  return null;
-}
-
-/**
- * 1.5 s after a foreground/bfcache restore, check that currentTime is
- * actually advancing.  If it hasn't moved while the element claims to be
- * playing, the AudioContext is probably suspended (playing-but-silent) or
- * the element is stalled.  We log the details and issue a no-op seek to
- * attempt to unstick a buffering stall.  We do not seek to a different
- * position and do not restart playback — those would break scrubbing.
- */
-function _schedulePlaybackVerification(mediaEl) {
-  const t0 = mediaEl.currentTime;
-  setTimeout(() => {
-    if (!mediaEl || mediaEl.paused) return; // paused in the interim — OK
-    const t1 = mediaEl.currentTime;
-    if (Math.abs(t1 - t0) < 0.05) {
-      console.warn("[MixReview] Playback verification FAILED — currentTime stalled", {
-        t0: t0.toFixed(2), t1: t1.toFixed(2),
-        paused: mediaEl.paused,
-        readyState: mediaEl.readyState,
-        networkState: mediaEl.networkState,
-        error: mediaEl.error
-          ? { code: mediaEl.error.code, message: mediaEl.error.message }
-          : null,
-      });
-      // No-op seek: can unstick a buffering stall without changing position.
-      try { mediaEl.currentTime = mediaEl.currentTime; } catch (_) {}
-    } else {
-      console.log("[MixReview] Playback verification OK — audio advancing", {
-        t0: t0.toFixed(2), t1: t1.toFixed(2),
-      });
-    }
-  }, 1500);
-}
-
 if (typeof document !== "undefined") {
-  // ── visibilitychange ──────────────────────────────────────────────────────
-  // Goal: keep the native audio element playing through background/lock-screen.
-  //
-  // We do NOT pause on hide. The HTMLMediaElement owns playback state. If it
-  // was playing, it will keep playing natively (the OS/browser handles this for
-  // <audio> elements that are not routed through a suspended AudioContext).
-  //
-  // The AudioContext that MobileSpectrumAnalyzer creates for the analyser is
-  // handled there: it closes the context on hide (releasing the media element
-  // back to native output) and reconnects on show.
-  //
-  // Here we only: (a) log, and (b) restart audio if the OS force-stopped it
-  // while we were backgrounded.
   document.addEventListener("visibilitychange", () => {
-    const mediaEl = _getMediaEl();
-    const t = mediaEl?.currentTime;
-    const paused = mediaEl?.paused ?? true;
-
-    console.log("[MixReview] visibilitychange", {
-      hidden: document.hidden,
-      mode: _mobileMode,
-      paused,
-      currentTime: t != null ? t.toFixed(2) : null,
-      readyState: mediaEl?.readyState ?? null,
-      networkState: mediaEl?.networkState ?? null,
-      error: mediaEl?.error
-        ? { code: mediaEl.error.code, message: mediaEl.error.message }
-        : null,
-    });
-
+    if (!_ws) return;
     if (document.hidden) {
-      // Record actual media element state — not WaveSurfer's cached value.
-      _wasPlayingOnHide = !paused;
+      _wasPlayingOnHide = _ws.isPlaying();
     } else {
-      // ── Foreground restore ──────────────────────────────────────────────
-      // Re-read paused state: the element's state at this moment is the
-      // ground truth — events fired while hidden may have been suppressed
-      // (see ws.on("pause") guard below) or may not have fired yet.
-      const restoredMediaEl = _getMediaEl();
-      const restoredPaused = restoredMediaEl?.paused ?? true;
-      const restoredTime = restoredMediaEl?.currentTime;
-      console.log("[MixReview] Foreground restore", {
-        wasPlaying: _wasPlayingOnHide,
-        nowPaused: restoredPaused,
-        currentTime: restoredTime != null ? restoredTime.toFixed(2) : null,
-        readyState: restoredMediaEl?.readyState ?? null,
-      });
-
+      // Resume a suspended AudioContext when returning from background (iOS)
+      try {
+        const ac = _ws.options?.audioContext;
+        if (ac?.state === "suspended") ac.resume();
+      } catch (_) {}
       if (_wasPlayingOnHide) {
-        if (restoredPaused) {
-          // Audio stopped while backgrounded — sync UI to stopped/ready.
-          // Do NOT auto-restart: play() outside a user gesture is either
-          // silently rejected by iOS or routes through a suspended AudioContext.
-          // The user must tap Play to restart.
-          console.log("[MixReview] Audio stopped in background — showing ready state");
-          _handlers.current?.onPlaybackChange?.(false);
-        } else {
-          // Audio is still playing (iOS resumed it natively), but the UI
-          // may be stuck at isPlaying=false because we suppressed the
-          // background pause event below.  Force-sync UI to playing.
-          console.log("[MixReview] Audio still playing after restore — syncing UI to playing");
-          _handlers.current?.onPlaybackChange?.(true);
-        }
+        _wasPlayingOnHide = false;
+        _ws.play().catch(() => {});
       }
-
-      // If playing on restore, verify currentTime is actually advancing.
-      if (!restoredPaused && restoredMediaEl) _schedulePlaybackVerification(restoredMediaEl);
-      _wasPlayingOnHide = false;
     }
-  });
-
-  // ── pagehide / pageshow ───────────────────────────────────────────────────
-  document.addEventListener("pagehide", () => {
-    const mediaEl = _getMediaEl();
-    console.log("[MixReview] pagehide", {
-      mode: _mobileMode,
-      paused: mediaEl?.paused,
-      currentTime: mediaEl?.currentTime?.toFixed(2) ?? null,
-    });
-  });
-
-  document.addEventListener("pageshow", (e) => {
-    const mediaEl = _getMediaEl();
-    const t = mediaEl?.currentTime;
-    const paused = mediaEl?.paused ?? true;
-    console.log("[MixReview] pageshow", {
-      persisted: e.persisted,
-      mode: _mobileMode,
-      paused,
-      currentTime: t != null ? t.toFixed(2) : null,
-      readyState: mediaEl?.readyState ?? null,
-      networkState: mediaEl?.networkState ?? null,
-      error: mediaEl?.error
-        ? { code: mediaEl.error.code, message: mediaEl.error.message }
-        : null,
-    });
-
-    // bfcache restore (persisted === true): the page was frozen and re-shown.
-    // Do NOT auto-restart — play() outside a user gesture is silently rejected
-    // by iOS or routes through a suspended AudioContext.
-    // Sync UI to the actual media element state; user must tap Play to restart.
-    if (e.persisted && _wasPlayingOnHide && paused) {
-      console.log("[MixReview] pageshow bfcache restore — audio stopped, showing ready state");
-      _handlers.current?.onPlaybackChange?.(false);
-    }
-    // If already playing after a persisted restore, verify audio is advancing.
-    if (e.persisted && !paused && mediaEl) _schedulePlaybackVerification(mediaEl);
   });
 }
 
@@ -188,186 +52,13 @@ async function probeAudioUrl(url) {
   }
 }
 
-/**
- * Attach non-state-changing event listeners to a media element for logging.
- * These never pause, seek, or modify playback — they only console.log.
- * label: short string identifying the source ("ws" | "native")
- */
-function _attachMediaLogging(mediaEl, label) {
-  if (!mediaEl) return;
-  const t = () => (mediaEl.currentTime || 0).toFixed(2);
-  mediaEl.addEventListener("play",    () => console.log(`[MixReview:${label}] play`,    { t: t() }));
-  mediaEl.addEventListener("pause",   () => console.log(`[MixReview:${label}] pause`,   { t: t() }));
-  mediaEl.addEventListener("ended",   () => console.log(`[MixReview:${label}] ended`,   { t: t() }));
-  mediaEl.addEventListener("waiting", () => console.log(`[MixReview:${label}] waiting (buffering)`, { t: t() }));
-  mediaEl.addEventListener("stalled", () => console.log(`[MixReview:${label}] stalled`, { t: t() }));
-  mediaEl.addEventListener("canplay", () => console.log(`[MixReview:${label}] canplay`, { t: t() }));
-  mediaEl.addEventListener("error",   () => console.warn(`[MixReview:${label}] error`, {
-    code: mediaEl.error?.code,
-    message: mediaEl.error?.message,
-    t: t(),
-  }));
-}
-
-// ── Device / capability detection ─────────────────────────────────────────
-
-/**
- * Detect which mobile playback mode to use for this device.
- *
- * "compat"   — Old iOS (< 15) or no WebAudio API: skip WaveSurfer entirely
- *              and use a native HTMLAudioElement for MP3 playback. No waveform,
- *              no analyzer — but playback starts immediately without a decode
- *              step.
- *
- * "lite"     — Weak or low-memory device: use WaveSurfer but with a shorter
- *              decode timeout (fail faster to audio-only) and signal the
- *              analyzer to run at a reduced frame rate.
- *
- * "standard" — Full experience.
- */
-export function detectMobileMode() {
-  if (typeof navigator === "undefined") return "standard";
-  const ua = navigator.userAgent;
-
-  // Old iOS (< 15): WebAudio decode is unreliable; native audio is safer.
-  const iosMatch = ua.match(/(?:iPhone|iPad|iPod).+OS (\d+)[_.]/);
-  const iosMajor = iosMatch ? parseInt(iosMatch[1], 10) : null;
-  if (iosMajor !== null && iosMajor < 15) return "compat";
-
-  // No Web Audio API at all.
-  if (typeof AudioContext === "undefined" && typeof webkitAudioContext === "undefined") {
-    return "compat";
-  }
-
-  // Weak device signals: low RAM, or few CPU cores on an older iOS build.
-  const lowMem = typeof navigator.deviceMemory === "number" && navigator.deviceMemory < 2;
-  const fewCores = typeof navigator.hardwareConcurrency === "number" && navigator.hardwareConcurrency <= 2;
-  const olderIOS = iosMajor !== null && iosMajor < 17;
-
-  if (lowMem || (fewCores && olderIOS)) return "lite";
-
-  return "standard";
-}
-
-/** Returns the mode currently active for the mounted engine session. */
-export function getMobileMode() {
-  return _mobileMode;
-}
-
-// ── Native audio path (compat mode) ───────────────────────────────────────
-
-/**
- * Create and load a native HTMLAudioElement for compat mode.
- * Fires onWaveformUnavailable(player, "compat") as soon as canplay fires —
- * no WaveSurfer decode step, no WebAudio required.
- * Fires onError only if the element itself reports a load failure.
- */
-function _mountNativeAudio(url, handlers) {
-  if (_nativeAudio) {
-    _nativeAudio.pause();
-    _nativeAudio.src = "";
-    _nativeAudio = null;
-  }
-
-  const audio = new Audio();
-  audio.preload = "auto";
-  _nativeAudio = audio;
-  _attachMediaLogging(audio, "native");
-
-  let didSettle = false;
-
-  const player = {
-    wavesurfer: null,
-    mediaElement: audio,
-    play: async () => { await audio.play(); },
-    pause: () => { audio.pause(); },
-    playPause: async () => {
-      if (audio.paused) { await audio.play(); } else { audio.pause(); }
-    },
-    skip: (s) => {
-      audio.currentTime = Math.max(0, audio.currentTime + s);
-    },
-    seekToTime: (time) => {
-      const t = Math.max(0, Math.min(time, Number.isFinite(audio.duration) ? audio.duration : 0));
-      audio.currentTime = t;
-      _handlers.current?.onTimeUpdate?.(t);
-    },
-  };
-
-  audio.addEventListener("durationchange", () => {
-    if (_nativeAudio !== audio) return;
-    const d = audio.duration;
-    if (Number.isFinite(d) && d > 0) _handlers.current?.onDurationChange?.(d);
-  });
-
-  audio.addEventListener("canplay", () => {
-    if (_nativeAudio !== audio || didSettle) return;
-    didSettle = true;
-    const d = Number.isFinite(audio.duration) ? audio.duration : 0;
-    if (d > 0) _handlers.current?.onDurationChange?.(d);
-    audio.muted = false;
-    audio.volume = 1;
-    console.log("[MixReview] Compat mode: native audio ready", {
-      duration: d,
-      readyState: audio.readyState,
-    });
-    _handlers.current?.onWaveformUnavailable?.(player, "compat");
-  }, { once: true });
-
-  audio.addEventListener("timeupdate", () => {
-    if (_nativeAudio !== audio) return;
-    _handlers.current?.onTimeUpdate?.(audio.currentTime);
-  });
-
-  audio.addEventListener("play", () => {
-    if (_nativeAudio !== audio) return;
-    console.log("[MixReview:native] play event → onPlaybackChange(true)", {
-      hidden: document.hidden, t: (audio.currentTime || 0).toFixed(2),
-    });
-    _handlers.current?.onPlaybackChange?.(true);
-  });
-  audio.addEventListener("pause", () => {
-    if (_nativeAudio !== audio) return;
-    // Guard: iOS fires a native pause event when backgrounding the tab.
-    // If the page is hidden and we were playing before hide, this is an
-    // OS-induced background pause — suppress the UI update.  Playback
-    // state will be re-synced from actual element state on restore.
-    if (document.hidden && _wasPlayingOnHide) {
-      console.log("[MixReview:native] background pause event — suppressing UI update", {
-        t: (audio.currentTime || 0).toFixed(2),
-      });
-      return;
-    }
-    console.log("[MixReview:native] pause event → onPlaybackChange(false)", {
-      hidden: document.hidden, t: (audio.currentTime || 0).toFixed(2),
-    });
-    _handlers.current?.onPlaybackChange?.(false);
-  });
-  audio.addEventListener("ended", () => {
-    if (_nativeAudio === audio) _handlers.current?.onPlaybackChange?.(false);
-  });
-
-  audio.addEventListener("error", () => {
-    if (_nativeAudio !== audio || didSettle) return;
-    didSettle = true;
-    console.warn("[MixReview] Compat mode: native audio failed", audio.error?.message);
-    _handlers.current?.onError?.(new Error("Audio failed to load"));
-  }, { once: true });
-
-  // Set src last so all listeners are attached before load begins.
-  audio.src = url;
-  audio.load();
-}
-
 // ── Engine ─────────────────────────────────────────────────────────────────
 
 /**
- * Mount or reuse the singleton audio engine.
- * Returns the WaveSurfer instance (standard/lite modes) or null (compat mode).
+ * Mount or reuse the singleton WaveSurfer instance.
+ * Returns the WaveSurfer instance synchronously; it may not be ready yet.
  * If called with the same URL as the currently loaded instance, existing
  * playback is preserved and only the handlers are updated.
- *
- * mode: "standard" | "lite" | "compat"
  *
  * handlers: {
  *   onReady, onWaveformUnavailable, onError,
@@ -376,26 +67,19 @@ function _mountNativeAudio(url, handlers) {
  *
  * onReady            — waveform decoded and rendered successfully
  * onWaveformUnavailable(player, reason) — waveform failed/timed out but
- *                      audio is playable; player interface provided.
- *                      reason === "compat" means old-device native-audio mode.
+ *                      audio element is playable; player interface provided
  * onError            — both waveform and audio are unavailable
  */
-export function mountMobileEngine(container, url, handlers, mode = "standard") {
+export function mountMobileEngine(container, url, handlers) {
   _handlers.current = handlers;
-  _mobileMode = mode;
 
-  if (_url === url && (_ws || _nativeAudio)) {
-    return _mobileMode === "compat" ? null : _ws;
+  if (_url === url && _ws) {
+    return _ws;
   }
 
   if (_ws) {
     _ws.destroy();
     _ws = null;
-  }
-  if (_nativeAudio) {
-    _nativeAudio.pause();
-    _nativeAudio.src = "";
-    _nativeAudio = null;
   }
 
   _url = url;
@@ -404,18 +88,10 @@ export function mountMobileEngine(container, url, handlers, mode = "standard") {
 
   // ── Logging ────────────────────────────────────────────────────────────
   const ext = url.split("?")[0].split(".").pop().toLowerCase();
-  console.log("[MixReview] MobileEngine mount", { mode, ext, url: url.slice(0, 120) });
+  console.log("[MixReview] MobileEngine mount", { ext, url: url.slice(0, 120) });
   probeAudioUrl(url).catch(() => {}); // background, non-blocking
 
-  // ── Compat mode: native <audio>, no WaveSurfer ────────────────────────
-  if (mode === "compat") {
-    _mountNativeAudio(url, handlers);
-    return null;
-  }
-
-  // ── WaveSurfer instance (standard / lite) ─────────────────────────────
-  const decodeTimeoutMs = mode === "lite" ? WAVEFORM_TIMEOUT_LITE_MS : WAVEFORM_TIMEOUT_MS;
-
+  // ── WaveSurfer instance ────────────────────────────────────────────────
   const ws = WaveSurfer.create({
     container,
     url,
@@ -435,9 +111,6 @@ export function mountMobileEngine(container, url, handlers, mode = "standard") {
   });
 
   _ws = ws;
-  // Attach logging listeners to WaveSurfer's underlying media element.
-  // These are informational only and never alter playback state.
-  _attachMediaLogging(ws.getMediaElement?.(), "ws");
 
   // didSettle: true once onReady or onWaveformUnavailable has been called.
   // Prevents duplicate handler calls if both fallback timer and WaveSurfer
@@ -447,9 +120,9 @@ export function mountMobileEngine(container, url, handlers, mode = "standard") {
   // ── Fallback timer ─────────────────────────────────────────────────────
   const fallbackTimer = setTimeout(() => {
     if (didSettle || _ws !== ws) return;
-    console.warn("[MixReview] Waveform decode timeout after", decodeTimeoutMs, "ms — attempting audio-only fallback");
+    console.warn("[MixReview] Waveform decode timeout after", WAVEFORM_TIMEOUT_MS, "ms — attempting audio-only fallback");
     activateFallback("timeout");
-  }, decodeTimeoutMs);
+  }, WAVEFORM_TIMEOUT_MS);
 
   // ── Audio-only fallback ────────────────────────────────────────────────
 
@@ -657,34 +330,10 @@ export function mountMobileEngine(container, url, handlers, mode = "standard") {
   });
 
   ws.on("play", () => {
-    if (_ws !== ws) return;
-    const mediaEl = _getMediaEl();
-    console.log("[MixReview:ws] play event → onPlaybackChange(true)", {
-      hidden: document.hidden, t: mediaEl?.currentTime?.toFixed(2) ?? null,
-    });
-    _handlers.current?.onPlaybackChange?.(true);
+    if (_ws === ws) _handlers.current?.onPlaybackChange?.(true);
   });
   ws.on("pause", () => {
-    if (_ws !== ws) return;
-    // Guard: iOS fires a native pause event on the media element when
-    // backgrounding the tab.  WaveSurfer re-emits it as its own "pause".
-    // If the page is hidden and we were playing before hide, this is an
-    // OS-induced background pause — suppress the UI update so the UI
-    // does not get stuck in the paused state.  Actual playback state will
-    // be re-synced from the real media element state on restore.
-    if (document.hidden && _wasPlayingOnHide) {
-      const mediaEl = _getMediaEl();
-      console.log("[MixReview:ws] background pause event — suppressing UI update", {
-        t: mediaEl?.currentTime?.toFixed(2) ?? null,
-        paused: mediaEl?.paused,
-      });
-      return;
-    }
-    const mediaEl = _getMediaEl();
-    console.log("[MixReview:ws] pause event → onPlaybackChange(false)", {
-      hidden: document.hidden, t: mediaEl?.currentTime?.toFixed(2) ?? null,
-    });
-    _handlers.current?.onPlaybackChange?.(false);
+    if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
   });
   ws.on("finish", () => {
     if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
@@ -699,13 +348,7 @@ export function disposeMobileEngine() {
     _ws.destroy();
     _ws = null;
   }
-  if (_nativeAudio) {
-    _nativeAudio.pause();
-    _nativeAudio.src = "";
-    _nativeAudio = null;
-  }
   _url = null;
-  _mobileMode = "standard";
   _wasPlayingOnHide = false;
   _handlers.current = null;
 }
