@@ -41,7 +41,16 @@ async function probeAudioUrl(url) {
 
 function attachNativeListeners(mediaEl, ws) {
   function onPlay() {
+    // 'play' fires when .play() is called — audio may not have started yet
+    // (could be buffering, or AudioContext still suspended). Log only; do NOT
+    // set isPlaying here to avoid fake Pause state.
     console.log("[MobileEngine] native play", { t: mediaEl.currentTime?.toFixed(2) });
+  }
+  function onPlaying() {
+    // 'playing' fires when audio is actually outputting (after any buffering
+    // and after AudioContext has resumed). This is the authoritative signal
+    // that the user can hear audio.
+    console.log("[MobileEngine] native playing", { t: mediaEl.currentTime?.toFixed(2) });
     if (_ws === ws) _handlers.current?.onPlaybackChange?.(true);
   }
   function onPause() {
@@ -54,6 +63,9 @@ function attachNativeListeners(mediaEl, ws) {
   }
   function onWaiting() {
     console.log("[MobileEngine] native waiting (buffering)", { t: mediaEl.currentTime?.toFixed(2) });
+    // 'waiting' means audio stalled mid-play — drop back to paused UI so the
+    // user sees Play rather than a frozen Pause while rebuffering.
+    if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
   }
   function onStalled() {
     console.log("[MobileEngine] native stalled", { t: mediaEl.currentTime?.toFixed(2) });
@@ -72,6 +84,7 @@ function attachNativeListeners(mediaEl, ws) {
   }
 
   mediaEl.addEventListener("play", onPlay);
+  mediaEl.addEventListener("playing", onPlaying);
   mediaEl.addEventListener("pause", onPause);
   mediaEl.addEventListener("ended", onEnded);
   mediaEl.addEventListener("waiting", onWaiting);
@@ -82,6 +95,7 @@ function attachNativeListeners(mediaEl, ws) {
 
   return () => {
     mediaEl.removeEventListener("play", onPlay);
+    mediaEl.removeEventListener("playing", onPlaying);
     mediaEl.removeEventListener("pause", onPause);
     mediaEl.removeEventListener("ended", onEnded);
     mediaEl.removeEventListener("waiting", onWaiting);

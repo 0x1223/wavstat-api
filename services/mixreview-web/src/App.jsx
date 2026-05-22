@@ -1327,13 +1327,34 @@ export default function App() {
     if (!isAutoNext && !userHasPlayedRef.current) return;
 
     autoplayAttemptedRef.current = true;
+    const el = mediaElement; // capture — may change if another track is selected mid-await
     (async () => {
+      // Track whether 'playing' fires so we can detect a stall.
+      let playingFired = false;
+      function onPlayingOnce() { playingFired = true; }
+      el?.addEventListener("playing", onPlayingOnce, { once: true });
+
       try {
         await playerRef.current?.play();
+
+        // Stall guard: play() resolved but if 'playing' still hasn't fired
+        // and currentTime has not advanced after 800 ms, the audio is stuck
+        // (AudioContext suspended, iOS blocked internally, etc.).
+        // Reset to Play state rather than leaving a fake Pause showing.
+        setTimeout(() => {
+          el?.removeEventListener("playing", onPlayingOnce);
+          if (!playingFired && el && !el.paused && el.currentTime < 0.05) {
+            console.log("[MixReview] Stall detected — play() resolved but audio did not start; resetting to Play state");
+            try { el.pause(); } catch (_) {}
+          }
+        }, 800);
       } catch (e) {
-        // Browser policy blocked autoplay. Show ready (paused) state —
-        // user must tap Play. Do not set isPlaying; native audio drives state.
+        // Browser policy blocked autoplay (NotAllowedError) or another error.
+        // 'play' event may have fired before the rejection, which would have
+        // optimistically set isPlaying=true. Call pause() to correct the UI.
+        el?.removeEventListener("playing", onPlayingOnce);
         console.log("[MixReview] Autoplay blocked — waiting for Play tap", e?.name);
+        try { el?.pause(); } catch (_) {}
       }
     })();
   }, [isPlayerReady, isReviewerMode, activeTrackId, activeVersionId]);
@@ -1564,9 +1585,15 @@ export default function App() {
               tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
               activeTrackId={activeTrackId}
               onTrackSelect={(trackId) => {
-                // User manually selected a track — clear any pending auto-next
-                // so the new track does not autoplay on load.
+                // This runs synchronously inside the user's tap gesture.
+                // Clear any pending auto-next flag (manual selection takes over).
                 autoPlayNextRef.current = false;
+                // If the user has already pressed Play this session, refresh the
+                // iOS audio session so the programmatic play() called later by
+                // the isPlayerReady effect succeeds without needing its own gesture.
+                if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
+                  unlockAudioSession();
+                }
                 selectTrack(trackId);
               }}
             />
