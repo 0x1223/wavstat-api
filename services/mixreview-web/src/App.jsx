@@ -1635,7 +1635,10 @@ export default function App() {
             onMobileNoteRequest={openMobileNote}
             onMeterUpdate={isReviewerMode && tracks.length > 1 ? handleMeterUpdate : undefined}
           />
-          <SpectrumAnalyzer mediaElement={mediaElement} isPlaying={isPlaying} />
+          {/* Desktop analyzer only — MobileSpectrumAnalyzer owns the audio graph on mobile reviewer */}
+          {(!isReviewerMode || !isMobileViewport()) && (
+            <SpectrumAnalyzer mediaElement={mediaElement} isPlaying={isPlaying} />
+          )}
         </div>
 
         <div className="review-side">
