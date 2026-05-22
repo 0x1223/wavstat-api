@@ -19,8 +19,10 @@ export function TrackList({
             <input
               type="file"
               accept="audio/*"
+              multiple
               onChange={(event) => {
-                onTrackUpload(event.target.files?.[0]);
+                const files = Array.from(event.target.files || []);
+                if (files.length > 0) onTrackUpload(files);
                 event.target.value = "";
               }}
             />

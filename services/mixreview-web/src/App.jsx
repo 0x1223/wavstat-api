@@ -613,73 +613,117 @@ export default function App() {
     }
   }, [activeTrackId, activeVersionId, currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, versions]);
 
-  const handleTrackUpload = useCallback(async (file) => {
-    if (!permissions.canEdit) {
-      return;
-    }
+  // handleTrackUpload accepts an array of File objects (from a multi-select picker)
+  // or a single File for backwards compatibility. Files are uploaded sequentially
+  // to preserve selection order; each becomes its own track. Per-file errors are
+  // collected and reported at the end rather than aborting the whole batch, so a
+  // bad file doesn't prevent valid files in the same selection from uploading.
+  const handleTrackUpload = useCallback(async (fileOrFiles) => {
+    if (!permissions.canEdit) return;
 
-    if (!file) {
-      return;
-    }
+    // Normalise to array regardless of how the caller passes the files.
+    const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
+    const validFiles = files.filter(Boolean).filter((f) => {
+      if (!isAudioFile(f)) {
+        setUploadError("Only audio files can be added as tracks.");
+        return false;
+      }
+      return true;
+    });
 
-    if (!isAudioFile(file)) {
-      setUploadError("Choose an audio file to add a track.");
-      return;
-    }
+    if (validFiles.length === 0) return;
 
-    const title = deriveProjectTitle(file.name);
-    const nextTrackId = createTrackId(title);
-    const nextVersionId = "version-v1";
-    setUploadError("Uploading track to session storage...");
+    const isMulti = validFiles.length > 1;
+    setUploadError(
+      isMulti
+        ? `Uploading ${validFiles.length} tracks to session storage...`
+        : "Uploading track to session storage...",
+    );
     setSessionMessage("");
 
     try {
       await ensureSessionPersisted();
-      const uploadResult = await uploadSessionAudio(sessionId, nextVersionId, file, nextTrackId);
-      const nextAudioSource = normalizeAudioSource({
-        playbackUrl: uploadResult.playbackUrl,
-        audioUrl: uploadResult.audioUrl,
-        url: uploadResult.url,
-        key: uploadResult.key,
-        storage: uploadResult.storage,
-        fileName: uploadResult.fileName || file.name,
-        title,
-        size: uploadResult.size || file.size,
-        type: uploadResult.contentType || file.type || "audio file",
-        mimeType: uploadResult.contentType || file.type || null
-      });
-      const nextVersions = createEmptyVersions().map((version) =>
-        version.id === nextVersionId
-          ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
-          : version,
-      );
-      const nextTrack = createTrack(title, nextVersions, nextTrackId);
-
-      setUploadError("");
-      setTracks((currentTracks) => [...currentTracks, nextTrack]);
-      setActiveTrackId(nextTrackId);
-      setVersions(nextVersions);
-      setActiveVersionId(nextVersionId);
-      setCurrentTime(0);
-      setIsPlaying(false);
-      setIsPlayerReady(false);
-      setMobileNoteDraft(null);
-      playerRef.current = null;
-
-      // Eagerly persist the full session with the new track. The debounced
-      // auto-save won't fire if the admin navigates to the dashboard within
-      // its 450ms window, so we build the updated snapshot manually here
-      // (sessionSnapshot still reflects pre-setTracks state in this closure).
-      const savedSnapshot = {
-        ...sessionSnapshot,
-        activeTrackId: nextTrackId,
-        activeVersionId: nextVersionId,
-        tracks: [...sessionSnapshot.tracks, toStoredTrack(nextTrack)],
-      };
-      await saveSessionToApi(savedSnapshot).catch(() => {});
     } catch (error) {
       setUploadError(error.message || "Track upload failed.");
+      return;
     }
+
+    const newTracks = [];
+    let lastError = null;
+
+    for (let i = 0; i < validFiles.length; i++) {
+      const file = validFiles[i];
+
+      if (isMulti) {
+        setUploadError(`Uploading track ${i + 1} of ${validFiles.length}...`);
+      }
+
+      try {
+        const title = deriveProjectTitle(file.name);
+        const nextTrackId = createTrackId(title);
+        const nextVersionId = "version-v1";
+
+        const uploadResult = await uploadSessionAudio(sessionId, nextVersionId, file, nextTrackId);
+        const nextAudioSource = normalizeAudioSource({
+          playbackUrl: uploadResult.playbackUrl,
+          audioUrl: uploadResult.audioUrl,
+          url: uploadResult.url,
+          key: uploadResult.key,
+          storage: uploadResult.storage,
+          fileName: uploadResult.fileName || file.name,
+          title,
+          size: uploadResult.size || file.size,
+          type: uploadResult.contentType || file.type || "audio file",
+          mimeType: uploadResult.contentType || file.type || null
+        });
+        const nextVersions = createEmptyVersions().map((version) =>
+          version.id === nextVersionId
+            ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
+            : version,
+        );
+        const nextTrack = createTrack(title, nextVersions, nextTrackId);
+        newTracks.push(nextTrack);
+
+        // Add to state immediately so the track list updates as each file lands.
+        setTracks((currentTracks) => [...currentTracks, nextTrack]);
+      } catch (error) {
+        lastError = error;
+        // Continue to the next file — don't abort the whole batch.
+      }
+    }
+
+    if (newTracks.length === 0) {
+      setUploadError(lastError?.message || "Track upload failed.");
+      return;
+    }
+
+    // Activate the last successfully uploaded track.
+    const lastTrack = newTracks[newTracks.length - 1];
+    setActiveTrackId(lastTrack.id);
+    setVersions(lastTrack.versions);
+    setActiveVersionId("version-v1");
+    setCurrentTime(0);
+    setIsPlaying(false);
+    setIsPlayerReady(false);
+    setMobileNoteDraft(null);
+    playerRef.current = null;
+
+    setUploadError(
+      lastError
+        ? `${newTracks.length} of ${validFiles.length} track(s) uploaded — some files failed.`
+        : "",
+    );
+
+    // Eagerly persist all new tracks at once. sessionSnapshot is captured at
+    // call-entry (before any setTracks calls in this loop), so we append all
+    // newTracks explicitly rather than relying on the debounced auto-save.
+    const savedSnapshot = {
+      ...sessionSnapshot,
+      activeTrackId: lastTrack.id,
+      activeVersionId: "version-v1",
+      tracks: [...sessionSnapshot.tracks, ...newTracks.map(toStoredTrack)],
+    };
+    await saveSessionToApi(savedSnapshot).catch(() => {});
   }, [currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, sessionSnapshot]);
 
   const beginNewSession = useCallback(() => {
