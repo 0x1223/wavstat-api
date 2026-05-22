@@ -1,32 +1,5 @@
 import WaveSurfer from "wavesurfer.js";
 
-// DIAG: global accessor — query window.__mixreviewDiag.engine() from the browser
-// console at any moment to see current engine state.
-if (typeof window !== "undefined") {
-  window.__mixreviewDiag = window.__mixreviewDiag || {};
-  window.__mixreviewDiag.engine = () => {
-    const el = _getMediaEl();
-    return {
-      mode: _mobileMode,
-      url: (_url || "").slice(0, 80),
-      wasPlayingOnHide: _wasPlayingOnHide,
-      hasWaveSurfer: Boolean(_ws),
-      hasNativeAudio: Boolean(_nativeAudio),
-      mediaEl: el ? {
-        paused: el.paused,
-        muted: el.muted,
-        volume: el.volume,
-        currentTime: el.currentTime?.toFixed(2),
-        readyState: el.readyState,
-        networkState: el.networkState,
-        src: (el.currentSrc || el.src || "").slice(0, 80),
-        error: el.error ? { code: el.error.code, message: el.error.message } : null,
-      } : null,
-    };
-  };
-}
-// END DIAG
-
 // Singleton audio engine for mobile — lives outside the React component tree
 // so comment state changes and re-renders never cause WaveSurfer to be
 // destroyed or re-created.
@@ -65,28 +38,15 @@ function _schedulePlaybackVerification(mediaEl) {
     if (!mediaEl || mediaEl.paused) return; // paused in the interim — OK
     const t1 = mediaEl.currentTime;
     if (Math.abs(t1 - t0) < 0.05) {
-      // DIAG: muted/volume/src confirm whether element is healthy but silent
-      // (suspended AudioContext) vs stalled/errored.
-      const _analyzerDiag = window.__mixreviewDiag?.analyzer?.() ?? null;
-      console.warn("[MixReview] DIAG Playback verification FAILED — currentTime stalled", {
+      console.warn("[MixReview] Playback verification FAILED — currentTime stalled", {
         t0: t0.toFixed(2), t1: t1.toFixed(2),
         paused: mediaEl.paused,
-        muted: mediaEl.muted,
-        volume: mediaEl.volume,
         readyState: mediaEl.readyState,
         networkState: mediaEl.networkState,
-        src: (mediaEl.currentSrc || mediaEl.src || "").slice(0, 80),
         error: mediaEl.error
           ? { code: mediaEl.error.code, message: mediaEl.error.message }
           : null,
-        analyzerDiag: _analyzerDiag,
-        hint: !mediaEl.paused && !mediaEl.muted && mediaEl.volume > 0
-          ? "Element healthy but silent → likely suspended AudioContext owning the element"
-          : mediaEl.paused
-            ? "Element is paused — UI desync"
-            : "Check error/networkState",
       });
-      // END DIAG
       // No-op seek: can unstick a buffering stall without changing position.
       try { mediaEl.currentTime = mediaEl.currentTime; } catch (_) {}
     } else {
@@ -139,18 +99,12 @@ if (typeof document !== "undefined") {
       const restoredMediaEl = _getMediaEl();
       const restoredPaused = restoredMediaEl?.paused ?? true;
       const restoredTime = restoredMediaEl?.currentTime;
-      // DIAG: muted/volume/src confirm whether element is healthy on restore
-      console.log("[MixReview] DIAG Foreground restore", {
+      console.log("[MixReview] Foreground restore", {
         wasPlaying: _wasPlayingOnHide,
         nowPaused: restoredPaused,
         currentTime: restoredTime != null ? restoredTime.toFixed(2) : null,
-        muted: restoredMediaEl?.muted ?? null,
-        volume: restoredMediaEl?.volume ?? null,
         readyState: restoredMediaEl?.readyState ?? null,
-        src: (restoredMediaEl?.currentSrc || restoredMediaEl?.src || "").slice(0, 80),
-        analyzerDiag: window.__mixreviewDiag?.analyzer?.() ?? null,
       });
-      // END DIAG
 
       if (_wasPlayingOnHide) {
         if (restoredPaused) {
@@ -325,24 +279,7 @@ function _mountNativeAudio(url, handlers) {
   const player = {
     wavesurfer: null,
     mediaElement: audio,
-    play: async () => {
-      // DIAG
-      console.log("[MixReview] DIAG play() called (compat/native path)", {
-        audioSrc: (audio.currentSrc || audio.src || "").slice(0, 80),
-        paused: audio.paused,
-        muted: audio.muted,
-        readyState: audio.readyState,
-        hidden: document.hidden,
-      });
-      try {
-        await audio.play();
-        console.log("[MixReview] DIAG play() resolved (native)");
-      } catch (e) {
-        console.warn("[MixReview] DIAG play() REJECTED (native):", e.name, e.message);
-        throw e;
-      }
-      // END DIAG
-    },
+    play: async () => { await audio.play(); },
     pause: () => { audio.pause(); },
     playPause: async () => {
       if (audio.paused) { await audio.play(); } else { audio.pause(); }
@@ -690,26 +627,7 @@ export function mountMobileEngine(container, url, handlers, mode = "standard") {
     _handlers.current?.onReady?.({
       wavesurfer: ws,
       mediaElement,
-      play: async () => {
-        // DIAG: log play() outcome to detect autoplay rejections and context issues
-        const _el = ws.getMediaElement?.();
-        console.log("[MixReview] DIAG play() called (ws-ready path)", {
-          ctxState: window.__mixreviewDiag?.analyzer?.()?.audioCtxState ?? "unknown",
-          mediaElPaused: _el?.paused ?? null,
-          mediaElMuted: _el?.muted ?? null,
-          hidden: document.hidden,
-        });
-        try {
-          await ws.play();
-          console.log("[MixReview] DIAG play() resolved");
-        } catch (e) {
-          console.warn("[MixReview] DIAG play() REJECTED:", e.name, e.message, {
-            analyzerDiag: window.__mixreviewDiag?.analyzer?.() ?? null,
-          });
-          throw e;
-        }
-        // END DIAG
-      },
+      play: async () => { await ws.play(); },
       pause: () => ws.pause(),
       playPause: async () => { await ws.playPause(); },
       skip: (s) => ws.skip(s),
