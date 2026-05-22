@@ -122,9 +122,6 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
 
     function startAnim() {
       isPlaying = true;
-      // If there is no analyser (AudioContext was suspended at connect time and
-      // we skipped routing), there is nothing to animate. Audio plays natively.
-      if (!analyser) return;
       if (audioCtx?.state === "suspended") audioCtx.resume().catch(() => {});
       if (rafId == null) tick();
     }
@@ -147,37 +144,21 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
         // so we create one AudioContext purely for the AnalyserNode tap.
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        // ── Suspension guard ──────────────────────────────────────────────
-        // On iOS (and some Android), an AudioContext created without an active
-        // user-gesture token is born suspended. Routing the HTMLAudioElement
-        // through a suspended AudioContext silences native playback entirely.
-        // If we detect suspension here, close the context immediately (so the
-        // element never loses its native route) and fall through to subscribe
-        // to play/pause events without the audio graph. Analyser stays offline;
-        // audio continues uninterrupted.
-        if (audioCtx.state === "suspended") {
-          console.log("[MobileSpectrum] AudioContext suspended at creation — skipping audio routing; native playback preserved");
-          try { audioCtx.close(); } catch (_) {}
-          audioCtx = null;
-          // analyser / freqData / decayBuf stay null → paint() and startAnim()
-          // already guard on !analyser, so no crash and no silent audio.
-        } else {
-          analyser = audioCtx.createAnalyser();
-          analyser.fftSize = FFT_SIZE;
-          analyser.smoothingTimeConstant = 0.78;
-          analyser.minDecibels = -90;
-          analyser.maxDecibels = -10;
-          freqData = new Uint8Array(analyser.frequencyBinCount);
-          decayBuf = new Float32Array(analyser.frequencyBinCount);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = FFT_SIZE;
+        analyser.smoothingTimeConstant = 0.78;
+        analyser.minDecibels = -90;
+        analyser.maxDecibels = -10;
+        freqData = new Uint8Array(analyser.frequencyBinCount);
+        decayBuf = new Float32Array(analyser.frequencyBinCount);
 
-          // Route: mediaElement → source → analyser → destination (pass-through)
-          const src = audioCtx.createMediaElementSource(mediaEl);
-          src.connect(audioCtx.destination);
-          src.connect(analyser);
-        }
+        // Route: mediaElement → source → analyser → destination (pass-through)
+        const src = audioCtx.createMediaElementSource(mediaEl);
+        src.connect(audioCtx.destination);
+        src.connect(analyser);
       } catch (e) {
         console.warn("[MobileSpectrum] audio connect failed:", e.message);
-        // Clean up any half-initialised AudioContext so it doesn't leak.
+        // Clean up the half-initialised AudioContext so it doesn't leak.
         try { audioCtx?.close(); } catch (_) {}
         audioCtx = null;
         analyser = null;
@@ -186,8 +167,7 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
         return false;
       }
 
-      // Subscribe to WaveSurfer play/pause events regardless of whether the
-      // audio graph is live. startAnim() guards on analyser being non-null.
+      // Subscribe to WaveSurfer play/pause events
       function onPlay() { if (alive) startAnim(); }
       function onStop() { stopAnim(); }
       ws.on("play", onPlay);
@@ -199,7 +179,7 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
       };
 
       if (ws.isPlaying?.()) startAnim();
-      else paint(); // draw silent initial frame (no-op if analyser is null)
+      else paint(); // draw silent initial frame
 
       return true;
     }
@@ -226,20 +206,12 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
           decayBuf = null;
         }
       } else {
-        // Foreground restore: attempt to reconnect the analyser. The suspension
-        // guard in tryConnect() will detect if there is no user-gesture token
-        // and skip createMediaElementSource, so audio always stays native.
-        // Detach any stale listeners first so we don't double-subscribe.
-        console.log("[MobileSpectrum] visibilitychange → visible; attempting analyser reconnect");
-        detachWs?.();
-        detachWs = null;
-        if (!tryConnect()) {
-          let attempts = 0;
-          const iv = setInterval(() => {
-            attempts++;
-            if (!alive || tryConnect() || attempts > 25) clearInterval(iv);
-          }, 80);
-        }
+        // Do NOT attempt to reconnect the AudioContext or recreate
+        // MediaElementSourceNode on restore. Re-routing the HTMLAudioElement
+        // through a freshly-created (and likely suspended) AudioContext
+        // silences audio that is already playing natively. The analyser stays
+        // disconnected after restore — audio priority is higher than visuals.
+        console.log("[MobileSpectrum] visibilitychange → visible; leaving native audio untouched (analyser stays offline)");
       }
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
