@@ -52,6 +52,7 @@ export function WaveformReview({
   const zoomScrollXRef = useRef(0);
   const gestureRef = useRef(null); // tracks active pinch or pan gesture
   const zoomInnerRef = useRef(null); // the zoom-transform wrapper div
+  const lastGestureEndRef = useRef(0); // ms timestamp of last multi-touch end (stray-tap guard)
 
   // Called on every animation frame tick from MobileSpectrumAnalyzer's RAF loop.
   // Reads time-domain data from the already-running analyser — no new audio graph nodes.
@@ -335,41 +336,56 @@ export function WaveformReview({
 
   // ── Pinch-to-zoom touch listeners (mobile only) ─────────────────────────
   // Registered with passive:false so e.preventDefault() actually works.
-  // Reads state only through refs so the closure never goes stale.
+  // All state read through refs so closures never go stale.
+  //
+  // Zoom is applied as CSS scaleX on the shared zoom-inner wrapper that
+  // contains both the waveform canvas and the marker layer.  Both elements
+  // transform atomically in the same paint step — no marker drift.
+  //
+  // The content point under the pinch centre stays fixed as scale changes
+  // (zoom-at-cursor), and two-finger lateral movement pans independently.
   useEffect(() => {
     const el = zoomInnerRef.current;
     if (!el || !isMobileViewport()) return;
 
-    function dist2(touches) {
-      return Math.hypot(
-        touches[0].clientX - touches[1].clientX,
-        touches[0].clientY - touches[1].clientY,
-      );
+    function dist2(t0, t1) {
+      return Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
     }
 
-    // Natural (un-zoomed) width of the waveform canvas area, in px.
-    function outerW() {
-      if (!containerRef.current) return 1;
-      return containerRef.current.getBoundingClientRect().width /
-        Math.max(1, zoomScaleRef.current);
+    // Visible width and left edge of the clipping stage (unaffected by transform).
+    function getStageRect() {
+      const stage = el.parentElement;
+      return stage ? stage.getBoundingClientRect() : { left: 0, width: 1 };
     }
 
     function onTouchStart(e) {
       if (e.touches.length === 2) {
+        const t0 = e.touches[0], t1 = e.touches[1];
+        const sr = getStageRect();
+        const startScale = zoomScaleRef.current;
+        const startScrollX = zoomScrollXRef.current;
+        // Pinch midpoint relative to the left edge of the visible stage.
+        const midInStage = ((t0.clientX + t1.clientX) / 2) - sr.left;
+        // Equivalent point in content-local space — held fixed throughout.
+        // Formula: visual_x = content_x * scale - scrollX
+        //          → content_x = (visual_x + scrollX) / scale
+        const pinchMidContent = (midInStage + startScrollX) / Math.max(startScale, 1);
+
         gestureRef.current = {
           mode: "pinch",
-          startDist: dist2(e.touches),
-          startScale: zoomScaleRef.current,
-          startScrollX: zoomScrollXRef.current,
-          outerW: outerW(),
+          startDist: dist2(t0, t1),
+          startScale,
+          pinchMidContent,
+          stageW: sr.width,
         };
         e.preventDefault();
       } else if (e.touches.length === 1 && zoomScaleRef.current > 1) {
+        // Single-finger pan when already zoomed.
         gestureRef.current = {
           mode: "pan",
           startX: e.touches[0].clientX,
           startScrollX: zoomScrollXRef.current,
-          outerW: outerW(),
+          stageW: getStageRect().width,
         };
       } else {
         gestureRef.current = null;
@@ -381,15 +397,23 @@ export function WaveformReview({
       if (!g) return;
 
       if (g.mode === "pinch" && e.touches.length === 2) {
-        const newDist = dist2(e.touches);
+        const t0 = e.touches[0], t1 = e.touches[1];
+        const newDist = dist2(t0, t1);
         const ratio = g.startDist > 0 ? newDist / g.startDist : 1;
         const newScale = Math.min(8, Math.max(1, g.startScale * ratio));
 
-        // Preserve proportional scroll position as scale changes.
-        const oldMax = g.outerW * Math.max(0, g.startScale - 1);
-        const newMax = g.outerW * Math.max(0, newScale - 1);
-        const pct = oldMax > 0 ? g.startScrollX / oldMax : 0;
-        const newScrollX = Math.min(newMax, Math.max(0, pct * newMax));
+        // Current midpoint in stage-relative visual space.
+        const sl = el.parentElement ? el.parentElement.getBoundingClientRect().left : 0;
+        const currentMidInStage = ((t0.clientX + t1.clientX) / 2) - sl;
+
+        // Solve for scrollX that keeps the content point under the pinch centre:
+        //   content_x * newScale - newScrollX = currentMidInStage
+        //   → newScrollX = content_x * newScale - currentMidInStage
+        const maxScroll = g.stageW * Math.max(0, newScale - 1);
+        const newScrollX = Math.min(
+          maxScroll,
+          Math.max(0, g.pinchMidContent * newScale - currentMidInStage),
+        );
 
         zoomScaleRef.current = newScale;
         zoomScrollXRef.current = newScrollX;
@@ -398,7 +422,7 @@ export function WaveformReview({
         e.preventDefault();
       } else if (g.mode === "pan" && e.touches.length === 1) {
         const dx = e.touches[0].clientX - g.startX;
-        const maxScroll = g.outerW * Math.max(0, zoomScaleRef.current - 1);
+        const maxScroll = g.stageW * Math.max(0, zoomScaleRef.current - 1);
         const newScrollX = Math.min(maxScroll, Math.max(0, g.startScrollX - dx));
         zoomScrollXRef.current = newScrollX;
         setZoomScrollX(newScrollX);
@@ -407,8 +431,15 @@ export function WaveformReview({
     }
 
     function onTouchEnd(e) {
-      // Clear gesture state once fewer than 2 fingers remain.
-      if (e.touches.length < 2) gestureRef.current = null;
+      if (e.touches.length === 0) {
+        gestureRef.current = null;
+      } else if (e.touches.length < 2) {
+        // Finger count dropped from 2 → 1 (pinch release, one finger remains).
+        // Record the time so marker onClick handlers can suppress the stray tap
+        // that may fire when the last finger lifts.
+        gestureRef.current = null;
+        lastGestureEndRef.current = Date.now();
+      }
     }
 
     el.addEventListener("touchstart", onTouchStart, { passive: false });
@@ -524,10 +555,15 @@ export function WaveformReview({
   <div
     ref={zoomInnerRef}
     className="waveform-zoom-inner"
-    style={isMobileViewport() ? {
-      width: `${zoomScale * 100}%`,
-      transform: zoomScrollX !== 0 ? `translateX(${-zoomScrollX}px)` : undefined,
-      willChange: zoomScale > 1 ? "transform" : undefined,
+    style={isMobileViewport() && (zoomScale !== 1 || zoomScrollX !== 0) ? {
+      // scaleX on the shared wrapper transforms waveform + marker layer
+      // identically in a single paint step — no marker drift.
+      // translateX(-scrollX) scaleX(S): a point at local x maps to
+      // visual position x*S − scrollX. transform-origin:left keeps
+      // the maths simple (scale expands rightward from x=0).
+      transform: `translateX(${-zoomScrollX}px) scaleX(${zoomScale})`,
+      transformOrigin: "left center",
+      willChange: "transform",
     } : undefined}
   >
   <div
@@ -583,6 +619,8 @@ export function WaveformReview({
                   aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
                   onClick={(event) => {
                     event.stopPropagation();
+                    // Drop any tap that fires immediately after a pinch gesture.
+                    if (gestureRef.current || Date.now() - lastGestureEndRef.current < 200) return;
                     if (!comment || comment.isPreview) return;
                     // Mobile: toggle the text bubble for this marker; desktop: seek
                     if (isMobileViewport() && isReviewerMode) {
