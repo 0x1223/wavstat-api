@@ -1,0 +1,23 @@
+name: kingz_listen
+description: Premium local Wi-Fi listener app foundation for studio audio streaming.
+publish_to: "none"
+
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  just_audio: ^0.9.39
+  web: ^0.5.1
+  web_socket_channel: ^2.4.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
