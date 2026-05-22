@@ -358,8 +358,24 @@ export function WaveformReview({
       return stage ? stage.getBoundingClientRect() : { left: 0, width: 1 };
     }
 
+    // Dispatch pointercancel to abort any in-progress WaveSurfer drag tracking.
+    // WaveSurfer v7 clears its dragging state on pointercancel.  Touch-derived
+    // pointer events use IDs 1, 2, … for the first two fingers in most browsers.
+    function cancelWaveSurferDrag() {
+      const waveEl = containerRef.current;
+      if (!waveEl) return;
+      for (const pid of [1, 2, 3]) {
+        try {
+          waveEl.dispatchEvent(
+            new PointerEvent("pointercancel", { bubbles: true, pointerId: pid }),
+          );
+        } catch (_) {}
+      }
+    }
+
     function onTouchStart(e) {
-      if (e.touches.length === 2) {
+      if (e.touches.length >= 2) {
+        // ── Multi-touch: enter pinch/zoom mode ──────────────────────────────
         const t0 = e.touches[0], t1 = e.touches[1];
         const sr = getStageRect();
         const startScale = zoomScaleRef.current;
@@ -378,15 +394,32 @@ export function WaveformReview({
           pinchMidContent,
           stageW: sr.width,
         };
+        // Cancel any WaveSurfer drag that started when touch1 first landed.
+        cancelWaveSurferDrag();
         e.preventDefault();
-      } else if (e.touches.length === 1 && zoomScaleRef.current > 1) {
-        // Single-finger pan when already zoomed.
-        gestureRef.current = {
-          mode: "pan",
-          startX: e.touches[0].clientX,
-          startScrollX: zoomScrollXRef.current,
-          stageW: getStageRect().width,
-        };
+
+      } else if (e.touches.length === 1) {
+        // ── Single touch ────────────────────────────────────────────────────
+        // Post-gesture cooldown: suppress new touches briefly after multi-touch
+        // ends so the last-lifted finger cannot accidentally start a seek.
+        if (Date.now() - lastGestureEndRef.current < 150) {
+          gestureRef.current = { mode: "cooldown" };
+          e.preventDefault();
+          return;
+        }
+        if (zoomScaleRef.current > 1) {
+          // Pan the zoomed view — block WaveSurfer's drag-to-seek.
+          gestureRef.current = {
+            mode: "pan",
+            startX: e.touches[0].clientX,
+            startScrollX: zoomScrollXRef.current,
+            stageW: getStageRect().width,
+          };
+          e.preventDefault();
+        } else {
+          // Normal single-finger tap/scrub — pass through to WaveSurfer.
+          gestureRef.current = null;
+        }
       } else {
         gestureRef.current = null;
       }
@@ -396,7 +429,7 @@ export function WaveformReview({
       const g = gestureRef.current;
       if (!g) return;
 
-      if (g.mode === "pinch" && e.touches.length === 2) {
+      if (g.mode === "pinch" && e.touches.length >= 2) {
         const t0 = e.touches[0], t1 = e.touches[1];
         const newDist = dist2(t0, t1);
         const ratio = g.startDist > 0 ? newDist / g.startDist : 1;
@@ -427,29 +460,45 @@ export function WaveformReview({
         zoomScrollXRef.current = newScrollX;
         setZoomScrollX(newScrollX);
         e.preventDefault();
+      } else if (g.mode === "post-pinch" || g.mode === "cooldown") {
+        // Remaining finger after a pinch ends, or within the post-gesture
+        // cooldown window.  Prevent pointer-event synthesis so WaveSurfer's
+        // drag handler cannot seek while the user is finishing the gesture.
+        e.preventDefault();
       }
     }
 
     function onTouchEnd(e) {
+      const prevMode = gestureRef.current?.mode;
+
       if (e.touches.length === 0) {
+        // All fingers lifted — start cooldown so the very next touchstart
+        // cannot immediately trigger a seek.
+        if (prevMode && prevMode !== "cooldown") {
+          lastGestureEndRef.current = Date.now();
+        }
         gestureRef.current = null;
-      } else if (e.touches.length < 2) {
-        // Finger count dropped from 2 → 1 (pinch release, one finger remains).
-        // Record the time so marker onClick handlers can suppress the stray tap
-        // that may fire when the last finger lifts.
-        gestureRef.current = null;
+
+      } else if (e.touches.length === 1 && prevMode === "pinch") {
+        // Dropped from 2 → 1 finger.  The remaining finger is still touching
+        // from the pinch — it must NOT trigger a seek.  Hold "post-pinch" mode
+        // until that last finger also lifts (handled above by touches.length===0).
+        gestureRef.current = { mode: "post-pinch" };
         lastGestureEndRef.current = Date.now();
       }
+      // For 3→2, pan→0, etc. the existing mode is preserved or cleared above.
     }
 
     el.addEventListener("touchstart", onTouchStart, { passive: false });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
 
     return () => {
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
     };
   }, []); // register once on mount; all state is accessed via refs
 
@@ -570,7 +619,11 @@ export function WaveformReview({
   ref={containerRef}
   className="waveform"
   onTouchMove={(event) => {
+    // Block during any active gesture (pinch, pan, post-pinch, cooldown)
+    // and within the post-gesture cooldown window so two-finger operations
+    // can never accidentally scrub the playhead.
     if (gestureRef.current) return;
+    if (Date.now() - lastGestureEndRef.current < 150) return;
     const touch = event.changedTouches?.[0];
     if (!touch || !containerRef.current || !duration) return;
 
