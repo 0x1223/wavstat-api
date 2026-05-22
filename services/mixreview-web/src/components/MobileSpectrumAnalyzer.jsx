@@ -7,7 +7,7 @@ const CENTERS = [
   2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000,
 ];
 const N = CENTERS.length; // 30
-const FFT_SIZE = 4096;
+const FFT_SIZE = 4096; // default full-quality fftSize
 const CANVAS_H = 72;
 // 1/3-octave half-bandwidth factor: 2^(1/6)
 const HALF_BW = Math.pow(2, 1 / 6);
@@ -39,6 +39,8 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     let decayBuf = null;
     let audioCtx = null;
     let detachWs = null;
+    let reconnectIv = null;
+    let frameCount = 0;
 
     // ── Drawing ──────────────────────────────────────────────────────────
     // dataOverride: optional Float32Array to draw from instead of reading the analyser.
@@ -64,7 +66,8 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       const slotW = W / N;
       const barW = Math.max(1, slotW - 1);
       const sampleRate = audioCtx.sampleRate;
-      const binHz = sampleRate / FFT_SIZE;
+      // Use the analyser's actual fftSize so lite mode (fftSize=1024) maps bins correctly.
+      const binHz = sampleRate / analyser.fftSize;
       const M = freqData.length;
 
       for (let i = 0; i < N; i++) {
@@ -104,7 +107,6 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     // ── RAF loop ─────────────────────────────────────────────────────────
     // Lite mode: paint at ~15 fps (every 4th frame) instead of 60 fps to
     // reduce canvas draw workload on weak/low-memory devices.
-    let frameCount = 0;
     function tick() {
       if (!alive || !isPlaying) return;
       if (!liteMode || ++frameCount % 4 === 0) {
@@ -137,7 +139,47 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       decayTick();
     }
 
+    // ── Audio teardown ────────────────────────────────────────────────────
+    // Closes the AudioContext, which releases the HTMLMediaElement from the
+    // Web Audio graph.  After close(), the media element reverts to its native
+    // audio output path so it can keep playing while the page is backgrounded
+    // (iOS suspends AudioContexts in the background, which would otherwise
+    // stop audio routed through them).
+    function tearDownAudio() {
+      stopAnim();
+      detachWs?.();
+      detachWs = null;
+      try { analyser?.disconnect(); } catch (_) {}
+      if (audioCtx && audioCtx.state !== "closed") {
+        audioCtx.close().catch(() => {});
+      }
+      audioCtx = null;
+      analyser = null;
+      freqData = null;
+      decayBuf = null;
+    }
+
+    // ── Reconnect management ──────────────────────────────────────────────
+    function clearReconnect() {
+      if (reconnectIv != null) { clearInterval(reconnectIv); reconnectIv = null; }
+    }
+
+    function startReconnectLoop() {
+      clearReconnect();
+      if (tryConnect()) return;
+      reconnectIv = setInterval(() => {
+        if (!alive) { clearReconnect(); return; }
+        if (tryConnect()) clearReconnect();
+      }, 80);
+    }
+
     // ── Audio setup ───────────────────────────────────────────────────────
+    // Connects the WaveSurfer media element to a new AudioContext for analysis.
+    // createMediaElementSource() routes the element's audio through the context;
+    // we connect to both destination (so the user hears audio) and analyser.
+    //
+    // IMPORTANT: this binding is released when tearDownAudio() calls
+    // audioCtx.close().  After close(), the element plays natively again.
     function tryConnect() {
       const ws = wsRef.current;
       if (!ws) return false;
@@ -145,24 +187,24 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       if (!mediaEl) return false;
 
       try {
-        // Mobile WaveSurfer uses HTMLAudioElement directly (no Web Audio backend),
-        // so we create one AudioContext purely for the AnalyserNode tap.
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
         analyser = audioCtx.createAnalyser();
-        analyser.fftSize = FFT_SIZE;
+        analyser.fftSize = liteMode ? 1024 : FFT_SIZE;
         analyser.smoothingTimeConstant = 0.78;
         analyser.minDecibels = -90;
         analyser.maxDecibels = -10;
         freqData = new Uint8Array(analyser.frequencyBinCount);
         decayBuf = new Float32Array(analyser.frequencyBinCount);
 
-        // Route: mediaElement → source → analyser → destination (pass-through)
+        // Route: mediaElement → source → destination (pass-through to speakers)
+        //                              → analyser    (spectrum data)
         const src = audioCtx.createMediaElementSource(mediaEl);
         src.connect(audioCtx.destination);
         src.connect(analyser);
       } catch (e) {
         console.warn("[MobileSpectrum] audio connect failed:", e.message);
+        tearDownAudio();
         return false;
       }
 
@@ -183,6 +225,27 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
       return true;
     }
 
+    // ── Background / foreground handling ──────────────────────────────────
+    // On page hide: tear down the AudioContext so the media element is
+    //   released back to native output.  Audio keeps playing in background.
+    //   The analyser simply pauses — that's acceptable.
+    // On page show: recreate the AudioContext and reconnect the analyser.
+    //   The audio element may still be playing (never stopped), so we just
+    //   reattach the visual layer on top of it.
+    function handleVisibilityChange() {
+      if (!alive) return;
+      if (document.hidden) {
+        console.log("[MobileSpectrum] page hidden — closing AudioContext");
+        clearReconnect();
+        tearDownAudio();
+      } else {
+        console.log("[MobileSpectrum] page visible — reconnecting analyser");
+        startReconnectLoop();
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     // ── Canvas pixel sizing ───────────────────────────────────────────────
     const ro = new ResizeObserver(() => {
       if (!canvas) return;
@@ -196,29 +259,19 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame, liteMode = false }) {
     const initW = canvas.getBoundingClientRect().width | 0;
     if (initW > 0) canvas.width = initW;
 
-    // Attempt setup; poll until WaveSurfer is ready
-    if (!tryConnect()) {
-      const iv = setInterval(() => {
-        if (!alive || tryConnect()) clearInterval(iv);
-      }, 80);
-      return () => {
-        alive = false;
-        clearInterval(iv);
-        if (rafId != null) cancelAnimationFrame(rafId);
-        detachWs?.();
-        try { analyser?.disconnect(); } catch (_) {}
-        ro.disconnect();
-      };
+    // Initial connect (only while page is visible).
+    if (!document.hidden) {
+      startReconnectLoop();
     }
 
     return () => {
       alive = false;
-      if (rafId != null) cancelAnimationFrame(rafId);
-      detachWs?.();
-      try { analyser?.disconnect(); } catch (_) {}
+      clearReconnect();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      tearDownAudio();
       ro.disconnect();
     };
-  }, [wsRef]);
+  }, [wsRef, liteMode]);
 
   return (
     <canvas
