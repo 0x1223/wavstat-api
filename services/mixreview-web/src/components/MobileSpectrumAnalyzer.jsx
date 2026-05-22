@@ -206,14 +206,12 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
           decayBuf = null;
         }
       } else {
-        console.log("[MobileSpectrum] visibilitychange → visible; reconnecting AudioContext");
-        if (!tryConnect()) {
-          let attempts = 0;
-          const iv = setInterval(() => {
-            attempts++;
-            if (!alive || tryConnect() || attempts > 25) clearInterval(iv);
-          }, 80);
-        }
+        // Do NOT attempt to reconnect the AudioContext or recreate
+        // MediaElementSourceNode on restore. Re-routing the HTMLAudioElement
+        // through a freshly-created (and likely suspended) AudioContext
+        // silences audio that is already playing natively. The analyser stays
+        // disconnected after restore — audio priority is higher than visuals.
+        console.log("[MobileSpectrum] visibilitychange → visible; leaving native audio untouched (analyser stays offline)");
       }
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
