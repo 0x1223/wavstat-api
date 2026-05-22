@@ -158,6 +158,12 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
         src.connect(analyser);
       } catch (e) {
         console.warn("[MobileSpectrum] audio connect failed:", e.message);
+        // Clean up the half-initialised AudioContext so it doesn't leak.
+        try { audioCtx?.close(); } catch (_) {}
+        audioCtx = null;
+        analyser = null;
+        freqData = null;
+        decayBuf = null;
         return false;
       }
 
@@ -177,6 +183,40 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
 
       return true;
     }
+
+    // ── Background / foreground handling ─────────────────────────────────
+    // When the page hides, close the AudioContext so it releases the
+    // MediaElementSource binding and the HTMLAudioElement's audio routes
+    // natively — bypassing the now-suspended AudioContext. The analyser
+    // stops, but native audio continues uninterrupted in background.
+    // On restore, rebuild the AudioContext and reconnect the analyser.
+    function onVisibilityChange() {
+      if (!alive) return;
+      if (document.hidden) {
+        console.log("[MobileSpectrum] visibilitychange → hidden; closing AudioContext to allow native playback");
+        isPlaying = false;
+        if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+        detachWs?.();
+        detachWs = null;
+        if (audioCtx) {
+          try { audioCtx.close(); } catch (_) {}
+          audioCtx = null;
+          analyser = null;
+          freqData = null;
+          decayBuf = null;
+        }
+      } else {
+        console.log("[MobileSpectrum] visibilitychange → visible; reconnecting AudioContext");
+        if (!tryConnect()) {
+          let attempts = 0;
+          const iv = setInterval(() => {
+            attempts++;
+            if (!alive || tryConnect() || attempts > 25) clearInterval(iv);
+          }, 80);
+        }
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     // ── Canvas pixel sizing ───────────────────────────────────────────────
     const ro = new ResizeObserver(() => {
@@ -198,19 +238,23 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
       }, 80);
       return () => {
         alive = false;
+        document.removeEventListener("visibilitychange", onVisibilityChange);
         clearInterval(iv);
         if (rafId != null) cancelAnimationFrame(rafId);
         detachWs?.();
         try { analyser?.disconnect(); } catch (_) {}
+        if (audioCtx) { try { audioCtx.close(); } catch (_) {} }
         ro.disconnect();
       };
     }
 
     return () => {
       alive = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (rafId != null) cancelAnimationFrame(rafId);
       detachWs?.();
       try { analyser?.disconnect(); } catch (_) {}
+      if (audioCtx) { try { audioCtx.close(); } catch (_) {} }
       ro.disconnect();
     };
   }, [wsRef]);

@@ -11,26 +11,8 @@ const WAVEFORM_TIMEOUT_MS = 12_000;
 let _ws = null;
 let _url = null;
 let _wasPlayingOnHide = false;
+let _detachNativeListeners = null;
 const _handlers = { current: null };
-
-if (typeof document !== "undefined") {
-  document.addEventListener("visibilitychange", () => {
-    if (!_ws) return;
-    if (document.hidden) {
-      _wasPlayingOnHide = _ws.isPlaying();
-    } else {
-      // Resume a suspended AudioContext when returning from background (iOS)
-      try {
-        const ac = _ws.options?.audioContext;
-        if (ac?.state === "suspended") ac.resume();
-      } catch (_) {}
-      if (_wasPlayingOnHide) {
-        _wasPlayingOnHide = false;
-        _ws.play().catch(() => {});
-      }
-    }
-  });
-}
 
 // ── Logging helpers ────────────────────────────────────────────────────────
 
@@ -50,6 +32,145 @@ async function probeAudioUrl(url) {
       url: url.slice(0, 120),
     });
   }
+}
+
+// ── Native audio event listeners ───────────────────────────────────────────
+// Transport state is driven by native HTMLAudioElement events so it stays
+// accurate in background / lock-screen, where WaveSurfer's event forwarding
+// may be throttled. This also lets us log every real audio lifecycle event.
+
+function attachNativeListeners(mediaEl, ws) {
+  function onPlay() {
+    console.log("[MobileEngine] native play", { t: mediaEl.currentTime?.toFixed(2) });
+    if (_ws === ws) _handlers.current?.onPlaybackChange?.(true);
+  }
+  function onPause() {
+    console.log("[MobileEngine] native pause", { t: mediaEl.currentTime?.toFixed(2) });
+    if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
+  }
+  function onEnded() {
+    console.log("[MobileEngine] native ended");
+    if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
+  }
+  function onWaiting() {
+    console.log("[MobileEngine] native waiting (buffering)", { t: mediaEl.currentTime?.toFixed(2) });
+  }
+  function onStalled() {
+    console.log("[MobileEngine] native stalled", { t: mediaEl.currentTime?.toFixed(2) });
+  }
+  function onCanPlay() {
+    console.log("[MobileEngine] native canplay", { readyState: mediaEl.readyState });
+  }
+  function onError() {
+    console.warn("[MobileEngine] native error", {
+      code: mediaEl.error?.code,
+      message: mediaEl.error?.message,
+    });
+  }
+  function onTimeUpdate() {
+    if (_ws === ws) _handlers.current?.onTimeUpdate?.(mediaEl.currentTime);
+  }
+
+  mediaEl.addEventListener("play", onPlay);
+  mediaEl.addEventListener("pause", onPause);
+  mediaEl.addEventListener("ended", onEnded);
+  mediaEl.addEventListener("waiting", onWaiting);
+  mediaEl.addEventListener("stalled", onStalled);
+  mediaEl.addEventListener("canplay", onCanPlay);
+  mediaEl.addEventListener("error", onError);
+  mediaEl.addEventListener("timeupdate", onTimeUpdate);
+
+  return () => {
+    mediaEl.removeEventListener("play", onPlay);
+    mediaEl.removeEventListener("pause", onPause);
+    mediaEl.removeEventListener("ended", onEnded);
+    mediaEl.removeEventListener("waiting", onWaiting);
+    mediaEl.removeEventListener("stalled", onStalled);
+    mediaEl.removeEventListener("canplay", onCanPlay);
+    mediaEl.removeEventListener("error", onError);
+    mediaEl.removeEventListener("timeupdate", onTimeUpdate);
+  };
+}
+
+// ── Mobile lifecycle: background / lock-screen stability ──────────────────
+// Goal: native HTMLAudioElement owns playback. Audio is never paused on
+// visibility / page-lifecycle events. We only restart if the OS actually
+// stopped the element. All lifecycle transitions are logged for diagnostics.
+
+if (typeof document !== "undefined") {
+  const getMediaEl = () => _ws?.getMediaElement?.() ?? null;
+
+  document.addEventListener("visibilitychange", () => {
+    if (!_ws) return;
+    const mediaEl = getMediaEl();
+
+    if (document.hidden) {
+      // Use native paused property — more reliable than WaveSurfer.isPlaying()
+      _wasPlayingOnHide = mediaEl ? !mediaEl.paused : _ws.isPlaying();
+      console.log("[MobileEngine] visibilitychange → hidden", {
+        wasPlaying: _wasPlayingOnHide,
+        currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
+      });
+    } else {
+      const isStillPlaying = mediaEl ? !mediaEl.paused : false;
+      console.log("[MobileEngine] visibilitychange → visible", {
+        wasPlaying: _wasPlayingOnHide,
+        isStillPlaying,
+        currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
+      });
+
+      if (_wasPlayingOnHide && !isStillPlaying) {
+        _wasPlayingOnHide = false;
+        const tBefore = mediaEl?.currentTime;
+        console.log("[MobileEngine] Audio stopped in background — resuming; currentTime before:", tBefore?.toFixed(2));
+        _ws.play()
+          .then(() => {
+            console.log("[MobileEngine] currentTime after restore:", getMediaEl()?.currentTime?.toFixed(2));
+          })
+          .catch((e) => {
+            console.warn("[MobileEngine] Resume after background stop failed:", e.message);
+          });
+      } else {
+        _wasPlayingOnHide = false;
+        if (isStillPlaying) {
+          console.log("[MobileEngine] Audio continued in background — no restart needed");
+        }
+      }
+    }
+  });
+
+  // pagehide is more reliable than visibilitychange on some iOS versions.
+  window.addEventListener("pagehide", (evt) => {
+    const mediaEl = getMediaEl();
+    const isNativePlaying = mediaEl ? !mediaEl.paused : (_ws?.isPlaying?.() ?? false);
+    // OR-in: don't clobber a flag already set by visibilitychange
+    if (isNativePlaying) _wasPlayingOnHide = true;
+    console.log("[MobileEngine] pagehide", {
+      persisted: evt.persisted,
+      isPlaying: isNativePlaying,
+      currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
+    });
+  });
+
+  window.addEventListener("pageshow", (evt) => {
+    const mediaEl = getMediaEl();
+    const isStillPlaying = mediaEl ? !mediaEl.paused : false;
+    console.log("[MobileEngine] pageshow", {
+      persisted: evt.persisted,
+      wasPlaying: _wasPlayingOnHide,
+      isStillPlaying,
+      currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
+    });
+    if (_ws && _wasPlayingOnHide && !isStillPlaying) {
+      _wasPlayingOnHide = false;
+      console.log("[MobileEngine] Audio stopped during page hide — resuming after pageshow");
+      _ws.play().catch((e) => {
+        console.warn("[MobileEngine] Resume after pageshow failed:", e.message);
+      });
+    } else {
+      _wasPlayingOnHide = false;
+    }
+  });
 }
 
 // ── Engine ─────────────────────────────────────────────────────────────────
@@ -78,6 +199,8 @@ export function mountMobileEngine(container, url, handlers) {
   }
 
   if (_ws) {
+    _detachNativeListeners?.();
+    _detachNativeListeners = null;
     _ws.destroy();
     _ws = null;
   }
@@ -111,6 +234,15 @@ export function mountMobileEngine(container, url, handlers) {
   });
 
   _ws = ws;
+
+  // Attach native audio listeners as early as possible. WaveSurfer creates
+  // the HTMLAudioElement in its constructor, so it is usually available here.
+  // The ready / fallback paths re-check and attach if this missed.
+  const earlyMediaEl = ws.getMediaElement?.();
+  if (earlyMediaEl) {
+    _detachNativeListeners?.();
+    _detachNativeListeners = attachNativeListeners(earlyMediaEl, ws);
+  }
 
   // didSettle: true once onReady or onWaveformUnavailable has been called.
   // Prevents duplicate handler calls if both fallback timer and WaveSurfer
@@ -220,9 +352,7 @@ export function mountMobileEngine(container, url, handlers) {
 
   /**
    * Activate audio-only mode using the given media element.
-   * WaveSurfer's play/pause/skip/setTime all delegate to the media element,
-   * so the existing event forwarding (play → ws.on("play") → onPlaybackChange,
-   * etc.) continues to work without wiring extra listeners here.
+   * Native audio events drive transport state (see attachNativeListeners).
    */
   function doFallbackWithEl(mediaEl, reason) {
     console.log("[MixReview] Audio-only fallback active", {
@@ -234,6 +364,11 @@ export function mountMobileEngine(container, url, handlers) {
 
     mediaEl.muted = false;
     mediaEl.volume = 1;
+
+    // Ensure native listeners are attached (guards against early-attachment miss).
+    if (!_detachNativeListeners && _ws === ws) {
+      _detachNativeListeners = attachNativeListeners(mediaEl, ws);
+    }
 
     const duration = Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0;
     if (duration > 0) _handlers.current?.onDurationChange?.(duration);
@@ -248,8 +383,8 @@ export function mountMobileEngine(container, url, handlers) {
 
     // Build a player that uses WaveSurfer's own methods. ws.play() / ws.pause()
     // / ws.skip() / ws.setTime() all delegate to mediaEl internally, so the
-    // WaveSurfer-level play/pause/timeupdate/finish events still fire and our
-    // ws.on() subscriptions below keep delivering callbacks correctly.
+    // native play/pause/timeupdate events still fire and our native listeners
+    // keep delivering callbacks correctly.
     const player = {
       wavesurfer: ws,
       mediaElement: mediaEl,
@@ -294,6 +429,10 @@ export function mountMobileEngine(container, url, handlers) {
       mediaElement.muted = false;
       mediaElement.volume = 1;
       mediaElement.preload = "auto";
+      // Ensure native listeners are attached (fallback for early-attachment miss).
+      if (!_detachNativeListeners) {
+        _detachNativeListeners = attachNativeListeners(mediaElement, ws);
+      }
     }
     console.log("[MixReview] WaveSurfer decode success", { duration });
     _handlers.current?.onDurationChange?.(duration);
@@ -325,25 +464,18 @@ export function mountMobileEngine(container, url, handlers) {
     activateFallback("decode-error");
   });
 
-  ws.on("timeupdate", (time) => {
-    if (_ws === ws) _handlers.current?.onTimeUpdate?.(time);
-  });
-
-  ws.on("play", () => {
-    if (_ws === ws) _handlers.current?.onPlaybackChange?.(true);
-  });
-  ws.on("pause", () => {
-    if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
-  });
-  ws.on("finish", () => {
-    if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
-  });
+  // Transport state is driven by native audio events via attachNativeListeners.
+  // WaveSurfer's play / pause / finish / timeupdate events are not subscribed
+  // here to avoid duplicate callbacks — native events are more reliable in
+  // background / lock-screen where AudioContext may be suspended.
 
   return ws;
 }
 
 /** Destroy the singleton. Called when the audio source changes or the session ends. */
 export function disposeMobileEngine() {
+  _detachNativeListeners?.();
+  _detachNativeListeners = null;
   if (_ws) {
     _ws.destroy();
     _ws = null;
