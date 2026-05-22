@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const app = express();
@@ -462,8 +462,12 @@ async function deleteSession(req, res) {
     return res.status(400).json({ error: "Valid session id is required." });
   }
 
+  // Step 1 — remove from the index first.
+  // This is the authoritative step: the session will not reappear in the admin
+  // dashboard or be accessible through the API regardless of what follows.
   await removeSessionFromIndex(sessionId);
 
+  // Step 2 — delete the local session file (dev / cache; best-effort).
   const localPath = buildLocalSessionPath(sessionId);
   try {
     await unlink(localPath);
@@ -471,20 +475,74 @@ async function deleteSession(req, res) {
     // Local file may not exist; index removal is the authoritative step.
   }
 
+  // Step 3 — purge ALL R2 objects under sessions/{sessionId}/.
+  // This removes session.json, every audio file, and any other nested assets
+  // so nothing is orphaned in object storage after deletion.
+  // Failures are caught and logged separately; the session remains deleted
+  // because the index was already updated in step 1.
   if (hasR2Config) {
     try {
-      await r2Client.send(
-        new DeleteObjectCommand({
-          Bucket: r2Config.bucketName,
-          Key: buildSessionObjectKey(sessionId)
-        }),
-      );
-    } catch {
-      // R2 deletion is best-effort; index has already been updated.
+      const purgedCount = await purgeSessionFromR2(sessionId);
+      console.log(`[MixReview] R2 purge complete for session ${sessionId}: ${purgedCount} object(s) deleted`);
+    } catch (e) {
+      // Storage cleanup failed — log it, but do not surface it to the caller.
+      // The session is gone from the index; it will never reappear in the app.
+      // Orphaned objects can be cleaned up manually or by a future lifecycle rule.
+      console.error(`[MixReview] R2 purge failed for session ${sessionId} — objects may remain in storage:`, e.message);
     }
   }
 
   return res.json({ ok: true, deleted: sessionId });
+}
+
+// purgeSessionFromR2 — lists and batch-deletes every R2 object whose key
+// starts with sessions/{sessionId}/. Handles pagination so sessions with
+// large numbers of audio files (multi-track, multi-version) are fully cleared.
+// Returns the total number of objects successfully deleted.
+async function purgeSessionFromR2(sessionId) {
+  const prefix = `sessions/${sessionId}/`;
+  let totalDeleted = 0;
+  let continuationToken;
+
+  do {
+    // List the next page of objects under this session prefix.
+    const listResponse = await r2Client.send(
+      new ListObjectsV2Command({
+        Bucket: r2Config.bucketName,
+        Prefix: prefix,
+        ...(continuationToken ? { ContinuationToken: continuationToken } : {})
+      })
+    );
+
+    const objects = (listResponse.Contents || []).map((obj) => ({ Key: obj.Key }));
+
+    if (objects.length > 0) {
+      // DeleteObjects accepts up to 1000 keys per call; ListObjectsV2 pages
+      // at 1000 by default, so one batch per page is always sufficient.
+      const deleteResponse = await r2Client.send(
+        new DeleteObjectsCommand({
+          Bucket: r2Config.bucketName,
+          Delete: { Objects: objects, Quiet: false }
+        })
+      );
+
+      const errors = deleteResponse.Errors || [];
+      if (errors.length > 0) {
+        // Log each per-key failure but continue — partial cleanup is better
+        // than none, and the session is already removed from the index.
+        console.warn(`[MixReview] Partial R2 delete failure during purge of session ${sessionId}`, {
+          failedCount: errors.length,
+          sample: errors.slice(0, 5).map((e) => ({ key: e.Key, code: e.Code, message: e.Message }))
+        });
+      }
+
+      totalDeleted += objects.length - errors.length;
+    }
+
+    continuationToken = listResponse.NextContinuationToken;
+  } while (continuationToken);
+
+  return totalDeleted;
 }
 
 async function attachAudioToSession(sessionId, audio, versionId, trackId = "track-1") {
