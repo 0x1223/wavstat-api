@@ -502,18 +502,21 @@ export function WaveformReview({
     };
   }, []); // register once on mount; all state is accessed via refs
 
-  // ── WaveSurfer zoom re-render (mobile only) ────────────────────────────────
-  // When pinch-zoom changes the scale, ask WaveSurfer to re-render the waveform
-  // canvas at the new pixels-per-second instead of relying on a CSS scaleX that
-  // would just bitmap-stretch the existing low-resolution canvas.
-  // Base pxPerSec fills the visible container at 1× (identical to fillParent).
-  // At scale S: pxPerSec = (waveformWidth / duration) × S.
+  // ── WaveSurfer minPxPerSec reset (mobile only, runs once per audio source) ─
+  // ws.zoom(N) stores N as minPxPerSec inside WaveSurfer.  If a previous build
+  // called ws.zoom(scale × pxPerSec), that value would cause WaveSurfer to set
+  // isScrollable=true on the next render — switching overflowX:'auto' and doing
+  // lazy canvas rendering only for the scrollLeft=0 region.  Our translateX pan
+  // would then show unpainted empty space instead of waveform.
+  //
+  // Resetting to 0 ensures calculateWaveformLayout always returns
+  // isScrollable=false / useParentWidth=true, so WaveSurfer fills the entire
+  // zoom-inner container (which is expanded to scale×100% in layout) with a
+  // full-resolution canvas: more bars, sharper detail, no lazy-render gaps.
   useEffect(() => {
-    if (!isMobileViewport() || !duration || !waveformWidth) return;
-    const ws = wavesurferRef.current;
-    if (typeof ws?.zoom !== "function") return;
-    ws.zoom((waveformWidth / duration) * zoomScale);
-  }, [zoomScale, duration, waveformWidth]);
+    if (!isMobileViewport() || !duration) return;
+    try { wavesurferRef.current?.zoom?.(0); } catch (_) {}
+  }, [duration]); // fires once per audio source after decode completes
 
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
@@ -542,13 +545,14 @@ export function WaveformReview({
       event.preventDefault();
       event.stopPropagation();
       if (isMarkerToolActive) {
-        // The waveform may be zoomed and scrolled.  metrics.left is the screen left of
-        // the .waveform div (already offset by translateX(-scrollX) on its parent), so
-        // (event.clientX - metrics.left) is the pixel offset from the visible left edge.
-        // Content position = scrollX + that offset; total content width = width × scale.
-        const contentX = zoomScrollXRef.current + (event.clientX - metrics.left);
-        const contentWidth = metrics.width * zoomScaleRef.current;
-        const clickedTime = Math.min(duration, Math.max(0, (contentX / contentWidth) * duration));
+        // getBoundingClientRect() returns the visual (post-transform) rect.
+        // With translateX(-scrollX) on zoom-inner, metrics.left already reflects
+        // the scroll shift, so (clientX - metrics.left) is the content-space X.
+        // metrics.width is the live zoomed canvas width (ResizeObserver keeps it
+        // current), so no × zoomScale adjustment is needed.
+        const clickedTime = Math.min(duration, Math.max(0,
+          ((event.clientX - metrics.left) / metrics.width) * duration
+        ));
         callbacksRef.current.onMobileNoteRequest?.(clickedTime);
         setIsMarkerToolActive(false);
       }
@@ -575,14 +579,14 @@ export function WaveformReview({
           : [])
       ].map((comment) => ({
         ...comment,
-        // Marker X is computed purely from timestamp math, never CSS-scaled.
-        // At zoom level S the waveform content spans waveformWidth * S pixels
-        // inside zoom-inner (which is translated by -scrollX for panning).
-        // left = timeToX = (time / duration) * waveformWidth * zoomScale.
-        // The waveform-stage's overflow:hidden clips markers outside the viewport.
+        // Marker X is purely timestamp-based, never CSS-scaled.
+        // waveformWidth is measured from the live DOM by ResizeObserver, so it
+        // already reflects the zoomed canvas width (zoom-inner is width:scale*100%).
+        // No × zoomScale needed — the ResizeObserver update keeps this accurate.
+        // waveform-stage overflow:hidden clips markers that scroll out of view.
         left:
           duration > 0 && waveformWidth > 0
-            ? `${(comment.time / duration) * waveformWidth * zoomScale}px`
+            ? `${(comment.time / duration) * waveformWidth}px`
             : "0px"
       }))
     : [];
@@ -617,11 +621,12 @@ export function WaveformReview({
     const metrics = getWaveformMetrics(containerRef.current);
     if (!metrics.width) return;
     event.stopPropagation();
-    // Zoom-aware time: visible left edge is at content position scrollX.
-    const contentX = zoomScrollXRef.current + (event.clientX - metrics.left);
-    const contentWidth = metrics.width * zoomScaleRef.current;
+    // getBoundingClientRect() returns the visual (post-transform) rect.
+    // translateX on zoom-inner is already reflected in metrics.left, so
+    // (clientX - metrics.left) gives the content-space X directly.
+    // metrics.width is the live zoomed canvas width — no × zoomScale needed.
     callbacksRef.current.onMobileNoteRequest?.(
-      Math.min(duration, Math.max(0, (contentX / contentWidth) * duration))
+      Math.min(duration, Math.max(0, ((event.clientX - metrics.left) / metrics.width) * duration))
     );
     setIsMarkerToolActive(false);
   }}
@@ -632,12 +637,14 @@ export function WaveformReview({
   <div
     ref={zoomInnerRef}
     className="waveform-zoom-inner"
-    style={isMobileViewport() && zoomScrollX !== 0 ? {
-      // Translate only — no scaleX.  The WaveSurfer canvas is re-rendered at
-      // the correct resolution via ws.zoom() so it stays sharp at any scale.
-      // Marker positions are recalculated from timestamps (see markerItems), so
-      // they neither stretch nor drift.
-      transform: `translateX(${-zoomScrollX}px)`,
+    style={isMobileViewport() && (zoomScale !== 1 || zoomScrollX !== 0) ? {
+      // Expand the layout width so WaveSurfer's container is wider at higher
+      // zoom levels.  WaveSurfer (fillParent:true) then renders the full
+      // waveform into this larger canvas, producing MORE bars — finer detail,
+      // no bitmap stretch.  translateX pans the zoomed canvas inside the
+      // clipping stage without any scaleX distortion on the canvas or markers.
+      width: `${zoomScale * 100}%`,
+      transform: zoomScrollX !== 0 ? `translateX(${-zoomScrollX}px)` : undefined,
       willChange: "transform",
     } : undefined}
   >
