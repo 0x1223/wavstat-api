@@ -502,6 +502,19 @@ export function WaveformReview({
     };
   }, []); // register once on mount; all state is accessed via refs
 
+  // ── WaveSurfer zoom re-render (mobile only) ────────────────────────────────
+  // When pinch-zoom changes the scale, ask WaveSurfer to re-render the waveform
+  // canvas at the new pixels-per-second instead of relying on a CSS scaleX that
+  // would just bitmap-stretch the existing low-resolution canvas.
+  // Base pxPerSec fills the visible container at 1× (identical to fillParent).
+  // At scale S: pxPerSec = (waveformWidth / duration) × S.
+  useEffect(() => {
+    if (!isMobileViewport() || !duration || !waveformWidth) return;
+    const ws = wavesurferRef.current;
+    if (typeof ws?.zoom !== "function") return;
+    ws.zoom((waveformWidth / duration) * zoomScale);
+  }, [zoomScale, duration, waveformWidth]);
+
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
     if (!wavesurfer || duration <= 0) {
@@ -523,15 +536,19 @@ export function WaveformReview({
       return;
     }
 
-    const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
-    const clickedTime = clickRatio * duration;
-
     // Mobile reviewer: WaveSurfer's dragToSeek handles the seek internally on waveform tap,
     // so we skip our redundant seekToTime call to avoid a double-seek audio glitch.
     if (isReviewerMode && isMobileViewport()) {
       event.preventDefault();
       event.stopPropagation();
       if (isMarkerToolActive) {
+        // The waveform may be zoomed and scrolled.  metrics.left is the screen left of
+        // the .waveform div (already offset by translateX(-scrollX) on its parent), so
+        // (event.clientX - metrics.left) is the pixel offset from the visible left edge.
+        // Content position = scrollX + that offset; total content width = width × scale.
+        const contentX = zoomScrollXRef.current + (event.clientX - metrics.left);
+        const contentWidth = metrics.width * zoomScaleRef.current;
+        const clickedTime = Math.min(duration, Math.max(0, (contentX / contentWidth) * duration));
         callbacksRef.current.onMobileNoteRequest?.(clickedTime);
         setIsMarkerToolActive(false);
       }
@@ -539,6 +556,8 @@ export function WaveformReview({
     }
 
     // Desktop: open the inline comment editor at this timestamp.
+    const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
+    const clickedTime = clickRatio * duration;
     if (isMarkerToolActive) {
       setPendingMarker({ time: clickedTime, text: "" });
       setIsMarkerToolActive(false);
@@ -556,9 +575,14 @@ export function WaveformReview({
           : [])
       ].map((comment) => ({
         ...comment,
+        // Marker X is computed purely from timestamp math, never CSS-scaled.
+        // At zoom level S the waveform content spans waveformWidth * S pixels
+        // inside zoom-inner (which is translated by -scrollX for panning).
+        // left = timeToX = (time / duration) * waveformWidth * zoomScale.
+        // The waveform-stage's overflow:hidden clips markers outside the viewport.
         left:
           duration > 0 && waveformWidth > 0
-            ? `${Math.min(waveformWidth, Math.max(0, (comment.time / duration) * waveformWidth))}px`
+            ? `${(comment.time / duration) * waveformWidth * zoomScale}px`
             : "0px"
       }))
     : [];
@@ -593,8 +617,12 @@ export function WaveformReview({
     const metrics = getWaveformMetrics(containerRef.current);
     if (!metrics.width) return;
     event.stopPropagation();
-    const ratio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
-    callbacksRef.current.onMobileNoteRequest?.(ratio * duration);
+    // Zoom-aware time: visible left edge is at content position scrollX.
+    const contentX = zoomScrollXRef.current + (event.clientX - metrics.left);
+    const contentWidth = metrics.width * zoomScaleRef.current;
+    callbacksRef.current.onMobileNoteRequest?.(
+      Math.min(duration, Math.max(0, (contentX / contentWidth) * duration))
+    );
     setIsMarkerToolActive(false);
   }}
   onClick={handleWaveformClick}>
@@ -604,14 +632,12 @@ export function WaveformReview({
   <div
     ref={zoomInnerRef}
     className="waveform-zoom-inner"
-    style={isMobileViewport() && (zoomScale !== 1 || zoomScrollX !== 0) ? {
-      // scaleX on the shared wrapper transforms waveform + marker layer
-      // identically in a single paint step — no marker drift.
-      // translateX(-scrollX) scaleX(S): a point at local x maps to
-      // visual position x*S − scrollX. transform-origin:left keeps
-      // the maths simple (scale expands rightward from x=0).
-      transform: `translateX(${-zoomScrollX}px) scaleX(${zoomScale})`,
-      transformOrigin: "left center",
+    style={isMobileViewport() && zoomScrollX !== 0 ? {
+      // Translate only — no scaleX.  The WaveSurfer canvas is re-rendered at
+      // the correct resolution via ws.zoom() so it stays sharp at any scale.
+      // Marker positions are recalculated from timestamps (see markerItems), so
+      // they neither stretch nor drift.
+      transform: `translateX(${-zoomScrollX}px)`,
       willChange: "transform",
     } : undefined}
   >
