@@ -92,29 +92,44 @@ if (typeof document !== "undefined") {
       // Record actual media element state — not WaveSurfer's cached value.
       _wasPlayingOnHide = !paused;
     } else {
+      // ── Foreground restore ──────────────────────────────────────────────
+      // Re-read paused state: the element's state at this moment is the
+      // ground truth — events fired while hidden may have been suppressed
+      // (see ws.on("pause") guard below) or may not have fired yet.
+      const restoredMediaEl = _getMediaEl();
+      const restoredPaused = restoredMediaEl?.paused ?? true;
+      const restoredTime = restoredMediaEl?.currentTime;
       console.log("[MixReview] Foreground restore", {
         wasPlaying: _wasPlayingOnHide,
-        nowPaused: paused,
-        currentTime: t != null ? t.toFixed(2) : null,
-        readyState: mediaEl?.readyState ?? null,
+        nowPaused: restoredPaused,
+        currentTime: restoredTime != null ? restoredTime.toFixed(2) : null,
+        readyState: restoredMediaEl?.readyState ?? null,
       });
-      // Only restart if audio actually stopped while backgrounded (OS killed it
-      // or the element errored). If it is still playing, leave it alone.
-      if (_wasPlayingOnHide && paused && mediaEl) {
-        console.log("[MixReview] Audio stopped in background — restarting");
-        if (_ws) {
-          _ws.play().catch((e) =>
-            console.warn("[MixReview] ws.play restore failed", e.message)
-          );
-        } else if (_nativeAudio) {
-          _nativeAudio.play().catch((e) =>
-            console.warn("[MixReview] native play restore failed", e.message)
-          );
+
+      if (_wasPlayingOnHide) {
+        if (restoredPaused && restoredMediaEl) {
+          // Audio actually stopped while backgrounded — restart it.
+          console.log("[MixReview] Audio stopped in background — restarting");
+          if (_ws) {
+            _ws.play().catch((e) =>
+              console.warn("[MixReview] ws.play restore failed", e.message)
+            );
+          } else if (_nativeAudio) {
+            _nativeAudio.play().catch((e) =>
+              console.warn("[MixReview] native play restore failed", e.message)
+            );
+          }
+        } else if (!restoredPaused) {
+          // Audio is still playing (iOS resumed it natively), but the UI
+          // may be stuck at isPlaying=false because we suppressed the
+          // background pause event below.  Force-sync UI to playing.
+          console.log("[MixReview] Audio still playing after restore — syncing UI to playing");
+          _handlers.current?.onPlaybackChange?.(true);
         }
       }
-      // If the element is already playing on restore, verify it is actually
-      // advancing (guards against the AudioContext-suspended-but-playing case).
-      if (!paused && mediaEl) _schedulePlaybackVerification(mediaEl);
+
+      // If playing on restore, verify currentTime is actually advancing.
+      if (!restoredPaused && restoredMediaEl) _schedulePlaybackVerification(restoredMediaEl);
       _wasPlayingOnHide = false;
     }
   });
@@ -316,10 +331,28 @@ function _mountNativeAudio(url, handlers) {
   });
 
   audio.addEventListener("play", () => {
-    if (_nativeAudio === audio) _handlers.current?.onPlaybackChange?.(true);
+    if (_nativeAudio !== audio) return;
+    console.log("[MixReview:native] play event → onPlaybackChange(true)", {
+      hidden: document.hidden, t: (audio.currentTime || 0).toFixed(2),
+    });
+    _handlers.current?.onPlaybackChange?.(true);
   });
   audio.addEventListener("pause", () => {
-    if (_nativeAudio === audio) _handlers.current?.onPlaybackChange?.(false);
+    if (_nativeAudio !== audio) return;
+    // Guard: iOS fires a native pause event when backgrounding the tab.
+    // If the page is hidden and we were playing before hide, this is an
+    // OS-induced background pause — suppress the UI update.  Playback
+    // state will be re-synced from actual element state on restore.
+    if (document.hidden && _wasPlayingOnHide) {
+      console.log("[MixReview:native] background pause event — suppressing UI update", {
+        t: (audio.currentTime || 0).toFixed(2),
+      });
+      return;
+    }
+    console.log("[MixReview:native] pause event → onPlaybackChange(false)", {
+      hidden: document.hidden, t: (audio.currentTime || 0).toFixed(2),
+    });
+    _handlers.current?.onPlaybackChange?.(false);
   });
   audio.addEventListener("ended", () => {
     if (_nativeAudio === audio) _handlers.current?.onPlaybackChange?.(false);
@@ -635,10 +668,34 @@ export function mountMobileEngine(container, url, handlers, mode = "standard") {
   });
 
   ws.on("play", () => {
-    if (_ws === ws) _handlers.current?.onPlaybackChange?.(true);
+    if (_ws !== ws) return;
+    const mediaEl = _getMediaEl();
+    console.log("[MixReview:ws] play event → onPlaybackChange(true)", {
+      hidden: document.hidden, t: mediaEl?.currentTime?.toFixed(2) ?? null,
+    });
+    _handlers.current?.onPlaybackChange?.(true);
   });
   ws.on("pause", () => {
-    if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
+    if (_ws !== ws) return;
+    // Guard: iOS fires a native pause event on the media element when
+    // backgrounding the tab.  WaveSurfer re-emits it as its own "pause".
+    // If the page is hidden and we were playing before hide, this is an
+    // OS-induced background pause — suppress the UI update so the UI
+    // does not get stuck in the paused state.  Actual playback state will
+    // be re-synced from the real media element state on restore.
+    if (document.hidden && _wasPlayingOnHide) {
+      const mediaEl = _getMediaEl();
+      console.log("[MixReview:ws] background pause event — suppressing UI update", {
+        t: mediaEl?.currentTime?.toFixed(2) ?? null,
+        paused: mediaEl?.paused,
+      });
+      return;
+    }
+    const mediaEl = _getMediaEl();
+    console.log("[MixReview:ws] pause event → onPlaybackChange(false)", {
+      hidden: document.hidden, t: mediaEl?.currentTime?.toFixed(2) ?? null,
+    });
+    _handlers.current?.onPlaybackChange?.(false);
   });
   ws.on("finish", () => {
     if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
