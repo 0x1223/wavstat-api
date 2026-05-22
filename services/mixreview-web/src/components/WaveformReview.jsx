@@ -43,17 +43,6 @@ export function WaveformReview({
   const meterThrottleRef = useRef(0);
   const meterBufRef = useRef(null);
 
-  // ── Mobile pinch-to-zoom ────────────────────────────────────────────────
-  // State drives the render; refs give synchronous access inside passive-false
-  // touch listeners (closures capture the ref, not stale state values).
-  const [zoomScale, setZoomScale] = useState(1.0);
-  const [zoomScrollX, setZoomScrollX] = useState(0);
-  const zoomScaleRef = useRef(1.0);
-  const zoomScrollXRef = useRef(0);
-  const gestureRef = useRef(null); // tracks active pinch or pan gesture
-  const zoomInnerRef = useRef(null); // the zoom-transform wrapper div
-  const lastGestureEndRef = useRef(0); // ms timestamp of last multi-touch end (stray-tap guard)
-
   // Called on every animation frame tick from MobileSpectrumAnalyzer's RAF loop.
   // Reads time-domain data from the already-running analyser — no new audio graph nodes.
   const handleMeterFrame = useCallback((analyser) => {
@@ -82,10 +71,6 @@ export function WaveformReview({
     } catch (_) {}
   }, []);
 
-  // Keep refs in sync so touch-listener closures always read current values.
-  zoomScaleRef.current = zoomScale;
-  zoomScrollXRef.current = zoomScrollX;
-
   useEffect(() => {
     callbacksRef.current = {
       onDurationChange,
@@ -102,12 +87,6 @@ export function WaveformReview({
     if (!containerRef.current) {
       return undefined;
     }
-
-    // Reset zoom whenever audio source changes.
-    setZoomScale(1.0);
-    setZoomScrollX(0);
-    zoomScaleRef.current = 1.0;
-    zoomScrollXRef.current = 0;
 
     setIsLoading(true);
     setLoadError("");
@@ -334,190 +313,6 @@ export function WaveformReview({
     };
   }, [audioSource?.playbackUrl, audioSource?.url]);
 
-  // ── Pinch-to-zoom touch listeners (mobile only) ─────────────────────────
-  // Registered with passive:false so e.preventDefault() actually works.
-  // All state read through refs so closures never go stale.
-  //
-  // Zoom is applied as CSS scaleX on the shared zoom-inner wrapper that
-  // contains both the waveform canvas and the marker layer.  Both elements
-  // transform atomically in the same paint step — no marker drift.
-  //
-  // The content point under the pinch centre stays fixed as scale changes
-  // (zoom-at-cursor), and two-finger lateral movement pans independently.
-  useEffect(() => {
-    const el = zoomInnerRef.current;
-    if (!el || !isMobileViewport()) return;
-
-    function dist2(t0, t1) {
-      return Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
-    }
-
-    // Visible width and left edge of the clipping stage (unaffected by transform).
-    function getStageRect() {
-      const stage = el.parentElement;
-      return stage ? stage.getBoundingClientRect() : { left: 0, width: 1 };
-    }
-
-    // Dispatch pointercancel to abort any in-progress WaveSurfer drag tracking.
-    // WaveSurfer v7 clears its dragging state on pointercancel.  Touch-derived
-    // pointer events use IDs 1, 2, … for the first two fingers in most browsers.
-    function cancelWaveSurferDrag() {
-      const waveEl = containerRef.current;
-      if (!waveEl) return;
-      for (const pid of [1, 2, 3]) {
-        try {
-          waveEl.dispatchEvent(
-            new PointerEvent("pointercancel", { bubbles: true, pointerId: pid }),
-          );
-        } catch (_) {}
-      }
-    }
-
-    function onTouchStart(e) {
-      if (e.touches.length >= 2) {
-        // ── Multi-touch: enter pinch/zoom mode ──────────────────────────────
-        const t0 = e.touches[0], t1 = e.touches[1];
-        const sr = getStageRect();
-        const startScale = zoomScaleRef.current;
-        const startScrollX = zoomScrollXRef.current;
-        // Pinch midpoint relative to the left edge of the visible stage.
-        const midInStage = ((t0.clientX + t1.clientX) / 2) - sr.left;
-        // Equivalent point in content-local space — held fixed throughout.
-        // Formula: visual_x = content_x * scale - scrollX
-        //          → content_x = (visual_x + scrollX) / scale
-        const pinchMidContent = (midInStage + startScrollX) / Math.max(startScale, 1);
-
-        gestureRef.current = {
-          mode: "pinch",
-          startDist: dist2(t0, t1),
-          startScale,
-          pinchMidContent,
-          stageW: sr.width,
-        };
-        // Cancel any WaveSurfer drag that started when touch1 first landed.
-        cancelWaveSurferDrag();
-        e.preventDefault();
-
-      } else if (e.touches.length === 1) {
-        // ── Single touch ────────────────────────────────────────────────────
-        // Post-gesture cooldown: suppress new touches briefly after multi-touch
-        // ends so the last-lifted finger cannot accidentally start a seek.
-        if (Date.now() - lastGestureEndRef.current < 150) {
-          gestureRef.current = { mode: "cooldown" };
-          e.preventDefault();
-          return;
-        }
-        if (zoomScaleRef.current > 1) {
-          // Pan the zoomed view — block WaveSurfer's drag-to-seek.
-          gestureRef.current = {
-            mode: "pan",
-            startX: e.touches[0].clientX,
-            startScrollX: zoomScrollXRef.current,
-            stageW: getStageRect().width,
-          };
-          e.preventDefault();
-        } else {
-          // Normal single-finger tap/scrub — pass through to WaveSurfer.
-          gestureRef.current = null;
-        }
-      } else {
-        gestureRef.current = null;
-      }
-    }
-
-    function onTouchMove(e) {
-      const g = gestureRef.current;
-      if (!g) return;
-
-      if (g.mode === "pinch" && e.touches.length >= 2) {
-        const t0 = e.touches[0], t1 = e.touches[1];
-        const newDist = dist2(t0, t1);
-        const ratio = g.startDist > 0 ? newDist / g.startDist : 1;
-        const newScale = Math.min(8, Math.max(1, g.startScale * ratio));
-
-        // Current midpoint in stage-relative visual space.
-        const sl = el.parentElement ? el.parentElement.getBoundingClientRect().left : 0;
-        const currentMidInStage = ((t0.clientX + t1.clientX) / 2) - sl;
-
-        // Solve for scrollX that keeps the content point under the pinch centre:
-        //   content_x * newScale - newScrollX = currentMidInStage
-        //   → newScrollX = content_x * newScale - currentMidInStage
-        const maxScroll = g.stageW * Math.max(0, newScale - 1);
-        const newScrollX = Math.min(
-          maxScroll,
-          Math.max(0, g.pinchMidContent * newScale - currentMidInStage),
-        );
-
-        zoomScaleRef.current = newScale;
-        zoomScrollXRef.current = newScrollX;
-        setZoomScale(newScale);
-        setZoomScrollX(newScrollX);
-        e.preventDefault();
-      } else if (g.mode === "pan" && e.touches.length === 1) {
-        const dx = e.touches[0].clientX - g.startX;
-        const maxScroll = g.stageW * Math.max(0, zoomScaleRef.current - 1);
-        const newScrollX = Math.min(maxScroll, Math.max(0, g.startScrollX - dx));
-        zoomScrollXRef.current = newScrollX;
-        setZoomScrollX(newScrollX);
-        e.preventDefault();
-      } else if (g.mode === "post-pinch" || g.mode === "cooldown") {
-        // Remaining finger after a pinch ends, or within the post-gesture
-        // cooldown window.  Prevent pointer-event synthesis so WaveSurfer's
-        // drag handler cannot seek while the user is finishing the gesture.
-        e.preventDefault();
-      }
-    }
-
-    function onTouchEnd(e) {
-      const prevMode = gestureRef.current?.mode;
-
-      if (e.touches.length === 0) {
-        // All fingers lifted — start cooldown so the very next touchstart
-        // cannot immediately trigger a seek.
-        if (prevMode && prevMode !== "cooldown") {
-          lastGestureEndRef.current = Date.now();
-        }
-        gestureRef.current = null;
-
-      } else if (e.touches.length === 1 && prevMode === "pinch") {
-        // Dropped from 2 → 1 finger.  The remaining finger is still touching
-        // from the pinch — it must NOT trigger a seek.  Hold "post-pinch" mode
-        // until that last finger also lifts (handled above by touches.length===0).
-        gestureRef.current = { mode: "post-pinch" };
-        lastGestureEndRef.current = Date.now();
-      }
-      // For 3→2, pan→0, etc. the existing mode is preserved or cleared above.
-    }
-
-    el.addEventListener("touchstart", onTouchStart, { passive: false });
-    el.addEventListener("touchmove", onTouchMove, { passive: false });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
-    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
-
-    return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEnd);
-      el.removeEventListener("touchcancel", onTouchEnd);
-    };
-  }, []); // register once on mount; all state is accessed via refs
-
-  // ── WaveSurfer minPxPerSec reset (mobile only, runs once per audio source) ─
-  // ws.zoom(N) stores N as minPxPerSec inside WaveSurfer.  If a previous build
-  // called ws.zoom(scale × pxPerSec), that value would cause WaveSurfer to set
-  // isScrollable=true on the next render — switching overflowX:'auto' and doing
-  // lazy canvas rendering only for the scrollLeft=0 region.  Our translateX pan
-  // would then show unpainted empty space instead of waveform.
-  //
-  // Resetting to 0 ensures calculateWaveformLayout always returns
-  // isScrollable=false / useParentWidth=true, so WaveSurfer fills the entire
-  // zoom-inner container (which is expanded to scale×100% in layout) with a
-  // full-resolution canvas: more bars, sharper detail, no lazy-render gaps.
-  useEffect(() => {
-    if (!isMobileViewport() || !duration) return;
-    try { wavesurferRef.current?.zoom?.(0); } catch (_) {}
-  }, [duration]); // fires once per audio source after decode completes
-
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
     if (!wavesurfer || duration <= 0) {
@@ -539,20 +334,15 @@ export function WaveformReview({
       return;
     }
 
+    const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
+    const clickedTime = clickRatio * duration;
+
     // Mobile reviewer: WaveSurfer's dragToSeek handles the seek internally on waveform tap,
     // so we skip our redundant seekToTime call to avoid a double-seek audio glitch.
     if (isReviewerMode && isMobileViewport()) {
       event.preventDefault();
       event.stopPropagation();
       if (isMarkerToolActive) {
-        // getBoundingClientRect() returns the visual (post-transform) rect.
-        // With translateX(-scrollX) on zoom-inner, metrics.left already reflects
-        // the scroll shift, so (clientX - metrics.left) is the content-space X.
-        // metrics.width is the live zoomed canvas width (ResizeObserver keeps it
-        // current), so no × zoomScale adjustment is needed.
-        const clickedTime = Math.min(duration, Math.max(0,
-          ((event.clientX - metrics.left) / metrics.width) * duration
-        ));
         callbacksRef.current.onMobileNoteRequest?.(clickedTime);
         setIsMarkerToolActive(false);
       }
@@ -560,8 +350,6 @@ export function WaveformReview({
     }
 
     // Desktop: open the inline comment editor at this timestamp.
-    const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
-    const clickedTime = clickRatio * duration;
     if (isMarkerToolActive) {
       setPendingMarker({ time: clickedTime, text: "" });
       setIsMarkerToolActive(false);
@@ -579,14 +367,9 @@ export function WaveformReview({
           : [])
       ].map((comment) => ({
         ...comment,
-        // Marker X is purely timestamp-based, never CSS-scaled.
-        // waveformWidth is measured from the live DOM by ResizeObserver, so it
-        // already reflects the zoomed canvas width (zoom-inner is width:scale*100%).
-        // No × zoomScale needed — the ResizeObserver update keeps this accurate.
-        // waveform-stage overflow:hidden clips markers that scroll out of view.
         left:
           duration > 0 && waveformWidth > 0
-            ? `${(comment.time / duration) * waveformWidth}px`
+            ? `${Math.min(waveformWidth, Math.max(0, (comment.time / duration) * waveformWidth))}px`
             : "0px"
       }))
     : [];
@@ -621,13 +404,8 @@ export function WaveformReview({
     const metrics = getWaveformMetrics(containerRef.current);
     if (!metrics.width) return;
     event.stopPropagation();
-    // getBoundingClientRect() returns the visual (post-transform) rect.
-    // translateX on zoom-inner is already reflected in metrics.left, so
-    // (clientX - metrics.left) gives the content-space X directly.
-    // metrics.width is the live zoomed canvas width — no × zoomScale needed.
-    callbacksRef.current.onMobileNoteRequest?.(
-      Math.min(duration, Math.max(0, ((event.clientX - metrics.left) / metrics.width) * duration))
-    );
+    const ratio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
+    callbacksRef.current.onMobileNoteRequest?.(ratio * duration);
     setIsMarkerToolActive(false);
   }}
   onClick={handleWaveformClick}>
@@ -635,28 +413,9 @@ export function WaveformReview({
   {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
 
   <div
-    ref={zoomInnerRef}
-    className="waveform-zoom-inner"
-    style={isMobileViewport() && (zoomScale !== 1 || zoomScrollX !== 0) ? {
-      // Expand the layout width so WaveSurfer's container is wider at higher
-      // zoom levels.  WaveSurfer (fillParent:true) then renders the full
-      // waveform into this larger canvas, producing MORE bars — finer detail,
-      // no bitmap stretch.  translateX pans the zoomed canvas inside the
-      // clipping stage without any scaleX distortion on the canvas or markers.
-      width: `${zoomScale * 100}%`,
-      transform: zoomScrollX !== 0 ? `translateX(${-zoomScrollX}px)` : undefined,
-      willChange: "transform",
-    } : undefined}
-  >
-  <div
   ref={containerRef}
   className="waveform"
   onTouchMove={(event) => {
-    // Block during any active gesture (pinch, pan, post-pinch, cooldown)
-    // and within the post-gesture cooldown window so two-finger operations
-    // can never accidentally scrub the playhead.
-    if (gestureRef.current) return;
-    if (Date.now() - lastGestureEndRef.current < 150) return;
     const touch = event.changedTouches?.[0];
     if (!touch || !containerRef.current || !duration) return;
 
@@ -666,7 +425,9 @@ export function WaveformReview({
       Math.max(0, (touch.clientX - rect.left) / rect.width)
     );
 
-    seekToTime(ratio * duration);
+    const nextTime = ratio * duration;
+
+    seekToTime(nextTime);
   }}
 />
         {duration > 0 && (
@@ -705,8 +466,6 @@ export function WaveformReview({
                   aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
                   onClick={(event) => {
                     event.stopPropagation();
-                    // Drop any tap that fires immediately after a pinch gesture.
-                    if (gestureRef.current || Date.now() - lastGestureEndRef.current < 200) return;
                     if (!comment || comment.isPreview) return;
                     // Mobile: toggle the text bubble for this marker; desktop: seek
                     if (isMobileViewport() && isReviewerMode) {
@@ -730,7 +489,6 @@ export function WaveformReview({
             })}
           </div>
         )}
-  </div>
       </div>
 
       {(duration > 0 || (isReviewerMode && isMobileViewport())) && (

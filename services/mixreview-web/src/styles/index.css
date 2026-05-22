@@ -1304,11 +1304,6 @@ h2 {
     0 0 0 1px rgba(215, 173, 98, 0.08);
 }
 
-.waveform-zoom-inner {
-  position: relative;
-  min-width: 100%;
-}
-
 .waveform {
   position: relative;
   z-index: 2;
@@ -2229,13 +2224,6 @@ h2 {
   min-height: auto;
   padding-bottom: 0;
 }
-
-  .reviewer-mode .waveform-zoom-inner {
-    touch-action: none;
-    user-select: none;
-    -webkit-user-select: none;
-    -webkit-touch-callout: none;
-  }
 
   .reviewer-mode .waveform {
     min-height: 180px;
