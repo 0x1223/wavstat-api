@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const app = express();
@@ -384,7 +384,27 @@ function buildAudioObjectKey(originalName, extension, { sessionId, trackId, vers
 }
 
 async function listSessions(_req, res) {
-  const database = await readDatabase();
+  let database = await readDatabase();
+
+  // If the index is empty and R2 is configured, scan R2 for existing session
+  // documents and rebuild the index. This recovers from two cases:
+  //   1. Railway redeploy wiped the local db.json before this fix was deployed
+  //      (R2 index does not exist yet — first boot with the new code).
+  //   2. Any future scenario where the index gets out of sync.
+  // After the rebuild, writeDatabase() persists the result to R2 so the next
+  // request finds the index immediately without re-scanning.
+  if (hasR2Config && database.sessions.length === 0) {
+    console.log("[MixReview] Session index is empty — scanning R2 to rebuild");
+    const rebuilt = await scanR2ForSessions();
+    if (rebuilt.length > 0) {
+      database = { sessions: rebuilt };
+      await writeDatabase(database).catch((e) =>
+        console.warn("[MixReview] Failed to persist rebuilt index:", e.message)
+      );
+      console.log(`[MixReview] Rebuilt session index with ${rebuilt.length} session(s)`);
+    }
+  }
+
   res.json({ sessions: database.sessions });
 }
 
@@ -547,8 +567,30 @@ async function attachAudioToSession(sessionId, audio, versionId, trackId = "trac
   await upsertSessionIndex(nextSession);
 }
 
+// R2 key for the session index. Underscore prefix sorts it before any session
+// directory so it is easy to identify in the bucket browser.
+const SESSION_INDEX_KEY = "sessions/_index.json";
+
+// readDatabase — R2 is the authoritative store when configured (survives
+// Railway redeployment). Falls back to the local db.json for dev / first boot.
 async function readDatabase() {
   const databasePath = path.join(serviceRoot, "data", "db.json");
+
+  if (hasR2Config) {
+    try {
+      const response = await r2Client.send(
+        new GetObjectCommand({ Bucket: r2Config.bucketName, Key: SESSION_INDEX_KEY })
+      );
+      const body = await response.Body.transformToString();
+      return JSON.parse(body);
+    } catch (error) {
+      // NoSuchKey → index has not been written to R2 yet; fall through.
+      if (error?.name !== "NoSuchKey" && error?.$metadata?.httpStatusCode !== 404) {
+        throw error;
+      }
+    }
+  }
+
   try {
     return JSON.parse(await readFile(databasePath, "utf8"));
   } catch {
@@ -556,10 +598,91 @@ async function readDatabase() {
   }
 }
 
+// writeDatabase — persists the index locally AND to R2 when configured.
+// R2 write is the authoritative copy; local write is a convenience cache.
 async function writeDatabase(database) {
   const databasePath = path.join(serviceRoot, "data", "db.json");
+  const body = `${JSON.stringify(database, null, 2)}\n`;
+
   await mkdir(path.dirname(databasePath), { recursive: true });
-  await writeFile(databasePath, `${JSON.stringify(database, null, 2)}\n`);
+  await writeFile(databasePath, body);
+
+  if (hasR2Config) {
+    await r2Client.send(
+      new PutObjectCommand({
+        Bucket: r2Config.bucketName,
+        Key: SESSION_INDEX_KEY,
+        Body: body,
+        ContentType: "application/json"
+      })
+    );
+  }
+}
+
+// scanR2ForSessions — lists all session.json objects under sessions/ in R2,
+// fetches each one, and returns the array of index-summary objects.
+// Used only when the index is missing so the admin dashboard is self-healing.
+async function scanR2ForSessions() {
+  const sessions = [];
+  let continuationToken;
+
+  do {
+    let listResponse;
+    try {
+      listResponse = await r2Client.send(
+        new ListObjectsV2Command({
+          Bucket: r2Config.bucketName,
+          Prefix: "sessions/",
+          ...(continuationToken ? { ContinuationToken: continuationToken } : {})
+        })
+      );
+    } catch (e) {
+      console.warn("[MixReview] R2 scan failed during index rebuild:", e.message);
+      break;
+    }
+
+    // Only process individual session documents; skip the index itself and audio files.
+    const sessionDocKeys = (listResponse.Contents || [])
+      .map((obj) => obj.Key)
+      .filter((key) => /^sessions\/[^/]+\/session\.json$/.test(key));
+
+    for (const key of sessionDocKeys) {
+      try {
+        const docResponse = await r2Client.send(
+          new GetObjectCommand({ Bucket: r2Config.bucketName, Key: key })
+        );
+        const session = normalizeSessionDocument(JSON.parse(await docResponse.Body.transformToString()));
+        if (session) {
+          const trackSummary = getTrackSummary(session);
+          sessions.push({
+            id: session.id,
+            projectName: session.projectName || "Untitled MixReview Session",
+            sessionName: session.sessionName || "",
+            artistName: session.artistName || "",
+            reviewerName: session.reviewerName || "",
+            reviewerClientId: session.reviewerClientId || "",
+            reviewerToken: session.reviewerToken || "",
+            notes: session.notes || "",
+            isPriority: Boolean(session.isPriority),
+            shareId: session.shareId || session.id,
+            status: getSessionStatus(session),
+            trackCount: trackSummary.total,
+            approvedTrackCount: trackSummary.approved,
+            updatedAt: session.updatedAt || new Date().toISOString(),
+            storageKey: key
+          });
+        }
+      } catch (e) {
+        console.warn("[MixReview] Skipping malformed session during R2 scan:", key, e.message);
+      }
+    }
+
+    continuationToken = listResponse.NextContinuationToken;
+  } while (continuationToken);
+
+  // Sort most-recently-updated first, matching upsertSessionIndex ordering.
+  sessions.sort((a, b) => (b.updatedAt > a.updatedAt ? 1 : -1));
+  return sessions;
 }
 
 async function readSessionDocument(sessionId) {
