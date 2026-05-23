@@ -1371,10 +1371,16 @@ export default function App() {
     if (autoplayAttemptedRef.current) return;
 
     const isAutoNext = Boolean(autoPlayNextRef.current);
+    // Consume the flag now so it doesn't linger across a foreground return.
     if (isAutoNext) autoPlayNextRef.current = false;
 
     // Only autoplay if this is an auto-next advance OR the user has played before.
     if (!isAutoNext && !userHasPlayedRef.current) return;
+
+    // Don't auto-play while the page is hidden (backgrounded). The track has
+    // already been selected/preloaded; the user returns to it paused and can
+    // manually tap Play. This prevents unexpected audio starting in another app.
+    if (document.hidden) return;
 
     autoplayAttemptedRef.current = true;
     const el = mediaElement; // capture — may change if another track is selected mid-await

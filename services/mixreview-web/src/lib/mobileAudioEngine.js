@@ -11,6 +11,11 @@ const WAVEFORM_TIMEOUT_MS = 12_000;
 let _ws = null;
 let _url = null;
 let _wasPlayingOnHide = false;
+// Guard vars: restore play() is only allowed when the SAME track was audibly
+// playing before hide AND currentTime was actually advancing at that moment.
+let _urlOnHide = null;          // _url value captured at hide time
+let _wasTimeAdvancing = false;  // true if timeupdate fired within 500 ms of hide
+let _lastTimeUpdateAt = 0;      // performance.now() of the last timeupdate tick
 let _detachNativeListeners = null;
 const _handlers = { current: null };
 
@@ -80,6 +85,7 @@ function attachNativeListeners(mediaEl, ws) {
     });
   }
   function onTimeUpdate() {
+    _lastTimeUpdateAt = performance.now(); // record wall-clock time of last tick
     if (_ws === ws) _handlers.current?.onTimeUpdate?.(mediaEl.currentTime);
   }
 
@@ -121,19 +127,32 @@ if (typeof document !== "undefined") {
     if (document.hidden) {
       // Use native paused property — more reliable than WaveSurfer.isPlaying()
       _wasPlayingOnHide = mediaEl ? !mediaEl.paused : _ws.isPlaying();
+      // Guard: capture which track was playing and whether time was moving.
+      // Restore handlers check both before calling play() so a new track that
+      // loaded while backgrounded is never auto-resumed.
+      _urlOnHide = _url;
+      _wasTimeAdvancing = (performance.now() - _lastTimeUpdateAt) < 500;
       console.log("[MobileEngine] visibilitychange → hidden", {
         wasPlaying: _wasPlayingOnHide,
+        wasTimeAdvancing: _wasTimeAdvancing,
         currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
       });
     } else {
       const isStillPlaying = mediaEl ? !mediaEl.paused : false;
+      // Resume is only safe when it's the same track AND time was advancing —
+      // i.e. audio was audibly playing, not just loaded/paused at a position.
+      const safeToResume = _wasPlayingOnHide && !isStillPlaying
+        && _url === _urlOnHide && _wasTimeAdvancing;
       console.log("[MobileEngine] visibilitychange → visible", {
         wasPlaying: _wasPlayingOnHide,
+        wasTimeAdvancing: _wasTimeAdvancing,
+        sameTrack: _url === _urlOnHide,
+        safeToResume,
         isStillPlaying,
         currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
       });
 
-      if (_wasPlayingOnHide && !isStillPlaying) {
+      if (safeToResume) {
         _wasPlayingOnHide = false;
         const tBefore = mediaEl?.currentTime;
         console.log("[MobileEngine] Audio stopped in background — resuming; currentTime before:", tBefore?.toFixed(2));
@@ -157,11 +176,16 @@ if (typeof document !== "undefined") {
   window.addEventListener("pagehide", (evt) => {
     const mediaEl = getMediaEl();
     const isNativePlaying = mediaEl ? !mediaEl.paused : (_ws?.isPlaying?.() ?? false);
-    // OR-in: don't clobber a flag already set by visibilitychange
-    if (isNativePlaying) _wasPlayingOnHide = true;
+    // OR-in: don't clobber flags already set by visibilitychange
+    if (isNativePlaying) {
+      _wasPlayingOnHide = true;
+      if (!_urlOnHide) _urlOnHide = _url;
+      if (!_wasTimeAdvancing) _wasTimeAdvancing = (performance.now() - _lastTimeUpdateAt) < 500;
+    }
     console.log("[MobileEngine] pagehide", {
       persisted: evt.persisted,
       isPlaying: isNativePlaying,
+      wasTimeAdvancing: _wasTimeAdvancing,
       currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
     });
   });
@@ -169,13 +193,18 @@ if (typeof document !== "undefined") {
   window.addEventListener("pageshow", (evt) => {
     const mediaEl = getMediaEl();
     const isStillPlaying = mediaEl ? !mediaEl.paused : false;
+    const safeToResume = _ws && _wasPlayingOnHide && !isStillPlaying
+      && _url === _urlOnHide && _wasTimeAdvancing;
     console.log("[MobileEngine] pageshow", {
       persisted: evt.persisted,
       wasPlaying: _wasPlayingOnHide,
+      wasTimeAdvancing: _wasTimeAdvancing,
+      sameTrack: _url === _urlOnHide,
+      safeToResume,
       isStillPlaying,
       currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
     });
-    if (_ws && _wasPlayingOnHide && !isStillPlaying) {
+    if (safeToResume) {
       _wasPlayingOnHide = false;
       console.log("[MobileEngine] Audio stopped during page hide — resuming after pageshow");
       _ws.play().catch((e) => {
@@ -211,6 +240,13 @@ export function mountMobileEngine(container, url, handlers) {
   if (_url === url && _ws) {
     return _ws;
   }
+
+  // New URL means a different track is being loaded. Clear all background-play
+  // guard state so the visibility/pageshow resume handlers cannot fire play()
+  // on a track the user never started in the foreground.
+  _wasPlayingOnHide = false;
+  _urlOnHide = null;
+  _wasTimeAdvancing = false;
 
   if (_ws) {
     _detachNativeListeners?.();
@@ -496,5 +532,7 @@ export function disposeMobileEngine() {
   }
   _url = null;
   _wasPlayingOnHide = false;
+  _urlOnHide = null;
+  _wasTimeAdvancing = false;
   _handlers.current = null;
 }
