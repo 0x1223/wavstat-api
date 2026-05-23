@@ -2805,6 +2805,66 @@ h2 {
   }
 }
 
+/* ─ Landscape-phone-only overrides ─────────────────────────────────────────
+   Applied on top of the combined mobile block above.
+   Matches landscape phones (CSS height ≤ 500px) but NOT iPads (height ≥ 768px). */
+@media (orientation: landscape) and (max-height: 500px) {
+  /* Hide the "Stems" label — too wide in landscape */
+  .mobile-track-nav-label {
+    display: none;
+  }
+
+  /* Compact horizontal pill strip instead of the tall vertical list */
+  .mobile-track-nav-list {
+    flex-direction: row;
+    max-height: none;
+    height: 34px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 2px;
+    gap: 4px;
+    scrollbar-width: none;
+  }
+
+  .mobile-track-nav-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Each track pill: auto-width, no full-width stretch */
+  .mobile-track-nav-item {
+    width: auto;
+    min-width: auto;
+    min-height: 30px;
+    height: 30px;
+    padding: 0 8px;
+    flex-shrink: 0;
+    gap: 4px;
+  }
+
+  /* Hide the mini waveform lane visualization — not needed in compact mode */
+  .mobile-track-nav-lane {
+    display: none;
+  }
+
+  /* Track name: allow wider pill titles in landscape */
+  .mobile-track-nav-name {
+    max-width: 100px;
+    font-size: 0.68rem;
+  }
+
+  /* Compact marker tool button — 52px is too tall for landscape */
+  .reviewer-mode .marker-tool-toggle {
+    height: 36px;
+    font-size: 18px;
+    min-width: 110px;
+  }
+
+  /* Tighten review console vertical padding in landscape multitrack layout */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
+    padding: 3px 0;
+  }
+}
+
 @keyframes drawer-slide-in {
   from {
     opacity: 0;

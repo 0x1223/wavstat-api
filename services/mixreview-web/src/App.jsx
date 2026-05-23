@@ -2496,7 +2496,13 @@ function formatTime(seconds) {
 }
 
 function isMobileViewport() {
-  return window.matchMedia?.("(max-width: 768px)")?.matches || window.innerWidth <= 768;
+  // Matches the CSS breakpoint: portrait phones (width ≤ 768px) OR
+  // landscape phones (height ≤ 500px in landscape — excludes iPads).
+  return (
+    window.matchMedia?.("(max-width: 768px)")?.matches ||
+    window.innerWidth <= 768 ||
+    (window.matchMedia?.("(orientation: landscape) and (max-height: 500px)")?.matches ?? false)
+  );
 }
 
 function createSessionId() {
