@@ -184,15 +184,11 @@ export default function App() {
   const lastSavedSessionRef = useRef("");
   // Mobile auto-play-next refs (mobile reviewer only).
   // userHasPlayedRef:       true once the user has tapped Play at least once.
-  // autoPlayNextRef:        true when a track ends naturally in the FOREGROUND → play next when ready.
+  // autoPlayNextRef:        true when a track ends naturally → play next when ready.
   // autoplayAttemptedRef:   prevents double-fire of the isPlayerReady effect per track.
-  // backgroundEndedRef:     true when a track ended while the page was hidden/backgrounded.
-  //                         Suppresses auto-play even after the user returns to foreground.
-  //                         Cleared on manual track selection so user-initiated switches still play.
   const userHasPlayedRef = useRef(false);
   const autoPlayNextRef = useRef(false);
   const autoplayAttemptedRef = useRef(false);
-  const backgroundEndedRef = useRef(false);
 
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
@@ -1375,25 +1371,10 @@ export default function App() {
     if (autoplayAttemptedRef.current) return;
 
     const isAutoNext = Boolean(autoPlayNextRef.current);
-    // Consume the flag now so it doesn't linger across a foreground return.
     if (isAutoNext) autoPlayNextRef.current = false;
-
-    // Consume the background-ended flag for this track load.
-    const endedInBackground = backgroundEndedRef.current;
-    if (endedInBackground) backgroundEndedRef.current = false;
 
     // Only autoplay if this is an auto-next advance OR the user has played before.
     if (!isAutoNext && !userHasPlayedRef.current) return;
-
-    // Don't auto-play while the page is currently hidden.
-    if (document.hidden) return;
-
-    // Don't auto-play when the predecessor track ended while the page was hidden.
-    // The next track is loaded and ready; the user sees a Play button and taps it.
-    // This blocks play() even if the user returns to foreground before the track
-    // finishes loading — the ended-in-background condition is what matters, not
-    // the visibility state when the track becomes ready.
-    if (endedInBackground) return;
 
     autoplayAttemptedRef.current = true;
     const el = mediaElement; // capture — may change if another track is selected mid-await
@@ -1439,17 +1420,8 @@ export default function App() {
       const currentIdx = tracks.findIndex((t) => t.id === activeTrackId);
       if (currentIdx < 0 || currentIdx >= tracks.length - 1) return; // Last track
       const nextTrack = tracks[currentIdx + 1];
-      if (document.hidden) {
-        // Page is backgrounded: preload the next track but do NOT flag for
-        // auto-play. The engine may silently start the element and iOS could
-        // wake the audio route on a route-change event, producing unexpected
-        // sound. User must tap Play explicitly after returning to foreground.
-        console.log("[MixReview] Track ended while hidden — queuing next track (no auto-play):", nextTrack.title);
-        backgroundEndedRef.current = true;
-      } else {
-        console.log("[MixReview] Track ended — auto-advancing to:", nextTrack.title);
-        autoPlayNextRef.current = true;
-      }
+      console.log("[MixReview] Track ended — auto-advancing to:", nextTrack.title);
+      autoPlayNextRef.current = true;
       selectTrack(nextTrack.id);
     }
 
@@ -1664,11 +1636,8 @@ export default function App() {
               activeTrackId={activeTrackId}
               onTrackSelect={(trackId) => {
                 // This runs synchronously inside the user's tap gesture.
-                // Clear any pending auto-next flags (manual selection takes over).
+                // Clear any pending auto-next flag (manual selection takes over).
                 autoPlayNextRef.current = false;
-                // Clear background-ended guard so this explicit user selection
-                // is allowed to auto-play via the userHasPlayed path.
-                backgroundEndedRef.current = false;
                 // If the user has already pressed Play this session, refresh the
                 // iOS audio session so the programmatic play() called later by
                 // the isPlayerReady effect succeeds without needing its own gesture.
