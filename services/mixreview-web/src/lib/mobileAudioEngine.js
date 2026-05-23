@@ -210,66 +210,144 @@ function attachNativeListeners(mediaEl, ws) {
 if (typeof document !== "undefined") {
   const getMediaEl = () => _ws?.getMediaElement?.() ?? null;
 
-  /** Shared resume-and-play logic used by all restore events. */
-  function _onRestoreVisible() {
-    // Always attempt to un-suspend the shared AudioContext first, so that any
-    // subsequent play() call finds a running context rather than a suspended one.
-    _resumeSharedCtx();
-
-    if (!_ws) return;
+  // ── Diagnostic snapshot helper ──────────────────────────────────────────
+  // Returns a plain object with every iOS-relevant field so every log entry
+  // captures the same fields in the same order — easier to diff across events.
+  function _snap(label) {
     const mediaEl = getMediaEl();
-    const isStillPlaying = mediaEl ? !mediaEl.paused : false;
-    const safeToResume = _wasPlayingOnHide && !isStillPlaying
-      && _url === _urlOnHide && _wasTimeAdvancing;
+    return {
+      event: label,
+      visibilityState: document.visibilityState,
+      audioCtxState: _sharedCtx?.state ?? "none",
+      mediaPaused: mediaEl != null ? mediaEl.paused : "(no el)",
+      mediaEnded: mediaEl != null ? mediaEl.ended : "(no el)",
+      mediaSrc: (mediaEl?.currentSrc || mediaEl?.src || "").slice(0, 72) || "(none)",
+      mediaReadyState: mediaEl?.readyState ?? "(no el)",
+      mediaCurrentTime: mediaEl?.currentTime != null ? +mediaEl.currentTime.toFixed(3) : "(n/a)",
+      wasPlayingOnHide: _wasPlayingOnHide,
+      wasTimeAdvancing: _wasTimeAdvancing,
+      sameTrack: _url === _urlOnHide,
+    };
+  }
 
-    if (safeToResume) {
+  // ── Core restore handler ────────────────────────────────────────────────
+  // Called on every event that signals the page is visible/active again:
+  // visibilitychange→visible, pageshow, focus, document 'resume'.
+  //
+  // iOS-critical sequencing:
+  //   1. Snapshot diagnostics first (before any state mutation).
+  //   2. Resume the AudioContext if suspended.
+  //   3. WAIT for the resume Promise to settle before calling play().
+  //      Calling play() while the context is still transitioning
+  //      suspended→running silently stalls audio on iOS.
+  //   4. Call mediaEl.play() directly — WaveSurfer's play() goes through
+  //      internal state checks that can be stale after a background
+  //      suspension. The native element API is authoritative.
+  //   5. Log whether the play() Promise resolves or rejects so we can
+  //      distinguish "iOS blocked it (NotAllowedError)" from "succeeded".
+  function _onRestoreVisible() {
+    const mediaEl = getMediaEl();
+    const snap = _snap("restore");
+    console.log("[MobileEngine]", snap);
+
+    // Guard: only restore if the user was playing the same track.
+    const intendedPlay = _wasPlayingOnHide
+      && _url === _urlOnHide
+      && _wasTimeAdvancing;
+
+    if (!_ws || !mediaEl) {
       _wasPlayingOnHide = false;
-      const tBefore = mediaEl?.currentTime;
-      console.log("[MobileEngine] Audio stopped while hidden — resuming; t:", tBefore?.toFixed(2));
-      _ws.play()
-        .then(() => {
-          console.log("[MobileEngine] Restored; t after:", getMediaEl()?.currentTime?.toFixed(2));
-        })
-        .catch((e) => {
-          console.warn("[MobileEngine] Resume after restore failed:", e.message);
+      return;
+    }
+
+    const isStillPlaying = !mediaEl.paused && !mediaEl.ended;
+
+    if (isStillPlaying) {
+      // Audio survived the background — just ensure the AudioContext is
+      // running so the analyser keeps working.
+      _wasPlayingOnHide = false;
+      console.log("[MobileEngine] Audio survived background ✓ — ensuring ctx resumed");
+      _resumeSharedCtx();
+      return;
+    }
+
+    if (!intendedPlay) {
+      // Audio was paused intentionally (or user never played). Nothing to do.
+      _wasPlayingOnHide = false;
+      return;
+    }
+
+    // Audio was stopped unexpectedly while hidden.
+    // Verify the element still has a src before trying to play.
+    const hasSrc = Boolean(mediaEl.currentSrc || mediaEl.src);
+    if (!hasSrc) {
+      console.warn("[MobileEngine] Cannot restore — media element has no src");
+      _wasPlayingOnHide = false;
+      return;
+    }
+
+    _wasPlayingOnHide = false;
+    console.log("[MobileEngine] Audio stopped while hidden — sequenced restore; t:",
+      mediaEl.currentTime?.toFixed(3));
+
+    // Inner play call — always operates on the native element directly.
+    // Logs resolve/reject so we can distinguish NotAllowedError (iOS blocked
+    // it without a gesture) from any other failure.
+    function _doPlay() {
+      console.log("[MobileEngine] Calling mediaEl.play(); ctxState:", _sharedCtx?.state ?? "none");
+      const p = mediaEl.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          console.log("[MobileEngine] mediaEl.play() resolved ✓; t:",
+            mediaEl.currentTime?.toFixed(3), "ctxState:", _sharedCtx?.state ?? "none");
+        }).catch((e) => {
+          // NotAllowedError → iOS blocked autoplay without a gesture.
+          // The user must tap Play again; log clearly so we can tell.
+          console.warn("[MobileEngine] mediaEl.play() rejected after restore:",
+            e.name, "—", e.message);
         });
-    } else {
-      _wasPlayingOnHide = false;
-      if (isStillPlaying) {
-        console.log("[MobileEngine] Audio continued in background — no restart needed");
       }
+    }
+
+    // If the AudioContext is suspended, resume it first and chain play() on
+    // the resolved Promise. This guarantees the Web Audio graph is running
+    // before media output is expected to flow through it.
+    if (_sharedCtx && _sharedCtx.state === "suspended") {
+      _sharedCtx.resume().then(() => {
+        console.log("[MobileEngine] AudioContext resumed ✓, state:", _sharedCtx?.state);
+        _doPlay();
+      }).catch((e) => {
+        // Resume failed (rare) — try play() anyway; native audio path may work.
+        console.warn("[MobileEngine] AudioContext resume failed:", e.name, "—", e.message,
+          "— attempting mediaEl.play() regardless");
+        _doPlay();
+      });
+    } else {
+      // Context already running (or no shared ctx on non-iOS).
+      _doPlay();
     }
   }
 
+  // ── visibilitychange ────────────────────────────────────────────────────
   document.addEventListener("visibilitychange", () => {
     const mediaEl = getMediaEl();
 
     if (document.hidden) {
       if (_ws) {
-        // Use native paused property — more reliable than WaveSurfer.isPlaying()
+        // Capture state at the moment we go hidden.
         _wasPlayingOnHide = mediaEl ? !mediaEl.paused : _ws.isPlaying();
         _urlOnHide = _url;
         _wasTimeAdvancing = (performance.now() - _lastTimeUpdateAt) < 500;
       }
-      console.log("[MobileEngine] visibilitychange → hidden", {
-        wasPlaying: _wasPlayingOnHide,
-        wasTimeAdvancing: _wasTimeAdvancing,
-        sharedCtxState: _sharedCtx?.state ?? "none",
-        currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
-      });
+      // Full diagnostic snapshot on hide — critical for diagnosing iOS suspension.
+      console.log("[MobileEngine]", _snap("hide"));
     } else {
-      console.log("[MobileEngine] visibilitychange → visible", {
-        wasPlaying: _wasPlayingOnHide,
-        wasTimeAdvancing: _wasTimeAdvancing,
-        sameTrack: _url === _urlOnHide,
-        sharedCtxState: _sharedCtx?.state ?? "none",
-        currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
-      });
       _onRestoreVisible();
     }
   });
 
-  // pagehide is more reliable than visibilitychange on some iOS versions.
+  // ── pagehide ────────────────────────────────────────────────────────────
+  // More reliable than visibilitychange on some iOS versions.
   window.addEventListener("pagehide", (evt) => {
     const mediaEl = getMediaEl();
     const isNativePlaying = mediaEl ? !mediaEl.paused : (_ws?.isPlaying?.() ?? false);
@@ -279,47 +357,33 @@ if (typeof document !== "undefined") {
       if (!_urlOnHide) _urlOnHide = _url;
       if (!_wasTimeAdvancing) _wasTimeAdvancing = (performance.now() - _lastTimeUpdateAt) < 500;
     }
-    console.log("[MobileEngine] pagehide", {
+    console.log("[MobileEngine]", {
+      ..._snap("pagehide"),
       persisted: evt.persisted,
-      isPlaying: isNativePlaying,
-      wasTimeAdvancing: _wasTimeAdvancing,
-      sharedCtxState: _sharedCtx?.state ?? "none",
-      currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
     });
   });
 
+  // ── pageshow ────────────────────────────────────────────────────────────
   window.addEventListener("pageshow", (evt) => {
-    const mediaEl = getMediaEl();
-    const isStillPlaying = mediaEl ? !mediaEl.paused : false;
-    console.log("[MobileEngine] pageshow", {
+    console.log("[MobileEngine]", {
+      ..._snap("pageshow"),
       persisted: evt.persisted,
-      wasPlaying: _wasPlayingOnHide,
-      wasTimeAdvancing: _wasTimeAdvancing,
-      sameTrack: _url === _urlOnHide,
-      isStillPlaying,
-      sharedCtxState: _sharedCtx?.state ?? "none",
-      currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
     });
     _onRestoreVisible();
   });
 
-  // window 'focus' fires when the page regains focus after an app-switch or
-  // tab switch — a useful supplementary trigger alongside visibilitychange.
+  // ── focus ───────────────────────────────────────────────────────────────
+  // Fires when the page regains focus after an app-switch or tab switch.
   window.addEventListener("focus", () => {
-    console.log("[MobileEngine] focus", {
-      sharedCtxState: _sharedCtx?.state ?? "none",
-      wasPlaying: _wasPlayingOnHide,
-    });
+    console.log("[MobileEngine]", _snap("focus"));
     _onRestoreVisible();
   });
 
-  // Page Lifecycle API: 'resume' fires when the page transitions from
-  // frozen → active (e.g. after an aggressive OS memory reclaim on iOS).
-  // Not universally supported but harmless to register.
+  // ── Page Lifecycle 'resume' ─────────────────────────────────────────────
+  // Fires when the page transitions from frozen → active on aggressive
+  // memory-reclaim iOS scenarios. Not universally supported; harmless to add.
   document.addEventListener("resume", () => {
-    console.log("[MobileEngine] document resume (Page Lifecycle)", {
-      sharedCtxState: _sharedCtx?.state ?? "none",
-    });
+    console.log("[MobileEngine]", _snap("page-lifecycle-resume"));
     _onRestoreVisible();
   });
 }
