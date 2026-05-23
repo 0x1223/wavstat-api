@@ -26,6 +26,20 @@ const _handlers = { current: null };
 // MobileSpectrumAnalyzer shares this context rather than creating its own per-track.
 let _sharedCtx = null;
 let _keepAliveSrc = null;  // silent looping BufferSourceNode (volume 0)
+let _mediaSourceNode = null;
+
+function _reconnectSourceNode() {
+  if (!_sharedCtx) return;
+  try {
+    const src = window.__wavstatSourceNode ?? _mediaSourceNode;
+    if (!src) return;
+    src.disconnect();
+    src.connect(_sharedCtx.destination);
+    window.__wavstatNeedsRewire = true;
+  } catch (e) {
+    console.warn("[mobileAudioEngine] _reconnectSourceNode failed:", e);
+  }
+}
 
 /**
  * Detect iOS / iPadOS / Safari.
@@ -73,6 +87,26 @@ export function startKeepAlive() {
     _keepAliveSrc.connect(gain);
     gain.connect(_sharedCtx.destination);
     _keepAliveSrc.start(0);
+
+    function _restartKeepAliveSrc() {
+      if (!_sharedCtx) return;
+      try { _keepAliveSrc?.stop(); } catch (_) {}
+      const buf2 = _sharedCtx.createBuffer(1, 1, _sharedCtx.sampleRate);
+      _keepAliveSrc = _sharedCtx.createBufferSource();
+      _keepAliveSrc.buffer = buf2;
+      _keepAliveSrc.loop = true;
+      _keepAliveSrc.connect(_sharedCtx.destination);
+      _keepAliveSrc.start(0);
+    }
+
+    setInterval(() => {
+      if (!_sharedCtx) return;
+      if (_sharedCtx.state !== "running") {
+        _sharedCtx.resume().then(_restartKeepAliveSrc).catch(() => {});
+      } else {
+        _restartKeepAliveSrc();
+      }
+    }, 30_000);
 
     console.log("[MobileEngine] Keep-alive AudioContext started, state:", _sharedCtx.state);
     return _sharedCtx;
@@ -129,6 +163,9 @@ async function probeAudioUrl(url) {
 // may be throttled. This also lets us log every real audio lifecycle event.
 
 function attachNativeListeners(mediaEl, ws) {
+  let _lastRealTime = null;
+  let _lastMediaTime = null;
+
   function onPlay() {
     // 'play' fires when .play() is called — audio may not have started yet
     // (could be buffering, or AudioContext still suspended). Log only; do NOT
@@ -170,6 +207,19 @@ function attachNativeListeners(mediaEl, ws) {
   }
   function onTimeUpdate() {
     _lastTimeUpdateAt = performance.now(); // record wall-clock time of last tick
+    const _now = Date.now();
+    const _mediaTime = mediaEl.currentTime;
+    if (_lastRealTime !== null && _lastMediaTime !== null) {
+      const _wallElapsed = (_now - _lastRealTime) / 1000;
+      const _mediaElapsed = _mediaTime - _lastMediaTime;
+      if (_wallElapsed > 0.1 && _mediaElapsed / _wallElapsed > 1.3) {
+        console.warn("[mobileAudioEngine] rate corruption detected, reconnecting");
+        if (mediaEl.playbackRate !== 1) mediaEl.playbackRate = 1;
+        _reconnectSourceNode();
+      }
+    }
+    _lastRealTime = _now;
+    _lastMediaTime = _mediaTime;
     if (_ws === ws) _handlers.current?.onTimeUpdate?.(mediaEl.currentTime);
   }
 
@@ -247,6 +297,9 @@ if (typeof document !== "undefined") {
   //      distinguish "iOS blocked it (NotAllowedError)" from "succeeded".
   function _onRestoreVisible() {
     const mediaEl = getMediaEl();
+    if (mediaEl && mediaEl.playbackRate !== 1) {
+      mediaEl.playbackRate = 1;
+    }
     const snap = _snap("restore");
     console.log("[MobileEngine]", snap);
 
@@ -268,6 +321,7 @@ if (typeof document !== "undefined") {
       _wasPlayingOnHide = false;
       console.log("[MobileEngine] Audio survived background ✓ — ensuring ctx resumed");
       _resumeSharedCtx();
+      _reconnectSourceNode();
       return;
     }
 
@@ -315,6 +369,7 @@ if (typeof document !== "undefined") {
     if (_sharedCtx && _sharedCtx.state === "suspended") {
       _sharedCtx.resume().then(() => {
         console.log("[MobileEngine] AudioContext resumed ✓, state:", _sharedCtx?.state);
+        _reconnectSourceNode();
         _doPlay();
       }).catch((e) => {
         // Resume failed (rare) — try play() anyway; native audio path may work.

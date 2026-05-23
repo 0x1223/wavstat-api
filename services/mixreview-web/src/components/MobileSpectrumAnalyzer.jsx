@@ -163,10 +163,23 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
         // Route: mediaElement → source → analyser → destination (pass-through).
         // The silent keep-alive node in the shared context is connected to
         // destination independently and does not affect analyser readings.
-        const src = audioCtx.createMediaElementSource(mediaEl);
-        src.connect(audioCtx.destination);
-        src.connect(analyser);
-        mediaElSrc = src;
+        //
+        // If a MediaElementAudioSourceNode was already created for this element
+        // in a previous mount (stored on window.__wavstatSourceNode), reuse it
+        // instead of calling createMediaElementSource again — that would throw
+        // InvalidStateError because an element can only have one source node
+        // per AudioContext.
+        if (window.__wavstatSourceNode) {
+          mediaElSrc = window.__wavstatSourceNode;
+          mediaElSrc.connect(analyser);
+          window.__wavstatNeedsRewire = false;
+        } else {
+          const src = audioCtx.createMediaElementSource(mediaEl);
+          src.connect(audioCtx.destination);
+          src.connect(analyser);
+          mediaElSrc = src;
+          window.__wavstatSourceNode = src;
+        }
       } catch (e) {
         console.warn("[MobileSpectrum] audio connect failed:", e.message);
         // Only close if we own the context (not the shared one).
