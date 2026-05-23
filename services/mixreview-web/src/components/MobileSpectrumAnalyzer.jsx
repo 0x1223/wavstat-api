@@ -247,29 +247,15 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
           // the animation loop if audio is currently playing.
           console.log("[MobileSpectrum] visibilitychange → visible (shared ctx — resuming if needed)");
           if (audioCtx.state === "suspended") {
-            // Wait for the context to actually resume before starting the animation
-            // loop — avoids the RAF firing against a still-suspended context.
-            audioCtx.resume().then(() => {
-              if (!alive) return;
-              const ws = wsRef.current;
-              if (ws?.isPlaying?.()) startAnim();
-              else paint();
-            }).catch(() => {
-              if (!alive) return;
-              // Resume failed (e.g. autoplay policy); still restart animation
-              // so the canvas reflects whatever state the audio is in.
-              const ws = wsRef.current;
-              if (ws?.isPlaying?.()) startAnim();
-            });
+            audioCtx.resume().catch(() => {});
+          }
+          const ws = wsRef.current;
+          if (ws?.isPlaying?.()) {
+            startAnim();
           } else {
-            const ws = wsRef.current;
-            if (ws?.isPlaying?.()) {
-              startAnim();
-            } else {
-              // Audio paused / not started: redraw a silent frame so the canvas
-              // doesn't show stale frequency bars.
-              paint();
-            }
+            // Audio paused / not started: redraw a silent frame so the canvas
+            // doesn't show stale frequency bars.
+            paint();
           }
         } else {
           // Own context was closed on hide — analyser stays offline.
