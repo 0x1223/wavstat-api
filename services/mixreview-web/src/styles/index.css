@@ -2089,7 +2089,12 @@ h2 {
   }
 }
 
-@media (max-width: 768px) {
+/* Compact mobile reviewer layout applies to:
+   – portrait phones:  width ≤ 768 px  (the common case)
+   – landscape phones: height ≤ 500 px in landscape orientation
+     (iPhone landscape CSS height is typically 360-430 px;
+      iPad landscape is ≥ 768 px so it is NOT matched here) */
+@media (max-width: 768px), (orientation: landscape) and (max-height: 500px) {
   .app-shell.reviewer-mode {
     display: block;
     padding: 8px 8px 76px;
