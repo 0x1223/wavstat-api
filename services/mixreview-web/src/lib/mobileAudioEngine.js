@@ -10,6 +10,7 @@ const WAVEFORM_TIMEOUT_MS = 12_000;
 
 let _ws = null;
 let _url = null;
+let _wasPlayingOnHide = false;
 let _detachNativeListeners = null;
 const _handlers = { current: null };
 
@@ -106,9 +107,9 @@ function attachNativeListeners(mediaEl, ws) {
 }
 
 // ── Mobile lifecycle: background / lock-screen stability ──────────────────
-// Goal: native HTMLAudioElement owns playback. Audio is never paused or
-// restarted on visibility / page-lifecycle events. All lifecycle transitions
-// are logged for diagnostics.
+// Goal: native HTMLAudioElement owns playback. Audio is never paused on
+// visibility / page-lifecycle events. We only restart if the OS actually
+// stopped the element. All lifecycle transitions are logged for diagnostics.
 
 if (typeof document !== "undefined") {
   const getMediaEl = () => _ws?.getMediaElement?.() ?? null;
@@ -119,18 +120,35 @@ if (typeof document !== "undefined") {
 
     if (document.hidden) {
       // Use native paused property — more reliable than WaveSurfer.isPlaying()
+      _wasPlayingOnHide = mediaEl ? !mediaEl.paused : _ws.isPlaying();
       console.log("[MobileEngine] visibilitychange → hidden", {
-        wasPlaying: mediaEl ? !mediaEl.paused : _ws.isPlaying(),
+        wasPlaying: _wasPlayingOnHide,
         currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
       });
     } else {
       const isStillPlaying = mediaEl ? !mediaEl.paused : false;
       console.log("[MobileEngine] visibilitychange → visible", {
+        wasPlaying: _wasPlayingOnHide,
         isStillPlaying,
         currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
       });
-      if (isStillPlaying) {
-        console.log("[MobileEngine] Audio continued in background — no restart needed");
+
+      if (_wasPlayingOnHide && !isStillPlaying) {
+        _wasPlayingOnHide = false;
+        const tBefore = mediaEl?.currentTime;
+        console.log("[MobileEngine] Audio stopped in background — resuming; currentTime before:", tBefore?.toFixed(2));
+        _ws.play()
+          .then(() => {
+            console.log("[MobileEngine] currentTime after restore:", getMediaEl()?.currentTime?.toFixed(2));
+          })
+          .catch((e) => {
+            console.warn("[MobileEngine] Resume after background stop failed:", e.message);
+          });
+      } else {
+        _wasPlayingOnHide = false;
+        if (isStillPlaying) {
+          console.log("[MobileEngine] Audio continued in background — no restart needed");
+        }
       }
     }
   });
@@ -139,6 +157,8 @@ if (typeof document !== "undefined") {
   window.addEventListener("pagehide", (evt) => {
     const mediaEl = getMediaEl();
     const isNativePlaying = mediaEl ? !mediaEl.paused : (_ws?.isPlaying?.() ?? false);
+    // OR-in: don't clobber a flag already set by visibilitychange
+    if (isNativePlaying) _wasPlayingOnHide = true;
     console.log("[MobileEngine] pagehide", {
       persisted: evt.persisted,
       isPlaying: isNativePlaying,
@@ -151,9 +171,19 @@ if (typeof document !== "undefined") {
     const isStillPlaying = mediaEl ? !mediaEl.paused : false;
     console.log("[MobileEngine] pageshow", {
       persisted: evt.persisted,
+      wasPlaying: _wasPlayingOnHide,
       isStillPlaying,
       currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
     });
+    if (_ws && _wasPlayingOnHide && !isStillPlaying) {
+      _wasPlayingOnHide = false;
+      console.log("[MobileEngine] Audio stopped during page hide — resuming after pageshow");
+      _ws.play().catch((e) => {
+        console.warn("[MobileEngine] Resume after pageshow failed:", e.message);
+      });
+    } else {
+      _wasPlayingOnHide = false;
+    }
   });
 }
 
@@ -465,5 +495,6 @@ export function disposeMobileEngine() {
     _ws = null;
   }
   _url = null;
+  _wasPlayingOnHide = false;
   _handlers.current = null;
 }
