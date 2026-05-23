@@ -168,6 +168,7 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [mediaElement, setMediaElement] = useState(null);
+  const [pageRestoreTick, setPageRestoreTick] = useState(0);
   const [mobileNoteDraft, setMobileNoteDraft] = useState(null);
   const [meterValues, setMeterValues] = useState(null);
   const [mobileCommentDrawerId, setMobileCommentDrawerId] = useState(null);
@@ -185,9 +186,11 @@ export default function App() {
   // Mobile auto-play-next refs (mobile reviewer only).
   // userHasPlayedRef:       true once the user has tapped Play at least once.
   // autoPlayNextRef:        true when a track ends naturally → play next when ready.
+  // pendingHiddenAutoNextRef: true when a hidden/background ended event prepared the next track.
   // autoplayAttemptedRef:   prevents double-fire of the isPlayerReady effect per track.
   const userHasPlayedRef = useRef(false);
   const autoPlayNextRef = useRef(false);
+  const pendingHiddenAutoNextRef = useRef(false);
   const autoplayAttemptedRef = useRef(false);
 
   const activeTrack = useMemo(
@@ -1345,6 +1348,21 @@ export default function App() {
     }
   }, [comments, updateActiveVersion]);
 
+  useEffect(() => {
+    function markForegroundRestore() {
+      if (!document.hidden) {
+        setPageRestoreTick((tick) => tick + 1);
+      }
+    }
+
+    document.addEventListener("visibilitychange", markForegroundRestore);
+    window.addEventListener("pageshow", markForegroundRestore);
+    return () => {
+      document.removeEventListener("visibilitychange", markForegroundRestore);
+      window.removeEventListener("pageshow", markForegroundRestore);
+    };
+  }, []);
+
   // ── Mobile auto-play-next ─────────────────────────────────────────────────
   // Rules:
   //  • No autoplay on initial load or manual track selection.
@@ -1369,18 +1387,24 @@ export default function App() {
     if (!isReviewerMode || !isPlayerReady) return;
     if (!isMobileViewport()) return;
     if (autoplayAttemptedRef.current) return;
+    if (document.hidden) return;
+    if (!mediaElement || !playerRef.current) return;
 
     const isAutoNext = Boolean(autoPlayNextRef.current);
     if (isAutoNext) autoPlayNextRef.current = false;
+    const isHiddenAutoNext = Boolean(pendingHiddenAutoNextRef.current);
+    if (isHiddenAutoNext) pendingHiddenAutoNextRef.current = false;
 
     // Only autoplay if this is an auto-next advance OR the user has played before.
-    if (!isAutoNext && !userHasPlayedRef.current) return;
+    if (!isAutoNext && !isHiddenAutoNext && !userHasPlayedRef.current) return;
+    if (isHiddenAutoNext && !userHasPlayedRef.current) return;
 
     autoplayAttemptedRef.current = true;
     const el = mediaElement; // capture — may change if another track is selected mid-await
     (async () => {
       // Track whether 'playing' fires so we can detect a stall.
       let playingFired = false;
+      const startTime = el?.currentTime || 0;
       function onPlayingOnce() { playingFired = true; }
       el?.addEventListener("playing", onPlayingOnce, { once: true });
 
@@ -1393,9 +1417,11 @@ export default function App() {
         // Reset to Play state rather than leaving a fake Pause showing.
         setTimeout(() => {
           el?.removeEventListener("playing", onPlayingOnce);
-          if (!playingFired && el && !el.paused && el.currentTime < 0.05) {
+          const hasAdvanced = el && el.currentTime > startTime + 0.05;
+          if (el && !el.paused && (!playingFired || !hasAdvanced)) {
             console.log("[MixReview] Stall detected — play() resolved but audio did not start; resetting to Play state");
             try { el.pause(); } catch (_) {}
+            setIsPlaying(false);
           }
         }, 800);
       } catch (e) {
@@ -1405,9 +1431,10 @@ export default function App() {
         el?.removeEventListener("playing", onPlayingOnce);
         console.log("[MixReview] Autoplay blocked — waiting for Play tap", e?.name);
         try { el?.pause(); } catch (_) {}
+        setIsPlaying(false);
       }
     })();
-  }, [isPlayerReady, isReviewerMode, activeTrackId, activeVersionId]);
+  }, [isPlayerReady, isReviewerMode, activeTrackId, activeVersionId, mediaElement, pageRestoreTick]);
 
   // Listen to the native ended event on the active media element.
   // Only auto-advances if the user has already tapped Play once this session.
@@ -1420,8 +1447,15 @@ export default function App() {
       const currentIdx = tracks.findIndex((t) => t.id === activeTrackId);
       if (currentIdx < 0 || currentIdx >= tracks.length - 1) return; // Last track
       const nextTrack = tracks[currentIdx + 1];
-      console.log("[MixReview] Track ended — auto-advancing to:", nextTrack.title);
-      autoPlayNextRef.current = true;
+      const endedWhileHidden = document.hidden;
+      console.log("[MixReview] Track ended — auto-advancing to:", nextTrack.title, {
+        hidden: endedWhileHidden,
+      });
+      if (endedWhileHidden) {
+        pendingHiddenAutoNextRef.current = true;
+      } else {
+        autoPlayNextRef.current = true;
+      }
       selectTrack(nextTrack.id);
     }
 
@@ -1638,6 +1672,7 @@ export default function App() {
                 // This runs synchronously inside the user's tap gesture.
                 // Clear any pending auto-next flag (manual selection takes over).
                 autoPlayNextRef.current = false;
+                pendingHiddenAutoNextRef.current = false;
                 // If the user has already pressed Play this session, refresh the
                 // iOS audio session so the programmatic play() called later by
                 // the isPlayerReady effect succeeds without needing its own gesture.
