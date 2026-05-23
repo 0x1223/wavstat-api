@@ -3222,4 +3222,19 @@ h2 {
     gap: 10px;
     padding: 14px 12px 12px;
   }
+
+  /* ── Hide the project header in landscape reviewer mode ──────────────
+     The large topbar (project title + approval badge) consumes ~80–90px
+     that is better used by the waveform and analyzer. The compact track
+     nav pills already anchor the top of the layout, and the mix-strip
+     inside the waveform card shows the active track title.
+     Scoped to .reviewer-mode so engineer/admin views are unaffected. */
+  .reviewer-mode .top-stack {
+    display: none;
+  }
+
+  /* Reduce top padding now that there is no header above the content */
+  .app-shell.reviewer-mode {
+    padding-top: 4px;
+  }
 }
