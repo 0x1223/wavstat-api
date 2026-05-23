@@ -3194,3 +3194,32 @@ h2 {
     max-height: calc(100svh - 160px);
   }
 }
+
+/* ── Landscape phone: restore mobile-only UI hidden by (min-width:769px) ──
+   The rule above blanket-hides .mobile-comment-drawer, -backdrop, and
+   .mobile-track-nav for any viewport wider than 768px — which includes
+   landscape phones (~844–932px wide, ~360–430px tall).
+   This block comes last in the cascade so it wins. */
+@media (orientation: landscape) and (max-height: 500px) {
+  /* Restore elements the min-width:769px block incorrectly hid */
+  .mobile-comment-drawer {
+    display: flex;
+  }
+
+  .mobile-comment-drawer-backdrop {
+    display: block;
+  }
+
+  .mobile-track-nav {
+    display: flex;
+  }
+
+  /* Comment drawer height budget for a landscape phone (~390px viewport).
+     Transport is fixed at ~66px; drawer sits 78px from bottom.
+     100svh tracks the visible viewport (safe, excludes browser chrome). */
+  .reviewer-mode .mobile-comment-drawer {
+    max-height: calc(100svh - 130px);
+    gap: 10px;
+    padding: 14px 12px 12px;
+  }
+}
