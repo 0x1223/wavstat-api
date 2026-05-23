@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { getSharedAudioContext } from "../lib/mobileAudioEngine.js";
 
 // Standard ISO 1/3-octave center frequencies, 25 Hz – 20 kHz (30 bands)
 const CENTERS = [
@@ -38,6 +39,8 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
     let freqData = null;
     let decayBuf = null;
     let audioCtx = null;
+    let isSharedCtx = false;  // true when audioCtx is the keep-alive shared context
+    let mediaElSrc = null;    // current MediaElementAudioSourceNode (for cleanup)
     let detachWs = null;
 
     // ── Drawing ──────────────────────────────────────────────────────────
@@ -139,10 +142,15 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
       const mediaEl = ws.getMediaElement?.();
       if (!mediaEl) return false;
 
+      // Prefer the shared keep-alive AudioContext (already unlocked in the
+      // user's Play gesture). Falling back to a fresh context only happens
+      // on non-iOS browsers where startKeepAlive() is a no-op — there, a
+      // new context is fine because iOS auto-suspension isn't a concern.
+      const shared = getSharedAudioContext();
+
       try {
-        // Mobile WaveSurfer uses HTMLAudioElement directly (no Web Audio backend),
-        // so we create one AudioContext purely for the AnalyserNode tap.
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx = shared || new (window.AudioContext || window.webkitAudioContext)();
+        isSharedCtx = Boolean(shared);
 
         analyser = audioCtx.createAnalyser();
         analyser.fftSize = FFT_SIZE;
@@ -152,15 +160,22 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
         freqData = new Uint8Array(analyser.frequencyBinCount);
         decayBuf = new Float32Array(analyser.frequencyBinCount);
 
-        // Route: mediaElement → source → analyser → destination (pass-through)
+        // Route: mediaElement → source → analyser → destination (pass-through).
+        // The silent keep-alive node in the shared context is connected to
+        // destination independently and does not affect analyser readings.
         const src = audioCtx.createMediaElementSource(mediaEl);
         src.connect(audioCtx.destination);
         src.connect(analyser);
+        mediaElSrc = src;
       } catch (e) {
         console.warn("[MobileSpectrum] audio connect failed:", e.message);
-        // Clean up the half-initialised AudioContext so it doesn't leak.
-        try { audioCtx?.close(); } catch (_) {}
+        // Only close if we own the context (not the shared one).
+        if (!isSharedCtx) {
+          try { audioCtx?.close(); } catch (_) {}
+        }
         audioCtx = null;
+        isSharedCtx = false;
+        mediaElSrc = null;
         analyser = null;
         freqData = null;
         decayBuf = null;
@@ -185,33 +200,69 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
     }
 
     // ── Background / foreground handling ─────────────────────────────────
-    // When the page hides, close the AudioContext so it releases the
-    // MediaElementSource binding and the HTMLAudioElement's audio routes
-    // natively — bypassing the now-suspended AudioContext. The analyser
-    // stops, but native audio continues uninterrupted in background.
-    // On restore, rebuild the AudioContext and reconnect the analyser.
+    // When using the shared keep-alive AudioContext (iOS/Safari):
+    //   • The keep-alive node prevents iOS from auto-suspending the context,
+    //     so audio continues flowing through the Web Audio graph in background.
+    //   • On hide we just stop the animation loop (saves battery); the source
+    //     and analyser remain connected.
+    //   • On show we resume the context (in case iOS did suspend it despite
+    //     the keep-alive) and restart animation if audio is still playing.
+    //
+    // When using a per-instance context (non-iOS browsers):
+    //   • We keep the existing close-on-hide behaviour so the media element
+    //     reverts to native routing in background.
+    //   • The analyser stays offline after restore — audio priority > visuals.
     function onVisibilityChange() {
       if (!alive) return;
       if (document.hidden) {
-        console.log("[MobileSpectrum] visibilitychange → hidden; closing AudioContext to allow native playback");
-        isPlaying = false;
-        if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
-        detachWs?.();
-        detachWs = null;
-        if (audioCtx) {
-          try { audioCtx.close(); } catch (_) {}
-          audioCtx = null;
+        if (isSharedCtx) {
+          // Shared context: only stop the animation; keep the graph connected.
+          // The keep-alive node will maintain the iOS audio session.
+          console.log("[MobileSpectrum] visibilitychange → hidden (shared ctx — animation paused, graph alive)");
+          isPlaying = false;
+          if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+        } else {
+          // Own context: close it so the media element reverts to native routing
+          // in background (non-iOS path, matches original behaviour).
+          console.log("[MobileSpectrum] visibilitychange → hidden (own ctx — closing to allow native playback)");
+          isPlaying = false;
+          if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+          detachWs?.();
+          detachWs = null;
+          try { mediaElSrc?.disconnect(); } catch (_) {}
+          try { analyser?.disconnect(); } catch (_) {}
+          mediaElSrc = null;
+          if (audioCtx) {
+            try { audioCtx.close(); } catch (_) {}
+            audioCtx = null;
+          }
           analyser = null;
           freqData = null;
           decayBuf = null;
         }
       } else {
-        // Do NOT attempt to reconnect the AudioContext or recreate
-        // MediaElementSourceNode on restore. Re-routing the HTMLAudioElement
-        // through a freshly-created (and likely suspended) AudioContext
-        // silences audio that is already playing natively. The analyser stays
-        // disconnected after restore — audio priority is higher than visuals.
-        console.log("[MobileSpectrum] visibilitychange → visible; leaving native audio untouched (analyser stays offline)");
+        // Page became visible again.
+        if (isSharedCtx && audioCtx) {
+          // Shared context path: resume if iOS auto-suspended it, then restart
+          // the animation loop if audio is currently playing.
+          console.log("[MobileSpectrum] visibilitychange → visible (shared ctx — resuming if needed)");
+          if (audioCtx.state === "suspended") {
+            audioCtx.resume().catch(() => {});
+          }
+          const ws = wsRef.current;
+          if (ws?.isPlaying?.()) {
+            startAnim();
+          } else {
+            // Audio paused / not started: redraw a silent frame so the canvas
+            // doesn't show stale frequency bars.
+            paint();
+          }
+        } else {
+          // Own context was closed on hide — analyser stays offline.
+          // Audio is playing natively; we don't re-route through a new context
+          // because that would silence audio that is already playing.
+          console.log("[MobileSpectrum] visibilitychange → visible (own ctx closed — analyser stays offline)");
+        }
       }
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -229,32 +280,42 @@ export function MobileSpectrumAnalyzer({ wsRef, onFrame }) {
     const initW = canvas.getBoundingClientRect().width | 0;
     if (initW > 0) canvas.width = initW;
 
+    // Shared cleanup logic — called from both return paths.
+    function cleanup() {
+      alive = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (rafId != null) cancelAnimationFrame(rafId);
+      detachWs?.();
+      // Always disconnect the source and analyser nodes to release the
+      // MediaElementSource binding on the current media element.
+      // This is important so that when the next track mounts, a new
+      // MediaElementSource can be created for the new element in the same
+      // shared AudioContext without conflict.
+      try { mediaElSrc?.disconnect(); } catch (_) {}
+      try { analyser?.disconnect(); } catch (_) {}
+      mediaElSrc = null;
+      analyser = null;
+      // Only close the AudioContext if we own it.
+      // The shared keep-alive context is preserved for the next track.
+      if (!isSharedCtx && audioCtx) {
+        try { audioCtx.close(); } catch (_) {}
+      }
+      audioCtx = null;
+      ro.disconnect();
+    }
+
     // Attempt setup; poll until WaveSurfer is ready
     if (!tryConnect()) {
       const iv = setInterval(() => {
         if (!alive || tryConnect()) clearInterval(iv);
       }, 80);
       return () => {
-        alive = false;
-        document.removeEventListener("visibilitychange", onVisibilityChange);
         clearInterval(iv);
-        if (rafId != null) cancelAnimationFrame(rafId);
-        detachWs?.();
-        try { analyser?.disconnect(); } catch (_) {}
-        if (audioCtx) { try { audioCtx.close(); } catch (_) {} }
-        ro.disconnect();
+        cleanup();
       };
     }
 
-    return () => {
-      alive = false;
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      if (rafId != null) cancelAnimationFrame(rafId);
-      detachWs?.();
-      try { analyser?.disconnect(); } catch (_) {}
-      if (audioCtx) { try { audioCtx.close(); } catch (_) {} }
-      ro.disconnect();
-    };
+    return cleanup;
   }, [wsRef]);
 
   return (

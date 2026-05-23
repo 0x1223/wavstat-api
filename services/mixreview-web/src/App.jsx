@@ -17,6 +17,7 @@ import {
   saveSessionToApi,
   uploadSessionAudio
 } from "./api/sessions.js";
+import { startKeepAlive } from "./lib/mobileAudioEngine.js";
 import {
   addDeletedSessionId,
   clearSessionCache,
@@ -93,13 +94,23 @@ const initialReviewer =
     : restoredSession?.currentReviewer ||
       (window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ? "Engineer" : "Artist");
 
-// Unlock the iOS audio session so that AudioContext.resume() succeeds from
-// non-gesture contexts (e.g. auto-next, analyzer reconnect). Called once from
-// the first user Play tap. On iOS, resuming any AudioContext under a user
-// gesture unlocks the audio session for the whole page, allowing subsequent
-// AudioContext.resume() calls (such as from MobileSpectrumAnalyzer) to succeed
-// without needing their own gesture token. Harmless on Android / desktop.
+// Unlock the iOS audio session and start the persistent keep-alive AudioContext.
+// Called once from the first user Play tap.
+//
+// On iOS/Safari: startKeepAlive() creates the shared AudioContext (resumed inside
+// this gesture), wires a silent looping node to keep iOS from reclaiming the
+// session, and exports it for MobileSpectrumAnalyzer to reuse — so the analyser
+// continues working after track switches and background/foreground cycles without
+// needing another user gesture.
+//
+// On other browsers: startKeepAlive() is a no-op; we fall through to the
+// one-shot temporary context which unlocks any pending Web Audio operations.
 function unlockAudioSession() {
+  // Start (or no-op if already started) the persistent iOS keep-alive.
+  startKeepAlive();
+
+  // Belt-and-suspenders for non-iOS browsers: create+close a temporary context
+  // to satisfy any pending AudioContext.resume() calls on the page.
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
   try {

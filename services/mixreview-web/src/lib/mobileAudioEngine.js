@@ -19,6 +19,90 @@ let _lastTimeUpdateAt = 0;      // performance.now() of the last timeupdate tick
 let _detachNativeListeners = null;
 const _handlers = { current: null };
 
+// ── Persistent iOS/Safari keep-alive AudioContext ─────────────────────────
+// Created once inside the first user Play gesture and never closed during normal
+// operation (it survives track switches). A tiny silent looping BufferSource keeps
+// iOS from auto-suspending the context, which would cut audio routed through it.
+// MobileSpectrumAnalyzer shares this context rather than creating its own per-track.
+let _sharedCtx = null;
+let _keepAliveSrc = null;  // silent looping BufferSourceNode (volume 0)
+
+/**
+ * Detect iOS / iPadOS / Safari.
+ * Matches iPhone, iPod, iPad (modern UA) and macOS with touch (iPadOS desktop mode).
+ */
+function _isIOSSafari() {
+  const ua = navigator.userAgent;
+  const isIOS = /iP(hone|od|ad)/i.test(ua) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
+  return isIOS || isSafari;
+}
+
+/**
+ * Start the persistent keep-alive AudioContext.
+ * MUST be called inside a user gesture (e.g. the Play button handler) so that
+ * AudioContext.resume() succeeds on iOS/Safari.
+ *
+ * No-op on non-iOS/Safari browsers or if already started.
+ * Returns the shared AudioContext (or null if not applicable / failed).
+ */
+export function startKeepAlive() {
+  if (!_isIOSSafari()) return null;
+  if (_sharedCtx && _sharedCtx.state !== "closed") return _sharedCtx;
+
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return null;
+
+  try {
+    _sharedCtx = new Ctx();
+    // Resume within the gesture — this is what unlocks the iOS audio session.
+    _sharedCtx.resume().catch(() => {});
+
+    // 1-sample silent buffer, looping forever.
+    // Keeps iOS from reclaiming the audio session by ensuring the context is
+    // always producing some output (even silence). Must not affect analyser
+    // readings — it is connected directly to the destination, not to the analyser.
+    const buf = _sharedCtx.createBuffer(1, 1, _sharedCtx.sampleRate);
+    // buf.getChannelData(0)[0] === 0 by default (silent)
+    const gain = _sharedCtx.createGain();
+    gain.gain.value = 0; // completely inaudible
+    _keepAliveSrc = _sharedCtx.createBufferSource();
+    _keepAliveSrc.buffer = buf;
+    _keepAliveSrc.loop = true;
+    _keepAliveSrc.connect(gain);
+    gain.connect(_sharedCtx.destination);
+    _keepAliveSrc.start(0);
+
+    console.log("[MobileEngine] Keep-alive AudioContext started, state:", _sharedCtx.state);
+    return _sharedCtx;
+  } catch (e) {
+    console.warn("[MobileEngine] Keep-alive setup failed:", e.message);
+    try { _sharedCtx?.close(); } catch (_) {}
+    _sharedCtx = null;
+    _keepAliveSrc = null;
+    return null;
+  }
+}
+
+/**
+ * Returns the shared AudioContext if it has been started and is not closed.
+ * Used by MobileSpectrumAnalyzer to tap into the same persistent audio graph.
+ */
+export function getSharedAudioContext() {
+  if (!_sharedCtx || _sharedCtx.state === "closed") return null;
+  return _sharedCtx;
+}
+
+/** Resume the shared context if iOS auto-suspended it. */
+function _resumeSharedCtx() {
+  if (_sharedCtx && _sharedCtx.state === "suspended") {
+    _sharedCtx.resume().catch((e) => {
+      console.warn("[MobileEngine] Shared ctx resume failed:", e.message);
+    });
+  }
+}
+
 // ── Logging helpers ────────────────────────────────────────────────────────
 
 /** HEAD-probe a URL and log status + content-type. Non-blocking. */
@@ -116,59 +200,72 @@ function attachNativeListeners(mediaEl, ws) {
 // Goal: native HTMLAudioElement owns playback. Audio is never paused on
 // visibility / page-lifecycle events. We only restart if the OS actually
 // stopped the element. All lifecycle transitions are logged for diagnostics.
+//
+// With the keep-alive AudioContext active, iOS keeps audio flowing through
+// the Web Audio graph in the background. If iOS does auto-suspend the
+// context despite the keep-alive, _resumeSharedCtx() brings it back on
+// any visibility/focus/resume event — without needing a new gesture, because
+// the context object was already unlocked in the original user tap.
 
 if (typeof document !== "undefined") {
   const getMediaEl = () => _ws?.getMediaElement?.() ?? null;
 
-  document.addEventListener("visibilitychange", () => {
+  /** Shared resume-and-play logic used by all restore events. */
+  function _onRestoreVisible() {
+    // Always attempt to un-suspend the shared AudioContext first, so that any
+    // subsequent play() call finds a running context rather than a suspended one.
+    _resumeSharedCtx();
+
     if (!_ws) return;
+    const mediaEl = getMediaEl();
+    const isStillPlaying = mediaEl ? !mediaEl.paused : false;
+    const safeToResume = _wasPlayingOnHide && !isStillPlaying
+      && _url === _urlOnHide && _wasTimeAdvancing;
+
+    if (safeToResume) {
+      _wasPlayingOnHide = false;
+      const tBefore = mediaEl?.currentTime;
+      console.log("[MobileEngine] Audio stopped while hidden — resuming; t:", tBefore?.toFixed(2));
+      _ws.play()
+        .then(() => {
+          console.log("[MobileEngine] Restored; t after:", getMediaEl()?.currentTime?.toFixed(2));
+        })
+        .catch((e) => {
+          console.warn("[MobileEngine] Resume after restore failed:", e.message);
+        });
+    } else {
+      _wasPlayingOnHide = false;
+      if (isStillPlaying) {
+        console.log("[MobileEngine] Audio continued in background — no restart needed");
+      }
+    }
+  }
+
+  document.addEventListener("visibilitychange", () => {
     const mediaEl = getMediaEl();
 
     if (document.hidden) {
-      // Use native paused property — more reliable than WaveSurfer.isPlaying()
-      _wasPlayingOnHide = mediaEl ? !mediaEl.paused : _ws.isPlaying();
-      // Guard: capture which track was playing and whether time was moving.
-      // Restore handlers check both before calling play() so a new track that
-      // loaded while backgrounded is never auto-resumed.
-      _urlOnHide = _url;
-      _wasTimeAdvancing = (performance.now() - _lastTimeUpdateAt) < 500;
+      if (_ws) {
+        // Use native paused property — more reliable than WaveSurfer.isPlaying()
+        _wasPlayingOnHide = mediaEl ? !mediaEl.paused : _ws.isPlaying();
+        _urlOnHide = _url;
+        _wasTimeAdvancing = (performance.now() - _lastTimeUpdateAt) < 500;
+      }
       console.log("[MobileEngine] visibilitychange → hidden", {
         wasPlaying: _wasPlayingOnHide,
         wasTimeAdvancing: _wasTimeAdvancing,
+        sharedCtxState: _sharedCtx?.state ?? "none",
         currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
       });
     } else {
-      const isStillPlaying = mediaEl ? !mediaEl.paused : false;
-      // Resume is only safe when it's the same track AND time was advancing —
-      // i.e. audio was audibly playing, not just loaded/paused at a position.
-      const safeToResume = _wasPlayingOnHide && !isStillPlaying
-        && _url === _urlOnHide && _wasTimeAdvancing;
       console.log("[MobileEngine] visibilitychange → visible", {
         wasPlaying: _wasPlayingOnHide,
         wasTimeAdvancing: _wasTimeAdvancing,
         sameTrack: _url === _urlOnHide,
-        safeToResume,
-        isStillPlaying,
+        sharedCtxState: _sharedCtx?.state ?? "none",
         currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
       });
-
-      if (safeToResume) {
-        _wasPlayingOnHide = false;
-        const tBefore = mediaEl?.currentTime;
-        console.log("[MobileEngine] Audio stopped in background — resuming; currentTime before:", tBefore?.toFixed(2));
-        _ws.play()
-          .then(() => {
-            console.log("[MobileEngine] currentTime after restore:", getMediaEl()?.currentTime?.toFixed(2));
-          })
-          .catch((e) => {
-            console.warn("[MobileEngine] Resume after background stop failed:", e.message);
-          });
-      } else {
-        _wasPlayingOnHide = false;
-        if (isStillPlaying) {
-          console.log("[MobileEngine] Audio continued in background — no restart needed");
-        }
-      }
+      _onRestoreVisible();
     }
   });
 
@@ -186,6 +283,7 @@ if (typeof document !== "undefined") {
       persisted: evt.persisted,
       isPlaying: isNativePlaying,
       wasTimeAdvancing: _wasTimeAdvancing,
+      sharedCtxState: _sharedCtx?.state ?? "none",
       currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
     });
   });
@@ -193,26 +291,36 @@ if (typeof document !== "undefined") {
   window.addEventListener("pageshow", (evt) => {
     const mediaEl = getMediaEl();
     const isStillPlaying = mediaEl ? !mediaEl.paused : false;
-    const safeToResume = _ws && _wasPlayingOnHide && !isStillPlaying
-      && _url === _urlOnHide && _wasTimeAdvancing;
     console.log("[MobileEngine] pageshow", {
       persisted: evt.persisted,
       wasPlaying: _wasPlayingOnHide,
       wasTimeAdvancing: _wasTimeAdvancing,
       sameTrack: _url === _urlOnHide,
-      safeToResume,
       isStillPlaying,
+      sharedCtxState: _sharedCtx?.state ?? "none",
       currentTime: mediaEl?.currentTime?.toFixed(2) ?? "(n/a)",
     });
-    if (safeToResume) {
-      _wasPlayingOnHide = false;
-      console.log("[MobileEngine] Audio stopped during page hide — resuming after pageshow");
-      _ws.play().catch((e) => {
-        console.warn("[MobileEngine] Resume after pageshow failed:", e.message);
-      });
-    } else {
-      _wasPlayingOnHide = false;
-    }
+    _onRestoreVisible();
+  });
+
+  // window 'focus' fires when the page regains focus after an app-switch or
+  // tab switch — a useful supplementary trigger alongside visibilitychange.
+  window.addEventListener("focus", () => {
+    console.log("[MobileEngine] focus", {
+      sharedCtxState: _sharedCtx?.state ?? "none",
+      wasPlaying: _wasPlayingOnHide,
+    });
+    _onRestoreVisible();
+  });
+
+  // Page Lifecycle API: 'resume' fires when the page transitions from
+  // frozen → active (e.g. after an aggressive OS memory reclaim on iOS).
+  // Not universally supported but harmless to register.
+  document.addEventListener("resume", () => {
+    console.log("[MobileEngine] document resume (Page Lifecycle)", {
+      sharedCtxState: _sharedCtx?.state ?? "none",
+    });
+    _onRestoreVisible();
   });
 }
 
@@ -522,7 +630,12 @@ export function mountMobileEngine(container, url, handlers) {
   return ws;
 }
 
-/** Destroy the singleton. Called when the audio source changes or the session ends. */
+/**
+ * Destroy the WaveSurfer singleton. Called when a track changes or the
+ * component unmounts. The shared keep-alive AudioContext is intentionally
+ * preserved — it must survive track switches so MobileSpectrumAnalyzer can
+ * reconnect without requiring a new user gesture.
+ */
 export function disposeMobileEngine() {
   _detachNativeListeners?.();
   _detachNativeListeners = null;
@@ -535,4 +648,7 @@ export function disposeMobileEngine() {
   _urlOnHide = null;
   _wasTimeAdvancing = false;
   _handlers.current = null;
+  // _sharedCtx / _keepAliveSrc are intentionally NOT cleared here.
+  // They live for the full page session so MobileSpectrumAnalyzer can reuse
+  // the already-unlocked context across track switches.
 }
