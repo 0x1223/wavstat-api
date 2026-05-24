@@ -464,6 +464,11 @@ if (typeof document !== "undefined") {
 export function mountMobileEngine(container, url, handlers) {
   _handlers.current = handlers;
 
+  // peaksUrl is an optional property of the handlers/options object.
+  // When present we fetch the pre-generated peaks JSON from R2 and hand it
+  // to WaveSurfer so it can skip client-side audio decoding entirely.
+  const peaksUrl = handlers?.peaksUrl ?? null;
+
   if (_url === url && _ws) {
     return _ws;
   }
@@ -495,10 +500,45 @@ export function mountMobileEngine(container, url, handlers) {
   console.log("[MixReview] MobileEngine mount", { ext, isWav, url: url.slice(0, 120) });
   probeAudioUrl(url).catch(() => {}); // background, non-blocking
 
+  // ── Peaks pre-fetch ────────────────────────────────────────────────────
+  // Start the peaks JSON fetch now so it runs in parallel with the WaveSurfer
+  // constructor and early event-subscription wiring below.
+  //
+  // WaveSurfer v7 defers its first internal load() to a microtask via
+  // Promise.resolve().then(). By omitting `url` from create() options (below)
+  // we suppress that deferred load entirely, then fire ws.load(url, peaks)
+  // ourselves once the fetch settles — passing peaks skips WaveSurfer's
+  // full audio blob fetch + decodeAudioData decode cycle.
+  //
+  // If peaksUrl is absent, or the fetch fails for any reason, peaksFetch
+  // resolves to null and we fall back to ws.load(url) with no peaks
+  // (the existing full-decode path), silently.
+  const peaksFetch = peaksUrl
+    ? fetch(peaksUrl)
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        })
+        .catch((err) => {
+          console.warn("[MixReview] Peaks fetch failed — falling back to full decode:", err.message);
+          return null;
+        })
+    : Promise.resolve(null);
+
   // ── WaveSurfer instance ────────────────────────────────────────────────
+  // `url` is intentionally omitted here. WaveSurfer v7 defers its first
+  // load() call to a microtask (Promise.resolve().then) and only fires it
+  // when `initialUrl` is non-empty. By omitting the url we suppress that
+  // auto-load so we can call ws.load(url, peaks) ourselves below, after
+  // peaksFetch settles, injecting the pre-generated peaks array directly.
+  //
+  // `backend: "MediaElement"` selects the HTMLAudioElement path (not
+  // WebAudioPlayer), pairing with R2 byte-range streaming. In WaveSurfer v7
+  // the check is `options.backend === 'WebAudio' ? new WebAudioPlayer() : undefined`,
+  // so any non-WebAudio value keeps the native <audio> element.
   const ws = WaveSurfer.create({
     container,
-    url,
+    backend: "MediaElement",
     waveColor: "#6d6457",
     progressColor: "#d6a354",
     cursorColor: "#f5efe3",
@@ -784,6 +824,27 @@ export function mountMobileEngine(container, url, handlers) {
   // WaveSurfer's play / pause / finish / timeupdate events are not subscribed
   // here to avoid duplicate callbacks — native events are more reliable in
   // background / lock-screen where AudioContext may be suspended.
+
+  // ── Trigger load with or without peaks ────────────────────────────────
+  // This replaces the deferred auto-load we suppressed by omitting `url`
+  // from create() options. Once peaksFetch settles (nearly instant when the
+  // peaks JSON is already cached at the CDN edge), we hand WaveSurfer the
+  // peaks array so it renders the waveform from pre-computed data instead of
+  // fetching and decoding the full audio binary. Falls back to the standard
+  // load path silently if peaksUrl was absent or the fetch failed.
+  peaksFetch.then((peaks) => {
+    // Guard: URL changed or engine was disposed while peaks were in flight.
+    if (_ws !== ws || _url !== url) return;
+    if (peaks) {
+      console.log("[MixReview] Loading WaveSurfer with pre-fetched peaks", {
+        numPoints: peaks.length,
+        url: url.slice(0, 80),
+      });
+      ws.load(url, peaks).catch(() => {});
+    } else {
+      ws.load(url).catch(() => {});
+    }
+  });
 
   return ws;
 }
