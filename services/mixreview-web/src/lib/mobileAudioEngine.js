@@ -27,6 +27,7 @@ const _handlers = { current: null };
 let _sharedCtx = null;
 let _keepAliveSrc = null;    // silent looping BufferSourceNode (volume 0)
 let _sharedAnalyser = null;  // single AnalyserNode wired into the keep-alive chain
+let _mediaSrc = null;        // MediaElementAudioSourceNode for the current track
 
 /**
  * Detect iOS / iPadOS / Safari.
@@ -105,6 +106,9 @@ export function startKeepAlive() {
     }, 30_000);
 
     console.log("[MobileEngine] Keep-alive AudioContext started, state:", _sharedCtx.state);
+    // First-play path: mountMobileEngine() ran before the gesture so _ws exists.
+    // Wire the already-mounted media element now that the context is unlocked.
+    _wireMediaToAnalyser(_ws?.getMediaElement?.() ?? null);
     return _sharedCtx;
   } catch (e) {
     console.warn("[MobileEngine] Keep-alive setup failed:", e.message);
@@ -143,6 +147,37 @@ function _resumeSharedCtx() {
     _sharedCtx.resume().catch((e) => {
       console.warn("[MobileEngine] Shared ctx resume failed:", e.message);
     });
+  }
+}
+
+/**
+ * Wire a media element into the shared analyser exactly once per element.
+ * Called from startKeepAlive() (first-play path) and mountMobileEngine()
+ * (track-change path). Safe to call multiple times — guarded by element identity.
+ *
+ * Chain: mediaEl → _mediaSrc → _sharedAnalyser → destination
+ * Sound plays because _sharedAnalyser is already connected to destination.
+ * No connection is made outside this engine, so the iOS audio session is
+ * never touched by the spectrum strip component.
+ */
+function _wireMediaToAnalyser(mediaEl) {
+  if (!_sharedCtx || !_sharedAnalyser || !mediaEl) return;
+  // Same element already wired — nothing to do.
+  if (_mediaSrc && _mediaSrc.mediaElement === mediaEl) return;
+  // Different element (track change) — sever the old source first.
+  if (_mediaSrc) {
+    try { _mediaSrc.disconnect(); } catch (_) {}
+    _mediaSrc = null;
+  }
+  try {
+    _mediaSrc = _sharedCtx.createMediaElementSource(mediaEl);
+    // mediaEl audio output is now routed exclusively through Web Audio.
+    // Connect to analyser; analyser is already wired to destination in startKeepAlive().
+    _mediaSrc.connect(_sharedAnalyser);
+    console.log("[MobileEngine] Media element wired to shared analyser ✓");
+  } catch (e) {
+    console.warn("[MobileEngine] createMediaElementSource failed:", e.message);
+    _mediaSrc = null;
   }
 }
 
@@ -489,6 +524,12 @@ export function mountMobileEngine(container, url, handlers) {
   if (_ws) {
     _detachNativeListeners?.();
     _detachNativeListeners = null;
+    // Sever the media source before destroying WaveSurfer so the old
+    // <audio> element is cleanly released from the Web Audio graph.
+    if (_mediaSrc) {
+      try { _mediaSrc.disconnect(); } catch (_) {}
+      _mediaSrc = null;
+    }
     _ws.destroy();
     _ws = null;
   }
@@ -591,6 +632,12 @@ export function mountMobileEngine(container, url, handlers) {
     _detachNativeListeners?.();
     _detachNativeListeners = attachNativeListeners(earlyMediaEl, ws);
   }
+
+  // Track-change path: if startKeepAlive() was already called (shared context
+  // is live), wire the new element immediately before any playback begins.
+  // For the first-play path, startKeepAlive() will call _wireMediaToAnalyser()
+  // itself after unlocking the context inside the user gesture.
+  _wireMediaToAnalyser(earlyMediaEl ?? null);
 
   // didSettle: true once onReady or onWaveformUnavailable has been called.
   // Prevents duplicate handler calls if both fallback timer and WaveSurfer
@@ -864,6 +911,10 @@ export function mountMobileEngine(container, url, handlers) {
 export function disposeMobileEngine() {
   _detachNativeListeners?.();
   _detachNativeListeners = null;
+  if (_mediaSrc) {
+    try { _mediaSrc.disconnect(); } catch (_) {}
+    _mediaSrc = null;
+  }
   if (_ws) {
     _ws.destroy();
     _ws = null;
