@@ -549,35 +549,24 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
     const decay = new Float32Array(_SPEC_N).fill(0);
 
     // ── Synthetic amplitude ────────────────────────────────────────────────
-    // Half-wave rectified oscillators keep bars near zero for roughly half
-    // each cycle, producing the natural "bounce and fall" of a real analyser
-    // without reading any audio data.
+    // Each column oscillates at a rate proportional to its index so adjacent
+    // bars are never in phase. A shared high-frequency cos() term
+    // (23.1 rad/s) acts as a rapidly-changing phase wobble that breaks up any
+    // lock-step patterns between nearby bands.
     //
-    // Amplitude budget (approximate averages at typical playback):
-    //   a  (primary)   : avg ≈ 0.32  (1/π, half-wave rectified sin)
-    //   b  (harmonic)  : avg ≈ 0.10
-    //   breath         : avg ≈ 0.75  (slow 0.22 Hz pulse, range 0.3–1.0)
-    //   bandScale      : 0.45–0.70   (higher bands more energetic)
-    //   → final avg    : ≈ 0.14–0.23 of full height   (sits in lower third)
-    //   → peak         : ≈ 0.55–0.70 of full height   (never clips ceiling)
+    // Math.abs(sin()) gives full-wave rectification — always [0, 1], bars
+    // spend real time at zero rather than bouncing above a 50% baseline.
+    //
+    // Analyzer slope: bass (i=0) scales to 90% max; treble (i=29) to 40% max.
+    // This mirrors the energy distribution of real audio and prevents treble
+    // bars from dominating visually.
     function synthAmp(i, t) {
-      const norm  = i / (_SPEC_N - 1);               // 0..1 across bands
-      const rate  = 0.7 + norm * 2.8;                // 0.7–3.5 cycles/s
-      const phase = i * 0.53;
-
-      // Half-wave rectified: Math.max(0, …) so each bar naturally returns
-      // to zero every cycle instead of bouncing above a 50% baseline.
-      const a = Math.max(0, Math.sin(t * rate + phase));
-      const b = Math.max(0, Math.sin(t * rate * 1.73 + phase * 1.9)) * 0.3;
-
-      // Slow breath — whole-display pulse at ~0.22 Hz (one cycle ≈ 4.5 s).
-      // Keeps the visualizer from looking static even at steady-state playback.
-      const breath = 0.3 + 0.7 * Math.abs(Math.sin(t * 0.22 + 0.5));
-
-      // Higher bands are more energetic (mimics typical music energy curve).
-      const bandScale = 0.45 + norm * 0.25;   // 0.45 (low) → 0.70 (high)
-
-      return Math.min(1, (a + b) * breath * bandScale);
+      const norm = i / (_SPEC_N - 1);                       // 0..1 across bands
+      const raw  = Math.abs(
+        Math.sin(t * (i * 7.3) + Math.cos(t * 23.1))       // per-column jitter
+      );
+      const maxScale = 0.9 - norm * 0.5;                    // 0.90 bass → 0.40 treble
+      return raw * maxScale;
     }
 
     // ── Drawing ────────────────────────────────────────────────────────────
