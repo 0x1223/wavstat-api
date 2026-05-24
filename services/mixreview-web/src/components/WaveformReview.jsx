@@ -544,18 +544,40 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
 
     let alive = true;
     let rafId = null;
-    // Per-band decay buffer — values in [0,1], decays when paused.
-    const decay = new Float32Array(_SPEC_N).fill(0.08);
+    // Per-band decay buffer — values in [0,1]. Starts at zero so bars are
+    // invisible before audio plays; decays to absolute zero when paused.
+    const decay = new Float32Array(_SPEC_N).fill(0);
 
     // ── Synthetic amplitude ────────────────────────────────────────────────
-    // Each band i oscillates at a unique rate driven by currentTime (seconds).
-    // Two harmonics give organic movement; the result is clamped to [0,1].
+    // Half-wave rectified oscillators keep bars near zero for roughly half
+    // each cycle, producing the natural "bounce and fall" of a real analyser
+    // without reading any audio data.
+    //
+    // Amplitude budget (approximate averages at typical playback):
+    //   a  (primary)   : avg ≈ 0.32  (1/π, half-wave rectified sin)
+    //   b  (harmonic)  : avg ≈ 0.10
+    //   breath         : avg ≈ 0.75  (slow 0.22 Hz pulse, range 0.3–1.0)
+    //   bandScale      : 0.45–0.70   (higher bands more energetic)
+    //   → final avg    : ≈ 0.14–0.23 of full height   (sits in lower third)
+    //   → peak         : ≈ 0.55–0.70 of full height   (never clips ceiling)
     function synthAmp(i, t) {
-      const rate  = 0.9 + (i / (_SPEC_N - 1)) * 3.1;   // 0.9–4.0 cycles/s
-      const phase = i * 0.44;
-      const a = Math.sin(t * rate + phase);
-      const b = Math.sin(t * rate * 1.61 + phase * 2.1) * 0.35;
-      return Math.max(0, ((a + b) / 1.35 + 1) * 0.5);  // map [-1,1] → [0,1]
+      const norm  = i / (_SPEC_N - 1);               // 0..1 across bands
+      const rate  = 0.7 + norm * 2.8;                // 0.7–3.5 cycles/s
+      const phase = i * 0.53;
+
+      // Half-wave rectified: Math.max(0, …) so each bar naturally returns
+      // to zero every cycle instead of bouncing above a 50% baseline.
+      const a = Math.max(0, Math.sin(t * rate + phase));
+      const b = Math.max(0, Math.sin(t * rate * 1.73 + phase * 1.9)) * 0.3;
+
+      // Slow breath — whole-display pulse at ~0.22 Hz (one cycle ≈ 4.5 s).
+      // Keeps the visualizer from looking static even at steady-state playback.
+      const breath = 0.3 + 0.7 * Math.abs(Math.sin(t * 0.22 + 0.5));
+
+      // Higher bands are more energetic (mimics typical music energy curve).
+      const bandScale = 0.45 + norm * 0.25;   // 0.45 (low) → 0.70 (high)
+
+      return Math.min(1, (a + b) * breath * bandScale);
     }
 
     // ── Drawing ────────────────────────────────────────────────────────────
@@ -573,10 +595,11 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
         let amp;
         if (playing) {
           amp = synthAmp(i, t);
-          decay[i] = amp; // keep decay buffer current
+          decay[i] = amp; // mirror into decay buffer so pause inherits live value
         } else {
-          // Decay toward a small floor so bars don't vanish instantly on pause.
-          decay[i] = Math.max(0.04, decay[i] * 0.88);
+          // Decay to absolute zero when paused — 0.88× per frame ≈ 60 ms half-life.
+          decay[i] *= 0.88;
+          if (decay[i] < 0.004) decay[i] = 0; // snap to zero to stop micro-drift
           amp = decay[i];
         }
         ctx2d.fillStyle = spectrumBandColor(i, amp);
