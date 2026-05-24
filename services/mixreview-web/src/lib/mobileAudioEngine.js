@@ -488,7 +488,11 @@ export function mountMobileEngine(container, url, handlers) {
 
   // ── Logging ────────────────────────────────────────────────────────────
   const ext = url.split("?")[0].split(".").pop().toLowerCase();
-  console.log("[MixReview] MobileEngine mount", { ext, url: url.slice(0, 120) });
+  // Detect WAV so we can apply format-specific streaming configuration below.
+  // WAV files served from R2 are uncompressed and can be 40–100 MB; they
+  // require different preload and CORS treatment than the smaller MP3 assets.
+  const isWav = ext === "wav";
+  console.log("[MixReview] MobileEngine mount", { ext, isWav, url: url.slice(0, 120) });
   probeAudioUrl(url).catch(() => {}); // background, non-blocking
 
   // ── WaveSurfer instance ────────────────────────────────────────────────
@@ -515,8 +519,29 @@ export function mountMobileEngine(container, url, handlers) {
   // Attach native audio listeners as early as possible. WaveSurfer creates
   // the HTMLAudioElement in its constructor, so it is usually available here.
   // The ready / fallback paths re-check and attach if this missed.
+  //
+  // We also apply streaming configuration here — before the browser's network
+  // stack processes the element, because JS is still on the same call stack as
+  // WaveSurfer.create() and the engine hasn't yielded to the event loop yet:
+  //
+  //  crossOrigin="anonymous"
+  //    Sends an Origin header with every HTTP request the browser makes for
+  //    this element (including byte-range streaming requests to R2). This lets
+  //    Cloudflare R2's CORS policy expose Content-Range / Accept-Ranges response
+  //    headers to JavaScript and keeps the request in the CORS-credentialed
+  //    cache partition, preventing range-request stalls on cross-origin assets.
+  //
+  //  preload="metadata"  (WAV only)
+  //    Instructs the browser to fetch only the file header (enough to determine
+  //    duration and codec) and then stop. Audio data is streamed on-demand via
+  //    HTTP byte-range requests when play() is called. This prevents the browser
+  //    from trying to buffer a 40–100 MB WAV file on page load.
+  //    MP3 files remain at preload="auto" so they buffer freely — they are small
+  //    enough that aggressive pre-buffering is harmless and improves seek latency.
   const earlyMediaEl = ws.getMediaElement?.();
   if (earlyMediaEl) {
+    earlyMediaEl.crossOrigin = "anonymous";
+    earlyMediaEl.preload = isWav ? "metadata" : "auto";
     _detachNativeListeners?.();
     _detachNativeListeners = attachNativeListeners(earlyMediaEl, ws);
   }
@@ -600,8 +625,17 @@ export function mountMobileEngine(container, url, handlers) {
     console.log("[MixReview] Fallback: fetch stalled — aborting WaveSurfer fetch, loading URL directly");
     try { ws.abortController?.abort(); } catch (_) {}
 
-    mediaEl.preload = "auto";
+    // Pipeline reset: pause any partially-loaded stream, then flush the media
+    // element's internal buffer pipeline before assigning the new src.  This
+    // prevents buffer-drain crashes and memory leaks that can occur when jumping
+    // between large WAV assets and lighter MP3 files — the previous (stalled)
+    // decode attempt may still hold partial network buffers that must be freed
+    // before the element accepts a new source assignment cleanly.
+    try { mediaEl.pause(); } catch (_) {}
+    mediaEl.crossOrigin = "anonymous";  // ensure CORS is set for direct loads too
+    mediaEl.preload = isWav ? "metadata" : "auto";
     mediaEl.src = url;
+    mediaEl.load(); // explicit pipeline flush — required after src reassignment
 
     const giveUp = setTimeout(() => {
       if (didSettle || _ws !== ws) return;
@@ -705,7 +739,12 @@ export function mountMobileEngine(container, url, handlers) {
     if (mediaElement) {
       mediaElement.muted = false;
       mediaElement.volume = 1;
-      mediaElement.preload = "auto";
+      // Honour the format-specific preload set during early element setup.
+      // WAV → "metadata" keeps byte-range streaming on-demand (do not reset to
+      // "auto" — that would cause the browser to aggressively buffer the whole
+      // file now that it knows the element is ready).
+      // Non-WAV (MP3 etc.) → "auto" allows the browser to buffer freely.
+      mediaElement.preload = isWav ? "metadata" : "auto";
       // Ensure native listeners are attached (fallback for early-attachment miss).
       if (!_detachNativeListeners) {
         _detachNativeListeners = attachNativeListeners(mediaElement, ws);
