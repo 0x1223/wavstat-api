@@ -699,23 +699,47 @@ export function mountMobileEngine(container, url, handlers) {
   // WebAudioPlayer), pairing with R2 byte-range streaming. In WaveSurfer v7
   // the check is `options.backend === 'WebAudio' ? new WebAudioPlayer() : undefined`,
   // so any non-WebAudio value keeps the native <audio> element.
-  const ws = WaveSurfer.create({
-    container,
-    backend: "MediaElement",
-    waveColor: "#6d6457",
-    progressColor: "#d6a354",
-    cursorColor: "#f5efe3",
-    cursorWidth: 2,
-    height: 180,
-    barWidth: 2,
-    barGap: 2,
-    barRadius: 2,
-    autoScroll: false,
-    autoCenter: false,
-    normalize: true,
-    dragToSeek: true,
-    fillParent: true,
-  });
+  // ── Low-memory canvas guard ────────────────────────────────────────────
+  // On low-RAM iOS devices the browser may refuse to allocate a high-DPR
+  // canvas (devicePixelRatio ≥ 2–3), causing a silent OOM that surfaces as
+  // a blank waveform or a 'Waveform unavailable' fallback.
+  // Fixes:
+  //   pixelRatio: 1  — always render at 1:1, never 2x or 3x Retina.
+  //                    Halves canvas RAM on 2x devices, cuts it to ⅓ on 3x.
+  //   minPxPerSec: 1 — prevents WaveSurfer from stretching the canvas to an
+  //                    enormous width for long tracks (e.g. a 60-min track at
+  //                    the default 50 px/s would need a 180 000-px canvas).
+  //   fillParent: true already set — canvas width = container width, so the
+  //                    minPxPerSec ceiling only matters when the calculated
+  //                    width would exceed fillParent; keep it as a floor guard.
+  let ws;
+  try {
+    ws = WaveSurfer.create({
+      container,
+      backend: "MediaElement",
+      waveColor: "#6d6457",
+      progressColor: "#d6a354",
+      cursorColor: "#f5efe3",
+      cursorWidth: 2,
+      height: 180,
+      barWidth: 2,
+      barGap: 2,
+      barRadius: 2,
+      autoScroll: false,
+      autoCenter: false,
+      normalize: true,
+      dragToSeek: true,
+      fillParent: true,
+      pixelRatio: 1,    // fixed 1:1 — never scale up for Retina (OOM guard)
+      minPxPerSec: 1,   // minimum zoom-out floor; prevents giant canvas on long tracks
+    });
+  } catch (e) {
+    // WaveSurfer constructor itself failed — most likely the container's
+    // canvas could not be allocated (extreme low-memory state).
+    console.warn("[MixReview] WaveSurfer.create() failed — canvas unavailable:", e?.message ?? String(e));
+    _handlers.current?.onError?.(new Error("Waveform renderer unavailable"));
+    return null;
+  }
 
   _ws = ws;
 
@@ -1021,6 +1045,24 @@ export function mountMobileEngine(container, url, handlers) {
   // peaks array so it renders the waveform from pre-computed data instead of
   // fetching and decoding the full audio binary. Falls back to the standard
   // load path silently if peaksUrl was absent or the fetch failed.
+  // ── ws.load() error handler ────────────────────────────────────────────
+  // Funnels Promise rejections from ws.load() into activateFallback so that
+  // canvas-allocation failures (OOM on low-RAM iOS) or network errors that
+  // WaveSurfer surfaces as rejected Promises don't disappear silently.
+  // AbortErrors are informational only — they are expected when activateFallback
+  // (case B) calls ws.abortController.abort() to cancel a stalled fetch.
+  function _onLoadError(e) {
+    if (_ws !== ws) return;
+    const name = e?.name ?? "";
+    const msg  = e?.message ?? String(e);
+    if (name === "AbortError") {
+      console.log("[MixReview] ws.load() aborted (intentional)");
+      return;
+    }
+    console.warn("[MixReview] ws.load() rejected:", name, "—", msg);
+    if (!didSettle) activateFallback("canvas-error");
+  }
+
   peaksFetch.then((peaks) => {
     // Guard: URL changed or engine was disposed while peaks were in flight.
     if (_ws !== ws || _url !== url) return;
@@ -1029,9 +1071,9 @@ export function mountMobileEngine(container, url, handlers) {
         numPoints: peaks.length,
         url: url.slice(0, 80),
       });
-      ws.load(url, peaks).catch(() => {});
+      ws.load(url, peaks).catch(_onLoadError);
     } else {
-      ws.load(url).catch(() => {});
+      ws.load(url).catch(_onLoadError);
     }
   });
 
