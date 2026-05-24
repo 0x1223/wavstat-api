@@ -21,6 +21,14 @@ const _handlers = { current: null };
 // Tracks the current track duration so Media Session setPositionState() has
 // a stable value between durationchange events.
 let _mediaDuration = 0;
+// ── Audio interruption recovery ───────────────────────────────────────────
+// iOS fires AudioContext statechange → "suspended"/"interrupted" when a phone
+// call, Siri, or another audio app takes over the hardware session. These flags
+// and cleanup refs support the auto-resume path that fires when the OS gives
+// the session back (statechange → "running").
+let _interruptedWhilePlaying = false; // OS interrupted us while page was visible + playing
+let _detachCtxStateListener  = null;  // cleanup fn for AudioContext statechange
+let _detachGestureRecovery   = null;  // cleanup fn for one-time gesture re-prime fallback
 
 // ── Persistent iOS/Safari keep-alive AudioContext ─────────────────────────
 // Created once inside the first user Play gesture and never closed during normal
@@ -74,6 +82,9 @@ export function startKeepAlive() {
     _sharedCtx = new Ctx();
     // Resume within the gesture — this is what unlocks the iOS audio session.
     _sharedCtx.resume().catch(() => {});
+    // Wire the statechange listener so OS audio interruptions (phone calls,
+    // Siri, other audio apps) are detected and playback is auto-restored.
+    _wireCtxStateListener();
 
     // 1-sample silent buffer, looping forever.
     // Keeps iOS from reclaiming the audio session by ensuring the context is
@@ -418,6 +429,166 @@ function attachNativeListeners(mediaEl, ws) {
     mediaEl.removeEventListener("durationchange", onDurationChange);
     mediaEl.removeEventListener("timeupdate",     onTimeUpdate);
   };
+}
+
+// ── Audio interruption recovery ───────────────────────────────────────────
+
+/**
+ * Attach a statechange listener to _sharedCtx so OS audio interruptions
+ * (phone calls, Siri, other audio apps grabbing the hardware session) are
+ * detected and playback is auto-restored when the session is returned.
+ *
+ * Called once from startKeepAlive() after _sharedCtx is created. The context
+ * lives for the full page session, so we wire this once and never re-wire.
+ *
+ * States we care about:
+ *   "interrupted" — iOS-specific; another app or the OS took the session.
+ *   "suspended"   — Can be OS-initiated (when page is still visible) OR our
+ *                   own explicit suspend-on-hide. We distinguish them with
+ *                   a document.visibilityState check: our suspends happen from
+ *                   visibilitychange/pagehide handlers, meaning the page is
+ *                   already hidden by the time statechange fires (async). OS
+ *                   interruptions happen while the page is actively visible.
+ *   "running"     — Session returned. If we flagged an interruption, resume.
+ */
+function _wireCtxStateListener() {
+  if (!_sharedCtx) return;
+  // Remove any previous listener (e.g., from a closed-and-recreated context).
+  _detachCtxStateListener?.();
+
+  function onStateChange() {
+    const state = _sharedCtx?.state;
+    console.log("[MobileEngine] AudioContext statechange →", state);
+
+    if (state === "interrupted") {
+      // iOS-specific interruption (phone call / Siri / AirPlay takeover).
+      // Record whether the primary element was playing so we can resume it.
+      const mediaEl = _ws?.getMediaElement?.();
+      _interruptedWhilePlaying = Boolean(mediaEl && !mediaEl.paused && !mediaEl.ended);
+      if (_interruptedWhilePlaying) {
+        console.log("[MobileEngine] OS audio interruption — primary was playing; will restore.");
+      }
+
+    } else if (state === "suspended") {
+      // Guard: our own intentional suspend-on-hide fires while the page is
+      // already hidden (visibilitychange/pagehide set document.hidden before
+      // calling suspend()). If the page is STILL VISIBLE here, this suspend
+      // was OS-initiated — flag it as an interruption.
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        const mediaEl = _ws?.getMediaElement?.();
+        const wasPlaying = Boolean(mediaEl && !mediaEl.paused && !mediaEl.ended);
+        if (wasPlaying) {
+          _interruptedWhilePlaying = true;
+          console.log("[MobileEngine] Unexpected ctx suspension while visible — flagging interruption.");
+        }
+      }
+
+    } else if (state === "running") {
+      // AudioContext session returned. Attempt to resume the primary element
+      // if an OS interruption previously paused it.
+      if (_interruptedWhilePlaying) {
+        _interruptedWhilePlaying = false;
+        const mediaEl = _ws?.getMediaElement?.();
+        const hasSrc = Boolean(mediaEl?.currentSrc || mediaEl?.src);
+        if (mediaEl && mediaEl.paused && !mediaEl.ended && hasSrc) {
+          console.log("[MobileEngine] AudioContext restored — resuming primary after interruption; t:",
+            mediaEl.currentTime?.toFixed(3));
+          _restoreAfterInterruption(mediaEl);
+        }
+      }
+    }
+  }
+
+  _sharedCtx.addEventListener("statechange", onStateChange);
+  _detachCtxStateListener = () => {
+    _sharedCtx?.removeEventListener("statechange", onStateChange);
+  };
+}
+
+/**
+ * Attempt to resume primary element playback after an OS audio interruption.
+ * Calls mediaEl.play() directly (not through WaveSurfer) for an immediate
+ * hardware response. If iOS blocks it with NotAllowedError, falls back to a
+ * one-time gesture listener so the stream recovers on the user's next tap.
+ */
+function _restoreAfterInterruption(mediaEl) {
+  if (_isRestoring) return; // a restore chain is already in flight
+  _isRestoring = true;
+
+  // Clear any stale gesture recovery from a previous interruption.
+  _detachGestureRecovery?.();
+  _detachGestureRecovery = null;
+
+  const p = mediaEl.play();
+  if (p && typeof p.then === "function") {
+    p.then(() => {
+      console.log("[MobileEngine] Interruption recovery play() resolved ✓; t:",
+        mediaEl.currentTime?.toFixed(3));
+      _isRestoring = false;
+      // Restart the shadow so the analyser syncs with the primary.
+      _restartShadow(mediaEl);
+    }).catch((e) => {
+      console.warn("[MobileEngine] Interruption recovery play() rejected:", e.name, "—", e.message);
+      _isRestoring = false;
+      // iOS requires a user gesture. Register a one-time tap listener so the
+      // stream re-primes the moment the user next touches the screen.
+      if (e.name === "NotAllowedError" || e.name === "AbortError") {
+        _registerGestureRecovery(mediaEl);
+      }
+    });
+  } else {
+    _isRestoring = false;
+  }
+}
+
+/**
+ * Register a one-time touch/pointer/keyboard listener that re-primes the
+ * primary audio stream on the user's first interaction after an interruption.
+ *
+ * iOS blocks autoplay after some interruption types even when the context is
+ * running again; the gesture listener gives us the unlocking event we need.
+ * The listener self-cleans after firing or when the engine is disposed.
+ */
+function _registerGestureRecovery(mediaEl) {
+  _detachGestureRecovery?.();
+
+  function onGesture() {
+    // Self-clean all three event types before doing anything async.
+    _detachGestureRecovery?.();
+    _detachGestureRecovery = null;
+
+    if (!mediaEl || !mediaEl.paused || mediaEl.ended) return;
+    console.log("[MobileEngine] Gesture recovery triggered — re-priming buffer; t:",
+      mediaEl.currentTime?.toFixed(3));
+
+    const doResume = (_sharedCtx && _sharedCtx.state !== "running")
+      ? _sharedCtx.resume()
+      : Promise.resolve();
+
+    doResume.then(() => {
+      mediaEl.play().then(() => {
+        console.log("[MobileEngine] Gesture recovery play() resolved ✓");
+        _restartShadow(mediaEl);
+      }).catch((e) => {
+        console.warn("[MobileEngine] Gesture recovery play() still rejected:", e.name, "—", e.message);
+      });
+    }).catch(() => {});
+  }
+
+  // Listen on touchstart (iOS), pointerdown (cross-platform), and keydown
+  // (keyboard / accessibility). { once: true } removes automatically after fire,
+  // but we still keep _detachGestureRecovery for explicit cleanup on dispose.
+  document.addEventListener("touchstart",  onGesture, { once: true, passive: true });
+  document.addEventListener("pointerdown", onGesture, { once: true, passive: true });
+  document.addEventListener("keydown",     onGesture, { once: true });
+
+  _detachGestureRecovery = () => {
+    document.removeEventListener("touchstart",  onGesture);
+    document.removeEventListener("pointerdown", onGesture);
+    document.removeEventListener("keydown",     onGesture);
+  };
+
+  console.log("[MobileEngine] Gesture recovery listener armed — tap anywhere to resume.");
 }
 
 // ── Media Session API ─────────────────────────────────────────────────────
@@ -1104,6 +1275,9 @@ export function mountMobileEngine(container, url, handlers) {
           try { _shadowAudio?.pause(); } catch (_) {}
           _wasPlayingOnHide = false; // prevent any pending restore from restarting
           _isRestoring = false;      // cancel in-flight ctx-resume → play() chain
+          _interruptedWhilePlaying = false; // user-pause disarms interruption recovery
+          _detachGestureRecovery?.();
+          _detachGestureRecovery = null;
           try { ws.pause(); } catch (_) {}
         },
       playPause: async () => {
@@ -1167,6 +1341,9 @@ export function mountMobileEngine(container, url, handlers) {
           try { _shadowAudio?.pause(); } catch (_) {}
           _wasPlayingOnHide = false;
           _isRestoring = false;
+          _interruptedWhilePlaying = false; // user-pause disarms interruption recovery
+          _detachGestureRecovery?.();
+          _detachGestureRecovery = null;
           try { ws.pause(); } catch (_) {}
         },
       playPause: async () => { await ws.playPause(); },
@@ -1250,6 +1427,11 @@ export function disposeMobileEngine() {
   _detachNativeListeners?.();
   _detachNativeListeners = null;
   _isRestoring = false;
+  _interruptedWhilePlaying = false;
+  // Disarm the gesture-recovery listener so a stale handler cannot fire
+  // after the engine has been torn down (e.g. on track change or unmount).
+  _detachGestureRecovery?.();
+  _detachGestureRecovery = null;
   _teardownShadowAudio();
   if (_ws) {
     _ws.destroy();
@@ -1260,7 +1442,9 @@ export function disposeMobileEngine() {
   _urlOnHide = null;
   _wasTimeAdvancing = false;
   _handlers.current = null;
-  // _sharedCtx / _keepAliveSrc / _sharedAnalyser are intentionally NOT cleared here.
-  // They live for the full page session so MobileSpectrumStrip can reuse
-  // the already-unlocked context across track switches.
+  // _sharedCtx / _keepAliveSrc / _sharedAnalyser / _detachCtxStateListener are
+  // intentionally NOT cleared here. They live for the full page session so
+  // MobileSpectrumStrip can reuse the already-unlocked context across track
+  // switches, and the statechange listener must remain active to detect
+  // interruptions between track loads.
 }
