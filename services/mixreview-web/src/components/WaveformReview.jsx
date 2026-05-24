@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
 import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
-import { MobileSpectrumAnalyzer } from "./MobileSpectrumAnalyzer.jsx";
 
 export function WaveformReview({
   audioSource,
@@ -38,37 +37,6 @@ export function WaveformReview({
   const [loadError, setLoadError] = useState("");
   const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
   const [pendingMarker, setPendingMarker] = useState(null);
-  const meterThrottleRef = useRef(0);
-  const meterBufRef = useRef(null);
-
-  // Called on every animation frame tick from MobileSpectrumAnalyzer's RAF loop.
-  // Reads time-domain data from the already-running analyser — no new audio graph nodes.
-  const handleMeterFrame = useCallback((analyser) => {
-    try {
-      if (!analyser) return;
-      const now = performance.now();
-      if (now - meterThrottleRef.current < 100) return; // ~10 fps
-      meterThrottleRef.current = now;
-      const bufLen = analyser.fftSize;
-      if (!meterBufRef.current || meterBufRef.current.length !== bufLen) {
-        meterBufRef.current = new Float32Array(bufLen);
-      }
-      analyser.getFloatTimeDomainData(meterBufRef.current);
-      const buf = meterBufRef.current;
-      let sum = 0;
-      let peak = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const abs = Math.abs(buf[i]);
-        sum += buf[i] * buf[i];
-        if (abs > peak) peak = abs;
-      }
-      const rms = Math.sqrt(sum / buf.length);
-      const lufsVal = rms > 1e-9 ? (20 * Math.log10(rms)).toFixed(1) : "–";
-      const tpVal = peak > 1e-9 ? (20 * Math.log10(peak)).toFixed(1) : "–";
-      callbacksRef.current.onMeterUpdate?.({ lufs: lufsVal, lra: "–", tp: tpVal });
-    } catch (_) {}
-  }, []);
-
   useEffect(() => {
     callbacksRef.current = {
       onDurationChange,
@@ -511,15 +479,6 @@ export function WaveformReview({
         </div>
       )}
 
-      {isReviewerMode && isMobileViewport() && duration > 0 && (
-        <div className="mobile-spectrum-container">
-          <MobileSpectrumAnalyzer
-            key={audioSource?.playbackUrl || audioSource?.url}
-            wsRef={wavesurferRef}
-            onFrame={handleMeterFrame}
-          />
-        </div>
-      )}
     </section>
   );
 }
