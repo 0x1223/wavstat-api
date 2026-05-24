@@ -197,9 +197,15 @@ export default function App() {
   // userHasPlayedRef:       true once the user has tapped Play at least once.
   // autoPlayNextRef:        true when a track ends naturally → play next when ready.
   // autoplayAttemptedRef:   prevents double-fire of the isPlayerReady effect per track.
+  // tracksRef / activeTrackIdRef / selectTrackRef: always-current mirrors used by
+  //   handleNativeEnded so it never reads stale closure values — the ended listener
+  //   is attached once per media element and must always see the latest state.
   const userHasPlayedRef = useRef(false);
   const autoPlayNextRef = useRef(false);
   const autoplayAttemptedRef = useRef(false);
+  const tracksRef = useRef(tracks);
+  const activeTrackIdRef = useRef(activeTrackId);
+  const selectTrackRef = useRef(null);
 
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
@@ -360,6 +366,14 @@ export default function App() {
   useEffect(() => {
     versionsRef.current = versions;
   }, [versions]);
+
+  useEffect(() => {
+    tracksRef.current = tracks;
+  }, [tracks]);
+
+  useEffect(() => {
+    activeTrackIdRef.current = activeTrackId;
+  }, [activeTrackId]);
 
   useEffect(() => {
     return () => {
@@ -987,6 +1001,13 @@ export default function App() {
     );
   }, [activeTrackId, activeVersionId, isEngineerMode, sessionId, tracks, versions]);
 
+  // Keep selectTrackRef current so handleNativeEnded always invokes the latest
+  // selectTrack without the ended listener needing to be re-attached every time
+  // selectTrack is recreated (i.e. every time tracks/versions/activeTrackId changes).
+  useEffect(() => {
+    selectTrackRef.current = selectTrack;
+  }, [selectTrack]);
+
   const shareSession = useCallback(() => {
     if (!permissions.canShare) {
       return;
@@ -1422,23 +1443,33 @@ export default function App() {
 
   // Listen to the native ended event on the active media element.
   // Only auto-advances if the user has already tapped Play once this session.
+  //
+  // Implementation note: handleNativeEnded reads tracks / activeTrackId / selectTrack
+  // from always-current refs (tracksRef, activeTrackIdRef, selectTrackRef) rather
+  // than from the effect closure.  This prevents stale-closure failures on the
+  // 3rd-and-beyond track: updateDuration / updateActiveVersion call setTracks()
+  // during playback, which would recreate selectTrack and re-trigger this effect —
+  // removing the old listener and re-adding a new one.  With refs the listener is
+  // attached exactly once per media element and always sees the latest state.
   useEffect(() => {
     if (!isReviewerMode || !isMobileViewport()) return;
     if (!mediaElement) return;
 
     function handleNativeEnded() {
       if (!userHasPlayedRef.current) return; // No play yet — never auto-advance
-      const currentIdx = tracks.findIndex((t) => t.id === activeTrackId);
-      if (currentIdx < 0 || currentIdx >= tracks.length - 1) return; // Last track
-      const nextTrack = tracks[currentIdx + 1];
+      const currentTracks = tracksRef.current;
+      const currentActiveTrackId = activeTrackIdRef.current;
+      const currentIdx = currentTracks.findIndex((t) => t.id === currentActiveTrackId);
+      if (currentIdx < 0 || currentIdx >= currentTracks.length - 1) return; // Last track
+      const nextTrack = currentTracks[currentIdx + 1];
       console.log("[MixReview] Track ended — auto-advancing to:", nextTrack.title);
       autoPlayNextRef.current = true;
-      selectTrack(nextTrack.id);
+      selectTrackRef.current?.(nextTrack.id);
     }
 
     mediaElement.addEventListener("ended", handleNativeEnded);
     return () => mediaElement.removeEventListener("ended", handleNativeEnded);
-  }, [mediaElement, isReviewerMode, tracks, activeTrackId, selectTrack]);
+  }, [mediaElement, isReviewerMode]);
   // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
