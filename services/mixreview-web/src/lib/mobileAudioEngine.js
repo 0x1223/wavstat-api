@@ -18,6 +18,9 @@ let _wasTimeAdvancing = false;  // true if timeupdate fired within 500 ms of hid
 let _lastTimeUpdateAt = 0;      // performance.now() of the last timeupdate tick
 let _detachNativeListeners = null;
 const _handlers = { current: null };
+// Tracks the current track duration so Media Session setPositionState() has
+// a stable value between durationchange events.
+let _mediaDuration = 0;
 
 // ── Persistent iOS/Safari keep-alive AudioContext ─────────────────────────
 // Created once inside the first user Play gesture and never closed during normal
@@ -301,6 +304,22 @@ async function probeAudioUrl(url) {
 // accurate in background / lock-screen, where WaveSurfer's event forwarding
 // may be throttled. This also lets us log every real audio lifecycle event.
 
+// ── Media Session position-state helper ───────────────────────────────────
+// Called from both onPlaying and onTimeUpdate. Guards every field so that
+// setPositionState() is never called with NaN / Infinity / out-of-range values
+// (which throw a DOMException on some iOS builds).
+function _msSetPositionState(mediaEl) {
+  if (!("mediaSession" in navigator)) return;
+  const dur = _mediaDuration > 0 ? _mediaDuration
+    : (Number.isFinite(mediaEl?.duration) && mediaEl.duration > 0 ? mediaEl.duration : 0);
+  if (dur <= 0) return;
+  const pos = Math.min(Math.max(mediaEl?.currentTime ?? 0, 0), dur);
+  const rate = mediaEl?.playbackRate > 0 ? mediaEl.playbackRate : 1;
+  try {
+    navigator.mediaSession.setPositionState({ duration: dur, playbackRate: rate, position: pos });
+  } catch (_) {}
+}
+
 function attachNativeListeners(mediaEl, ws) {
   let _lastRealTime = null;
   let _lastMediaTime = null;
@@ -317,14 +336,19 @@ function attachNativeListeners(mediaEl, ws) {
     // that the user can hear audio.
     console.log("[MobileEngine] native playing", { t: mediaEl.currentTime?.toFixed(2) });
     if (_ws === ws) _handlers.current?.onPlaybackChange?.(true);
+    // Tell the OS the track is playing so lock-screen controls show ⏸ not ▶.
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
+    _msSetPositionState(mediaEl);
   }
   function onPause() {
     console.log("[MobileEngine] native pause", { t: mediaEl.currentTime?.toFixed(2) });
     if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
   }
   function onEnded() {
     console.log("[MobileEngine] native ended");
     if (_ws === ws) _handlers.current?.onPlaybackChange?.(false);
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
   }
   function onWaiting() {
     console.log("[MobileEngine] native waiting (buffering)", { t: mediaEl.currentTime?.toFixed(2) });
@@ -344,6 +368,13 @@ function attachNativeListeners(mediaEl, ws) {
       message: mediaEl.error?.message,
     });
   }
+  function onDurationChange() {
+    const d = mediaEl.duration;
+    if (Number.isFinite(d) && d > 0) {
+      _mediaDuration = d;
+      _msSetPositionState(mediaEl);
+    }
+  }
   function onTimeUpdate() {
     _lastTimeUpdateAt = performance.now(); // record wall-clock time of last tick
     const _now = Date.now();
@@ -359,29 +390,141 @@ function attachNativeListeners(mediaEl, ws) {
     _lastRealTime = _now;
     _lastMediaTime = _mediaTime;
     if (_ws === ws) _handlers.current?.onTimeUpdate?.(mediaEl.currentTime);
+    // Update the lock-screen scrubber position. Throttled by the browser's
+    // native timeupdate rate (~4 Hz) so this is inexpensive.
+    _msSetPositionState(mediaEl);
   }
 
-  mediaEl.addEventListener("play", onPlay);
-  mediaEl.addEventListener("playing", onPlaying);
-  mediaEl.addEventListener("pause", onPause);
-  mediaEl.addEventListener("ended", onEnded);
-  mediaEl.addEventListener("waiting", onWaiting);
-  mediaEl.addEventListener("stalled", onStalled);
-  mediaEl.addEventListener("canplay", onCanPlay);
-  mediaEl.addEventListener("error", onError);
-  mediaEl.addEventListener("timeupdate", onTimeUpdate);
+  mediaEl.addEventListener("play",           onPlay);
+  mediaEl.addEventListener("playing",        onPlaying);
+  mediaEl.addEventListener("pause",          onPause);
+  mediaEl.addEventListener("ended",          onEnded);
+  mediaEl.addEventListener("waiting",        onWaiting);
+  mediaEl.addEventListener("stalled",        onStalled);
+  mediaEl.addEventListener("canplay",        onCanPlay);
+  mediaEl.addEventListener("error",          onError);
+  mediaEl.addEventListener("durationchange", onDurationChange);
+  mediaEl.addEventListener("timeupdate",     onTimeUpdate);
 
   return () => {
-    mediaEl.removeEventListener("play", onPlay);
-    mediaEl.removeEventListener("playing", onPlaying);
-    mediaEl.removeEventListener("pause", onPause);
-    mediaEl.removeEventListener("ended", onEnded);
-    mediaEl.removeEventListener("waiting", onWaiting);
-    mediaEl.removeEventListener("stalled", onStalled);
-    mediaEl.removeEventListener("canplay", onCanPlay);
-    mediaEl.removeEventListener("error", onError);
-    mediaEl.removeEventListener("timeupdate", onTimeUpdate);
+    mediaEl.removeEventListener("play",           onPlay);
+    mediaEl.removeEventListener("playing",        onPlaying);
+    mediaEl.removeEventListener("pause",          onPause);
+    mediaEl.removeEventListener("ended",          onEnded);
+    mediaEl.removeEventListener("waiting",        onWaiting);
+    mediaEl.removeEventListener("stalled",        onStalled);
+    mediaEl.removeEventListener("canplay",        onCanPlay);
+    mediaEl.removeEventListener("error",          onError);
+    mediaEl.removeEventListener("durationchange", onDurationChange);
+    mediaEl.removeEventListener("timeupdate",     onTimeUpdate);
   };
+}
+
+// ── Media Session API ─────────────────────────────────────────────────────
+// Wires the browser/OS lock-screen transport controls (▶ ⏸ ⏩ ⏪ scrubber)
+// to the engine's primary audio element. Called from mountMobileEngine() on
+// every track load so handlers always reference the live primary element via
+// _ws.getMediaElement() at call time (not at registration time).
+//
+// Critical: 'play' and 'pause' hit mediaEl directly — not through WaveSurfer's
+// async state machine — so the OS gets an immediate hardware response with no
+// WaveSurfer bookkeeping delay. The shadow visualizer is paused synchronously
+// on 'pause' alongside the primary element.
+
+function _setupMediaSession() {
+  if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+  const ms = navigator.mediaSession;
+
+  ms.setActionHandler("play", () => {
+    const mediaEl = _ws?.getMediaElement?.();
+    if (!mediaEl) return;
+    // Resume AudioContext first (it may be suspended from a hide cycle) then
+    // play the primary element and restart the shadow visualizer.
+    const doResume = (_sharedCtx && _sharedCtx.state !== "running")
+      ? _sharedCtx.resume()
+      : Promise.resolve();
+    doResume.then(() => {
+      mediaEl.play().catch((e) => {
+        console.warn("[MobileEngine] mediaSession play rejected:", e.name, "—", e.message);
+      });
+      _restartShadow(mediaEl);
+    }).catch(() => {});
+  });
+
+  ms.setActionHandler("pause", () => {
+    const mediaEl = _ws?.getMediaElement?.();
+    // Primary element — synchronous, hardware-immediate.
+    if (mediaEl) try { mediaEl.pause(); } catch (_) {}
+    // Shadow — must also pause so the visualizer doesn't keep buffering silently.
+    try { _shadowAudio?.pause(); } catch (_) {}
+    _wasPlayingOnHide = false;
+    _isRestoring = false;
+    // WaveSurfer internal state sync (non-critical — native element is already paused).
+    try { _ws?.pause(); } catch (_) {}
+  });
+
+  ms.setActionHandler("seekbackward", (evt) => {
+    const mediaEl = _ws?.getMediaElement?.();
+    if (!mediaEl) return;
+    const skip = evt?.seekOffset ?? 10;
+    const t = Math.max(0, mediaEl.currentTime - skip);
+    try { mediaEl.currentTime = t; } catch (_) {}
+    try { _ws?.setTime(t); } catch (_) {}
+    if (_shadowAudio) try { _shadowAudio.currentTime = t; } catch (_) {}
+    if (_ws === _ws) _handlers.current?.onTimeUpdate?.(t);
+  });
+
+  ms.setActionHandler("seekforward", (evt) => {
+    const mediaEl = _ws?.getMediaElement?.();
+    if (!mediaEl) return;
+    const skip = evt?.seekOffset ?? 10;
+    const dur = _mediaDuration > 0 ? _mediaDuration
+      : (Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0);
+    const t = Math.min(dur, mediaEl.currentTime + skip);
+    try { mediaEl.currentTime = t; } catch (_) {}
+    try { _ws?.setTime(t); } catch (_) {}
+    if (_shadowAudio) try { _shadowAudio.currentTime = t; } catch (_) {}
+    _handlers.current?.onTimeUpdate?.(t);
+  });
+
+  ms.setActionHandler("seekto", (evt) => {
+    if (evt?.seekTime == null) return;
+    const mediaEl = _ws?.getMediaElement?.();
+    if (!mediaEl) return;
+    const dur = _mediaDuration > 0 ? _mediaDuration
+      : (Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0);
+    const t = Math.max(0, Math.min(evt.seekTime, dur || Infinity));
+    try { mediaEl.currentTime = t; } catch (_) {}
+    try { _ws?.setTime(t); } catch (_) {}
+    if (_shadowAudio) try { _shadowAudio.currentTime = t; } catch (_) {}
+    _handlers.current?.onTimeUpdate?.(t);
+  });
+
+  // Remove previous/next track buttons — this is a single-track review app.
+  // Explicitly setting null prevents the OS from showing ghost buttons that do
+  // nothing (some Android OEMs and iOS 16 show them by default).
+  try { ms.setActionHandler("previoustrack", null); } catch (_) {}
+  try { ms.setActionHandler("nexttrack",     null); } catch (_) {}
+}
+
+/**
+ * Set the Media Session metadata shown on the lock screen and notification shade.
+ * Call this from the component as soon as track info is available.
+ *
+ * @param {Object} opts
+ * @param {string}   opts.title   — track/song title
+ * @param {string}   [opts.artist] — artist name
+ * @param {string}   [opts.album]  — album / project name (optional)
+ * @param {Array}    [opts.artwork] — array of { src, sizes, type } objects (optional)
+ */
+export function setMediaSessionMetadata({ title = "", artist = "", album = "", artwork = [] } = {}) {
+  if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({ title, artist, album, artwork });
+    console.log("[MobileEngine] MediaSession metadata set:", title, "—", artist);
+  } catch (e) {
+    console.warn("[MobileEngine] MediaSession metadata failed:", e.message);
+  }
 }
 
 // ── Mobile lifecycle: background / lock-screen stability ──────────────────
@@ -574,6 +717,16 @@ if (typeof document !== "undefined") {
       ..._snap("pagehide"),
       persisted: evt.persisted,
     });
+    // Ensure the shadow visualizer element is paused on pagehide.
+    // visibilitychange handles this for most iOS transitions, but pagehide
+    // fires independently on bfcache evictions and aggressive app-switch
+    // scenarios where visibilitychange may not have fired first. Pausing
+    // twice is harmless; leaving the shadow playing leaks network and keeps
+    // the AudioContext from suspending cleanly on the next restore cycle.
+    if (_shadowAudio) try { _shadowAudio.pause(); } catch (_) {}
+    if (_sharedCtx && _sharedCtx.state === "running") {
+      _sharedCtx.suspend().catch(() => {});
+    }
   });
 
   // ── pageshow ────────────────────────────────────────────────────────────
@@ -638,6 +791,7 @@ export function mountMobileEngine(container, url, handlers) {
   _urlOnHide = null;
   _wasTimeAdvancing = false;
   _isRestoring = false;
+  _mediaDuration = 0; // reset so position state isn't stale from the previous track
 
   if (_ws) {
     _detachNativeListeners?.();
@@ -778,6 +932,12 @@ export function mountMobileEngine(container, url, handlers) {
   // before the first play gesture. For the first-play path, startKeepAlive()
   // will call _setupShadowAudio() itself after unlocking the context.
   _setupShadowAudio(url);
+
+  // Register lock-screen / notification-shade transport controls. Safe to call
+  // on every track load — setActionHandler() is idempotent and the handlers
+  // always resolve _ws?.getMediaElement() at call time, so they automatically
+  // target the new primary element without needing to be re-created.
+  _setupMediaSession();
 
   // didSettle: true once onReady or onWaveformUnavailable has been called.
   // Prevents duplicate handler calls if both fallback timer and WaveSurfer
