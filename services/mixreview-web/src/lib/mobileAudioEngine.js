@@ -28,6 +28,7 @@ let _sharedCtx = null;
 let _keepAliveSrc = null;    // silent looping BufferSourceNode (volume 0)
 let _sharedAnalyser = null;  // single AnalyserNode wired into the keep-alive chain
 let _mediaSrc = null;        // MediaElementAudioSourceNode for the current track
+let _isRestoring = false;    // true while a sequenced ctx-resume → play() is in flight
 
 /**
  * Detect iOS / iPadOS / Safari.
@@ -339,6 +340,10 @@ if (typeof document !== "undefined") {
   //   5. Log whether the play() Promise resolves or rejects so we can
   //      distinguish "iOS blocked it (NotAllowedError)" from "succeeded".
   function _onRestoreVisible() {
+    // Guard: visibilitychange, pageshow, focus, and 'resume' all fire in rapid
+    // succession on iOS unlock. Only one sequenced restore may run at a time.
+    if (_isRestoring) return;
+
     const mediaEl = getMediaEl();
     if (mediaEl && mediaEl.playbackRate !== 1) {
       mediaEl.playbackRate = 1;
@@ -383,40 +388,49 @@ if (typeof document !== "undefined") {
     }
 
     _wasPlayingOnHide = false;
+    _isRestoring = true; // block concurrent restore attempts until play() settles
     console.log("[MobileEngine] Audio stopped while hidden — sequenced restore; t:",
       mediaEl.currentTime?.toFixed(3));
 
-    // Inner play call — always operates on the native element directly.
-    // Logs resolve/reject so we can distinguish NotAllowedError (iOS blocked
-    // it without a gesture) from any other failure.
+    // Inner play call. Checks _isRestoring first so an explicit user Stop/Pause
+    // between the resume and play steps cancels the auto-resume cleanly.
     function _doPlay() {
+      if (!_isRestoring) return; // cancelled by user action while ctx was resuming
       console.log("[MobileEngine] Calling mediaEl.play(); ctxState:", _sharedCtx?.state ?? "none");
       const p = mediaEl.play();
       if (p && typeof p.then === "function") {
         p.then(() => {
           console.log("[MobileEngine] mediaEl.play() resolved ✓; t:",
             mediaEl.currentTime?.toFixed(3), "ctxState:", _sharedCtx?.state ?? "none");
+          _isRestoring = false;
         }).catch((e) => {
           // NotAllowedError → iOS blocked autoplay without a gesture.
           // The user must tap Play again; log clearly so we can tell.
           console.warn("[MobileEngine] mediaEl.play() rejected after restore:",
             e.name, "—", e.message);
+          _isRestoring = false;
         });
+      } else {
+        _isRestoring = false;
       }
     }
 
-    // If the AudioContext is suspended, resume it first and chain play() on
-    // the resolved Promise. This guarantees the Web Audio graph is running
-    // before media output is expected to flow through it.
-    if (_sharedCtx && _sharedCtx.state === "suspended") {
+    // Strictly wait for AudioContext.resume() to fully resolve before calling
+    // play(). Calling play() while the context is still transitioning
+    // suspended → running causes pitch artifacts (chipmunk effect) because the
+    // Web Audio clock and the media element timeline are momentarily misaligned.
+    // We check !== "running" rather than === "suspended" to catch any non-ready
+    // state (e.g. "interrupted" on some iOS builds).
+    if (_sharedCtx && _sharedCtx.state !== "running") {
       _sharedCtx.resume().then(() => {
         console.log("[MobileEngine] AudioContext resumed ✓, state:", _sharedCtx?.state);
         _doPlay();
       }).catch((e) => {
-        // Resume failed (rare) — try play() anyway; native audio path may work.
-        console.warn("[MobileEngine] AudioContext resume failed:", e.name, "—", e.message,
-          "— attempting mediaEl.play() regardless");
-        _doPlay();
+        // Resume failed — do NOT call play(); audio through a non-running Web
+        // Audio graph produces silence or glitches. Clear the flag so the user
+        // can tap Play manually.
+        console.warn("[MobileEngine] AudioContext resume failed:", e.name, "—", e.message);
+        _isRestoring = false;
       });
     } else {
       // Context already running (or no shared ctx on non-iOS).
@@ -437,6 +451,30 @@ if (typeof document !== "undefined") {
       }
       // Full diagnostic snapshot on hide — critical for diagnosing iOS suspension.
       console.log("[MobileEngine]", _snap("hide"));
+
+      // ── Hard-reset on hide ──────────────────────────────────────────────
+      // Cancel any in-flight restore so a slow pageshow/focus chain from a
+      // previous unlock cannot race with the new hide.
+      _isRestoring = false;
+
+      // Explicitly suspend the AudioContext the moment the page hides.
+      // Now that createMediaElementSource routes audio through the Web Audio
+      // graph, an uncontrolled iOS auto-suspension leaves the media element
+      // in a "silent-but-time-advancing" state. An explicit suspend here
+      // gives us a clean, known baseline for the resume sequence below.
+      if (_sharedCtx && _sharedCtx.state === "running") {
+        _sharedCtx.suspend().catch(() => {});
+      }
+
+      // Drain the analyser's last snapshot so stale frequency data cannot
+      // bleed into the first animation frame after the page becomes visible.
+      if (_sharedAnalyser) {
+        try {
+          _sharedAnalyser.getByteFrequencyData(
+            new Uint8Array(_sharedAnalyser.frequencyBinCount)
+          );
+        } catch (_) {}
+      }
     } else {
       _onRestoreVisible();
     }
@@ -520,10 +558,12 @@ export function mountMobileEngine(container, url, handlers) {
   _wasPlayingOnHide = false;
   _urlOnHide = null;
   _wasTimeAdvancing = false;
+  _isRestoring = false;
 
   if (_ws) {
     _detachNativeListeners?.();
     _detachNativeListeners = null;
+    _isRestoring = false;
     // Sever the media source before destroying WaveSurfer so the old
     // <audio> element is cleanly released from the Web Audio graph.
     if (_mediaSrc) {
@@ -796,7 +836,15 @@ export function mountMobileEngine(container, url, handlers) {
         try { await ws.play(); }
         catch (e) { console.warn("[MixReview] ws.play fallback", e.message); try { await mediaEl.play(); } catch (_) {} }
       },
-      pause: () => { try { ws.pause(); } catch (_) { mediaEl.pause(); } },
+      pause: () => {
+          // Synchronous stop priority: halt the media element immediately as the
+          // very first action, bypassing any WaveSurfer async state machine so
+          // the hardware audio output is silenced before anything else runs.
+          try { mediaEl.pause(); } catch (_) {}
+          _wasPlayingOnHide = false; // prevent any pending restore from restarting
+          _isRestoring = false;      // cancel in-flight ctx-resume → play() chain
+          try { ws.pause(); } catch (_) {}
+        },
       playPause: async () => {
         try { await ws.playPause(); }
         catch (e) {
@@ -849,7 +897,15 @@ export function mountMobileEngine(container, url, handlers) {
       wavesurfer: ws,
       mediaElement,
       play: async () => { await ws.play(); },
-      pause: () => ws.pause(),
+      pause: () => {
+          // Synchronous stop priority: halt the media element immediately as the
+          // very first action, bypassing any WaveSurfer async state machine so
+          // the hardware audio output is silenced before anything else runs.
+          try { mediaElement?.pause(); } catch (_) {}
+          _wasPlayingOnHide = false;
+          _isRestoring = false;
+          try { ws.pause(); } catch (_) {}
+        },
       playPause: async () => { await ws.playPause(); },
       skip: (s) => ws.skip(s),
       seekToTime: (time) => {
@@ -911,6 +967,7 @@ export function mountMobileEngine(container, url, handlers) {
 export function disposeMobileEngine() {
   _detachNativeListeners?.();
   _detachNativeListeners = null;
+  _isRestoring = false;
   if (_mediaSrc) {
     try { _mediaSrc.disconnect(); } catch (_) {}
     _mediaSrc = null;
