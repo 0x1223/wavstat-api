@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
-import { disposeMobileEngine, getSharedAnalyser, mountMobileEngine } from "../lib/mobileAudioEngine.js";
+import { disposeMobileEngine, getPrimaryElement, mountMobileEngine } from "../lib/mobileAudioEngine.js";
 
 // ── Mobile spectrum analyzer ─────────────────────────────────────────────
 const _SPEC_CENTERS = [
@@ -10,7 +10,6 @@ const _SPEC_CENTERS = [
   2500, 3150, 4000, 5000, 6300, 8000, 10_000, 12_500, 16_000, 20_000,
 ];
 const _SPEC_N = _SPEC_CENTERS.length; // 30
-const _SPEC_HALF_BW = Math.pow(2, 1 / 6);
 const _SPEC_LABELS = [
   [1, "31"], [4, "63"], [7, "125"], [10, "250"], [13, "500"],
   [16, "1k"], [19, "2k"], [22, "4k"], [25, "8k"], [28, "16kHz"],
@@ -527,10 +526,16 @@ export function WaveformReview({
 }
 
 // ── MobileSpectrumStrip ───────────────────────────────────────────────────────
-// Reads from the shared AnalyserNode exported by mobileAudioEngine.
-// Does NOT call createMediaElementSource — no connections to the <audio> element —
-// so it cannot disrupt the native playback path or the iOS lock-screen session.
-function MobileSpectrumStrip({ wsRef }) {
+// Position-based synthetic spectrum. Reads primaryAudio.currentTime each rAF
+// tick and drives 30 frequency bars with per-band sinusoidal modulation.
+// Zero Web Audio API involvement — no AnalyserNode, no createMediaElementSource,
+// no connections to the <audio> element — nothing that can interfere with
+// native playback or iOS lock-screen audio.
+//
+// When playing  → bars animate, driven by currentTime so seeking changes phase.
+// When paused   → bars freeze at their last amplitude then decay to a floor.
+// When hidden   → rAF cancelled immediately; restarts cleanly on show.
+function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site compat
   const canvasRef = useRef(null);
 
   useEffect(() => {
@@ -539,54 +544,48 @@ function MobileSpectrumStrip({ wsRef }) {
 
     let alive = true;
     let rafId = null;
-    let isAnimating = false;
-    let lastDrawTime = null;
-    let analyser = null;
-    let freqData = null;
-    let decayBuf = null;
-    let audioCtx = null;
-    let detachWs = null;
+    // Per-band decay buffer — values in [0,1], decays when paused.
+    const decay = new Float32Array(_SPEC_N).fill(0.08);
+
+    // ── Synthetic amplitude ────────────────────────────────────────────────
+    // Each band i oscillates at a unique rate driven by currentTime (seconds).
+    // Two harmonics give organic movement; the result is clamped to [0,1].
+    function synthAmp(i, t) {
+      const rate  = 0.9 + (i / (_SPEC_N - 1)) * 3.1;   // 0.9–4.0 cycles/s
+      const phase = i * 0.44;
+      const a = Math.sin(t * rate + phase);
+      const b = Math.sin(t * rate * 1.61 + phase * 2.1) * 0.35;
+      return Math.max(0, ((a + b) / 1.35 + 1) * 0.5);  // map [-1,1] → [0,1]
+    }
 
     // ── Drawing ────────────────────────────────────────────────────────────
-    function paint(dataOverride = null) {
-      if (!canvas || !analyser || !freqData || !audioCtx) return;
-
-      let data;
-      if (dataOverride) {
-        data = dataOverride;
-      } else {
-        analyser.getByteFrequencyData(freqData);
-        if (decayBuf) {
-          for (let i = 0; i < freqData.length; i++) decayBuf[i] = freqData[i];
-        }
-        data = freqData;
-      }
-
+    function paint(t, playing) {
       const ctx2d = canvas.getContext("2d");
+      if (!ctx2d) return;
       const W = canvas.width;
       const H = canvas.height;
       ctx2d.clearRect(0, 0, W, H);
 
       const slotW = W / _SPEC_N;
-      const barW = Math.max(1, slotW - 1);
-      const binHz = audioCtx.sampleRate / analyser.fftSize;
-      const M = freqData.length;
+      const barW  = Math.max(1, slotW - 1);
 
       for (let i = 0; i < _SPEC_N; i++) {
-        const fc = _SPEC_CENTERS[i];
-        const bLo = Math.max(0, Math.floor((fc / _SPEC_HALF_BW) / binHz));
-        const bHi = Math.min(M - 1, Math.ceil((fc * _SPEC_HALF_BW) / binHz));
-        let peak = 0;
-        for (let b = bLo; b <= bHi; b++) {
-          if (data[b] > peak) peak = data[b];
+        let amp;
+        if (playing) {
+          amp = synthAmp(i, t);
+          decay[i] = amp; // keep decay buffer current
+        } else {
+          // Decay toward a small floor so bars don't vanish instantly on pause.
+          decay[i] = Math.max(0.04, decay[i] * 0.88);
+          amp = decay[i];
         }
-        const amp = peak / 255;
         ctx2d.fillStyle = spectrumBandColor(i, amp);
         const x = (i * slotW + (slotW - barW) / 2) | 0;
         const h = Math.max(2, (amp * H) | 0);
         ctx2d.fillRect(x, H - h, barW, h);
       }
 
+      // Frequency labels
       ctx2d.save();
       ctx2d.font = "bold 8px monospace";
       ctx2d.textAlign = "center";
@@ -601,88 +600,35 @@ function MobileSpectrumStrip({ wsRef }) {
     }
 
     // ── RAF loop ──────────────────────────────────────────────────────────
-    function tick(now) {
-      if (!alive || !isAnimating || document.hidden) { rafId = null; return; }
-      const dt = lastDrawTime !== null ? now - lastDrawTime : 0;
-      lastDrawTime = now;
-      // Flush stale analyser buffer accumulated during background suspension
-      if (dt > 200 && analyser && freqData) {
-        analyser.getByteFrequencyData(freqData); // discard; next paint() reads fresh
-      }
-      paint();
+    // Always runs while visible. Reads primaryAudio.currentTime each frame so
+    // the visualization stays locked to actual playback position — seeking and
+    // interruptions are automatically reflected on the next tick.
+    function tick() {
+      if (!alive || document.hidden) { rafId = null; return; }
+      const el = getPrimaryElement();
+      const t  = el?.currentTime ?? 0;
+      const playing = Boolean(el && !el.paused && !el.ended);
+      paint(t, playing);
       rafId = requestAnimationFrame(tick);
     }
 
-    function decayTick() {
-      if (!alive || isAnimating || !decayBuf) return;
-      let anyActive = false;
-      for (let i = 0; i < decayBuf.length; i++) {
-        decayBuf[i] *= 0.82;
-        if (decayBuf[i] > 0.5) anyActive = true;
+    function startRaf() {
+      if (rafId == null && alive && !document.hidden) {
+        rafId = requestAnimationFrame(tick);
       }
-      paint(decayBuf);
-      rafId = anyActive ? requestAnimationFrame(decayTick) : null;
     }
-
-    function startAnim() {
-      isAnimating = true;
-      if (audioCtx?.state === "suspended") audioCtx.resume().catch(() => {});
-      if (rafId == null) rafId = requestAnimationFrame(tick);
-    }
-
-    function stopAnim() {
-      isAnimating = false;
+    function stopRaf() {
       if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
-      decayTick();
     }
 
-    // ── Connect to shared analyser ────────────────────────────────────────
-    // No createMediaElementSource — we read from the analyser already wired
-    // into the keep-alive chain by mobileAudioEngine.startKeepAlive().
-    function tryConnect() {
-      const ws = wsRef.current;
-      if (!ws) return false;
-
-      const analyserNode = getSharedAnalyser();
-      if (!analyserNode) return false;
-
-      analyser = analyserNode;
-      audioCtx = analyserNode.context;
-      freqData = new Uint8Array(analyserNode.frequencyBinCount);
-      decayBuf = new Float32Array(analyserNode.frequencyBinCount);
-
-      function onPlay() { if (alive) startAnim(); }
-      function onStop() { if (alive) stopAnim(); }
-      ws.on("play", onPlay);
-      ws.on("pause", onStop);
-      ws.on("finish", onStop);
-      detachWs = () => {
-        try { ws.un("play", onPlay); ws.un("pause", onStop); ws.un("finish", onStop); }
-        catch (_) {}
-      };
-
-      if (ws.isPlaying?.()) startAnim();
-      else paint();
-
-      return true;
-    }
-
-    // ── Visibility handling (iOS background safety) ───────────────────────
-    // On hide: cancel RAF immediately — no draws while backgrounded.
-    // On show: reset lastDrawTime so the first tick's dt is 0 (no false stale-flush),
-    //          resume context if iOS suspended it, restart RAF if audio is playing.
+    // ── Visibility handling ───────────────────────────────────────────────
+    // Cancel rAF instantly when hidden (no wasted GPU frames in background).
+    // Restart on show — no stale-buffer flush needed since we never read an
+    // AnalyserNode; currentTime is always current.
     function onVisibilityChange() {
       if (!alive) return;
-      if (document.hidden) {
-        isAnimating = false;
-        if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
-      } else {
-        lastDrawTime = null;
-        if (audioCtx?.state === "suspended") audioCtx.resume().catch(() => {});
-        const ws = wsRef.current;
-        if (ws?.isPlaying?.()) startAnim();
-        else if (analyser && freqData) paint();
-      }
+      if (document.hidden) stopRaf();
+      else startRaf();
     }
     document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -690,47 +636,22 @@ function MobileSpectrumStrip({ wsRef }) {
     const ro = new ResizeObserver(() => {
       if (!canvas) return;
       const w = canvas.getBoundingClientRect().width | 0;
-      if (w > 0 && canvas.width !== w) {
-        canvas.width = w;
-        if (!isAnimating) paint();
-      }
+      if (w > 0 && canvas.width !== w) canvas.width = w;
     });
     ro.observe(canvas);
     const initW = canvas.getBoundingClientRect().width | 0;
     if (initW > 0) canvas.width = initW;
 
-    // ── Cleanup ───────────────────────────────────────────────────────────
-    // The shared analyser is owned by mobileAudioEngine — do not disconnect it.
-    function cleanup() {
+    // Start immediately — no polling needed, no analyser to wait for.
+    startRaf();
+
+    return () => {
       alive = false;
       document.removeEventListener("visibilitychange", onVisibilityChange);
-      if (rafId != null) cancelAnimationFrame(rafId);
-      detachWs?.();
-      analyser = null;
-      freqData = null;
-      decayBuf = null;
-      audioCtx = null;
+      stopRaf();
       ro.disconnect();
-    }
-
-    // Poll until both wsRef and the shared analyser are ready.
-    // On non-iOS where startKeepAlive() is a no-op, give up after 5 s so
-    // the interval doesn't run indefinitely.
-    if (!tryConnect()) {
-      const pollStart = Date.now();
-      const iv = setInterval(() => {
-        if (!alive) { clearInterval(iv); return; }
-        if (Date.now() - pollStart > 5_000) {
-          clearInterval(iv); // shared analyser unavailable (non-iOS path)
-          return;
-        }
-        if (tryConnect()) clearInterval(iv);
-      }, 80);
-      return () => { clearInterval(iv); cleanup(); };
-    }
-
-    return cleanup;
-  }, [wsRef]);
+    };
+  }, []);
 
   return (
     <canvas

@@ -34,22 +34,12 @@ let _detachGestureRecovery   = null;  // cleanup fn for one-time gesture re-prim
 // Created once inside the first user Play gesture and never closed during normal
 // operation (it survives track switches). A tiny silent looping BufferSource keeps
 // iOS from auto-suspending the context, which would cut audio routed through it.
-// MobileSpectrumAnalyzer shares this context rather than creating its own per-track.
+// The primary <audio> element routes exclusively to native hardware — no
+// createMediaElementSource, no Web Audio involvement — so the keep-alive is the
+// only thing in the graph. Visualization uses position-based rAF (currentTime).
 let _sharedCtx = null;
-let _keepAliveSrc = null;      // silent looping BufferSourceNode (volume 0)
-let _sharedAnalyser = null;    // AnalyserNode — fed by the shadow element, not the primary
-let _isRestoring = false;      // true while a sequenced ctx-resume → play() is in flight
-// ── Split-route shadow audio ──────────────────────────────────────────────
-// The primary <audio> element (WaveSurfer's) routes audio ONLY to the native
-// hardware layer — no createMediaElementSource, no Web Audio involvement.
-// A separate shadow <audio> (same URL, muted output via GainNode) is piped
-// through the Web Audio graph so the analyser can read frequency data without
-// ever blocking or triggering a WebKit buffer-timeout on the primary stream.
-let _shadowAudio = null;       // secondary <audio> element — visualizer only
-let _shadowSrc = null;         // MediaElementAudioSourceNode for shadow element
-let _shadowGain = null;        // GainNode(gain=0) silences shadow output
-let _shadowSyncDetach = null;  // cleanup fn for primary-element event listeners
-let _shadowUrl = null;         // URL the current shadow element was created for
+let _keepAliveSrc = null;    // silent looping BufferSourceNode (volume 0)
+let _isRestoring = false;    // true while a sequenced ctx-resume → play() is in flight
 
 /**
  * Detect iOS / iPadOS / Safari.
@@ -87,28 +77,18 @@ export function startKeepAlive() {
     _wireCtxStateListener();
 
     // 1-sample silent buffer, looping forever.
-    // Keeps iOS from reclaiming the audio session by ensuring the context is
-    // always producing some output (even silence). Routed through _sharedAnalyser
-    // so the analyser node is live in the Web Audio graph. MobileSpectrumStrip
-    // reads from this analyser without ever calling createMediaElementSource,
-    // which prevents it from interfering with the native <audio> element and
-    // the iOS lock-screen audio session.
+    // Keeps iOS from reclaiming the audio session by ensuring the context
+    // always produces some output (even silence).  The primary <audio> element
+    // is never connected to the Web Audio graph — it goes straight to hardware.
+    // Visualization reads primaryAudio.currentTime via requestAnimationFrame.
     const buf = _sharedCtx.createBuffer(1, 1, _sharedCtx.sampleRate);
     // buf.getChannelData(0)[0] === 0 by default (silent)
-    _sharedAnalyser = _sharedCtx.createAnalyser();
-    _sharedAnalyser.fftSize = 4096;
-    _sharedAnalyser.smoothingTimeConstant = 0.78;
-    _sharedAnalyser.minDecibels = -90;
-    _sharedAnalyser.maxDecibels = -10;
     const gain = _sharedCtx.createGain();
     gain.gain.value = 0; // completely inaudible
     _keepAliveSrc = _sharedCtx.createBufferSource();
     _keepAliveSrc.buffer = buf;
     _keepAliveSrc.loop = true;
     _keepAliveSrc.connect(gain);
-    // Keep-alive goes directly to destination — NOT through analyser.
-    // The analyser is fed exclusively by the shadow audio element so it
-    // never touches the primary element's Web Audio graph.
     gain.connect(_sharedCtx.destination);
     _keepAliveSrc.start(0);
 
@@ -133,16 +113,12 @@ export function startKeepAlive() {
     }, 30_000);
 
     console.log("[MobileEngine] Keep-alive AudioContext started, state:", _sharedCtx.state);
-    // First-play path: mountMobileEngine() ran before the gesture so _url exists.
-    // Wire the shadow audio element now that the context is unlocked.
-    if (_url) _setupShadowAudio(_url);
     return _sharedCtx;
   } catch (e) {
     console.warn("[MobileEngine] Keep-alive setup failed:", e.message);
     try { _sharedCtx?.close(); } catch (_) {}
     _sharedCtx = null;
     _keepAliveSrc = null;
-    _sharedAnalyser = null;
     return null;
   }
 }
@@ -157,137 +133,19 @@ export function getSharedAudioContext() {
 }
 
 /**
- * Returns the shared AnalyserNode wired into the keep-alive chain, or null if
- * startKeepAlive() has not been called yet (or failed).
- * MobileSpectrumStrip reads from this node directly — no createMediaElementSource,
- * no new connections to the <audio> element — so it cannot interfere with the
- * native playback path or the iOS lock-screen audio session.
+ * @deprecated Shadow audio and AnalyserNode have been removed.
+ * The visualizer now reads primaryAudio.currentTime via requestAnimationFrame.
+ * Kept as a no-op export so existing import statements compile without changes.
  */
-export function getSharedAnalyser() {
-  if (!_sharedAnalyser || !_sharedCtx || _sharedCtx.state === "closed") return null;
-  return _sharedAnalyser;
-}
-
-/** Resume the shared context if iOS auto-suspended it. */
-function _resumeSharedCtx() {
-  if (_sharedCtx && _sharedCtx.state === "suspended") {
-    _sharedCtx.resume().catch((e) => {
-      console.warn("[MobileEngine] Shared ctx resume failed:", e.message);
-    });
-  }
-}
-
-// ── Shadow audio helpers ──────────────────────────────────────────────────
-// The shadow <audio> element is a completely separate element from WaveSurfer's
-// primary element. Only the shadow is connected to the Web Audio graph, keeping
-// the primary element on the native hardware path (no AudioContext involvement).
+export function getSharedAnalyser() { return null; }
 
 /**
- * Create and wire the shadow audio element for visualizer use.
- * Chain: shadowAudio → _shadowSrc → _sharedAnalyser → _shadowGain(0) → destination
- * The shadow element plays in sync with the primary (via event listeners) but
- * its output is silenced by a GainNode(0) — the analyser reads the data only.
+ * Returns the primary HTMLAudioElement owned by WaveSurfer, or null if the
+ * engine has not been mounted yet. MobileSpectrumStrip reads currentTime from
+ * this element each rAF tick to drive the position-based synthetic spectrum.
  */
-function _setupShadowAudio(url) {
-  if (!_sharedCtx || !_sharedAnalyser || !url) return;
-  if (_shadowUrl === url && _shadowAudio) return; // already set up for this URL
-  _teardownShadowAudio();
-  try {
-    const shadow = new Audio();
-    shadow.crossOrigin = "anonymous";
-    shadow.preload = "none";
-    shadow.src = url;
-    _shadowGain = _sharedCtx.createGain();
-    _shadowGain.gain.value = 0; // silenced — visualizer data only
-    // Chain: shadow → _shadowSrc → _sharedAnalyser → _shadowGain(0) → destination
-    _shadowSrc = _sharedCtx.createMediaElementSource(shadow);
-    _shadowSrc.connect(_sharedAnalyser);
-    _sharedAnalyser.connect(_shadowGain);
-    _shadowGain.connect(_sharedCtx.destination);
-    _shadowAudio = shadow;
-    _shadowUrl = url;
-    _attachShadowSync();
-    console.log("[MobileEngine] Shadow audio wired to analyser ✓", url.slice(0, 60));
-  } catch (e) {
-    console.warn("[MobileEngine] Shadow audio setup failed:", e.message);
-    _teardownShadowAudio();
-  }
-}
-
-/**
- * Tear down the shadow audio element and all associated Web Audio nodes.
- * Safe to call multiple times.
- */
-function _teardownShadowAudio() {
-  _shadowSyncDetach?.();
-  _shadowSyncDetach = null;
-  if (_shadowSrc) { try { _shadowSrc.disconnect(); } catch (_) {} _shadowSrc = null; }
-  // Disconnect the analyser from its current output chain before rebuilding.
-  if (_sharedAnalyser) { try { _sharedAnalyser.disconnect(); } catch (_) {} }
-  if (_shadowGain) { try { _shadowGain.disconnect(); } catch (_) {} _shadowGain = null; }
-  if (_shadowAudio) {
-    try { _shadowAudio.pause(); } catch (_) {}
-    try { _shadowAudio.src = ""; } catch (_) {}
-    _shadowAudio = null;
-  }
-  _shadowUrl = null;
-}
-
-/**
- * Attach event listeners to the primary element that keep the shadow in sync.
- * The shadow mirrors play/pause/seek state so its audio timeline stays aligned,
- * giving the analyser accurate frequency data at every moment.
- */
-function _attachShadowSync() {
-  const primaryEl = _ws?.getMediaElement?.();
-  if (!primaryEl || !_shadowAudio) return;
-
-  function onPlay() {
-    if (!_shadowAudio || !_shadowAudio.paused) return;
-    try { _shadowAudio.currentTime = primaryEl.currentTime; } catch (_) {}
-    if (_sharedCtx && _sharedCtx.state !== "running") {
-      _sharedCtx.resume().then(() => {
-        if (!primaryEl.paused) _shadowAudio?.play().catch(() => {});
-      }).catch(() => {});
-    } else {
-      _shadowAudio.play().catch(() => {});
-    }
-  }
-  function onPause() { _shadowAudio?.pause(); }
-  function onSeeked() {
-    if (_shadowAudio) try { _shadowAudio.currentTime = primaryEl.currentTime; } catch (_) {}
-  }
-  function onTimeUpdate() {
-    // Drift correction: re-sync if shadow has drifted more than 500 ms.
-    if (_shadowAudio && !_shadowAudio.paused) {
-      const drift = Math.abs(_shadowAudio.currentTime - primaryEl.currentTime);
-      if (drift > 0.5) try { _shadowAudio.currentTime = primaryEl.currentTime; } catch (_) {}
-    }
-  }
-
-  primaryEl.addEventListener("play",       onPlay);
-  primaryEl.addEventListener("pause",      onPause);
-  primaryEl.addEventListener("seeked",     onSeeked);
-  primaryEl.addEventListener("timeupdate", onTimeUpdate);
-
-  _shadowSyncDetach = () => {
-    primaryEl.removeEventListener("play",       onPlay);
-    primaryEl.removeEventListener("pause",      onPause);
-    primaryEl.removeEventListener("seeked",     onSeeked);
-    primaryEl.removeEventListener("timeupdate", onTimeUpdate);
-  };
-}
-
-/**
- * Restart the shadow element (snap time + resume play) after a context resume.
- * Called from _onRestoreVisible() on every page-show/focus/resume event.
- */
-function _restartShadow(primaryEl) {
-  if (!_shadowAudio || !primaryEl) return;
-  try { _shadowAudio.currentTime = primaryEl.currentTime; } catch (_) {}
-  if (!primaryEl.paused && !primaryEl.ended && _shadowAudio.paused) {
-    _shadowAudio.play().catch(() => {});
-  }
+export function getPrimaryElement() {
+  return _ws?.getMediaElement?.() ?? null;
 }
 
 // ── Logging helpers ────────────────────────────────────────────────────────
@@ -525,8 +383,6 @@ function _restoreAfterInterruption(mediaEl) {
       console.log("[MobileEngine] Interruption recovery play() resolved ✓; t:",
         mediaEl.currentTime?.toFixed(3));
       _isRestoring = false;
-      // Restart the shadow so the analyser syncs with the primary.
-      _restartShadow(mediaEl);
     }).catch((e) => {
       console.warn("[MobileEngine] Interruption recovery play() rejected:", e.name, "—", e.message);
       _isRestoring = false;
@@ -568,7 +424,6 @@ function _registerGestureRecovery(mediaEl) {
     doResume.then(() => {
       mediaEl.play().then(() => {
         console.log("[MobileEngine] Gesture recovery play() resolved ✓");
-        _restartShadow(mediaEl);
       }).catch((e) => {
         console.warn("[MobileEngine] Gesture recovery play() still rejected:", e.name, "—", e.message);
       });
@@ -610,7 +465,7 @@ function _setupMediaSession() {
     const mediaEl = _ws?.getMediaElement?.();
     if (!mediaEl) return;
     // Resume AudioContext first (it may be suspended from a hide cycle) then
-    // play the primary element and restart the shadow visualizer.
+    // play the primary element directly — hardware-immediate, no WaveSurfer delay.
     const doResume = (_sharedCtx && _sharedCtx.state !== "running")
       ? _sharedCtx.resume()
       : Promise.resolve();
@@ -618,7 +473,6 @@ function _setupMediaSession() {
       mediaEl.play().catch((e) => {
         console.warn("[MobileEngine] mediaSession play rejected:", e.name, "—", e.message);
       });
-      _restartShadow(mediaEl);
     }).catch(() => {});
   });
 
@@ -626,10 +480,9 @@ function _setupMediaSession() {
     const mediaEl = _ws?.getMediaElement?.();
     // Primary element — synchronous, hardware-immediate.
     if (mediaEl) try { mediaEl.pause(); } catch (_) {}
-    // Shadow — must also pause so the visualizer doesn't keep buffering silently.
-    try { _shadowAudio?.pause(); } catch (_) {}
     _wasPlayingOnHide = false;
     _isRestoring = false;
+    _interruptedWhilePlaying = false;
     // WaveSurfer internal state sync (non-critical — native element is already paused).
     try { _ws?.pause(); } catch (_) {}
   });
@@ -641,8 +494,7 @@ function _setupMediaSession() {
     const t = Math.max(0, mediaEl.currentTime - skip);
     try { mediaEl.currentTime = t; } catch (_) {}
     try { _ws?.setTime(t); } catch (_) {}
-    if (_shadowAudio) try { _shadowAudio.currentTime = t; } catch (_) {}
-    if (_ws === _ws) _handlers.current?.onTimeUpdate?.(t);
+    _handlers.current?.onTimeUpdate?.(t);
   });
 
   ms.setActionHandler("seekforward", (evt) => {
@@ -654,7 +506,6 @@ function _setupMediaSession() {
     const t = Math.min(dur, mediaEl.currentTime + skip);
     try { mediaEl.currentTime = t; } catch (_) {}
     try { _ws?.setTime(t); } catch (_) {}
-    if (_shadowAudio) try { _shadowAudio.currentTime = t; } catch (_) {}
     _handlers.current?.onTimeUpdate?.(t);
   });
 
@@ -667,7 +518,6 @@ function _setupMediaSession() {
     const t = Math.max(0, Math.min(evt.seekTime, dur || Infinity));
     try { mediaEl.currentTime = t; } catch (_) {}
     try { _ws?.setTime(t); } catch (_) {}
-    if (_shadowAudio) try { _shadowAudio.currentTime = t; } catch (_) {}
     _handlers.current?.onTimeUpdate?.(t);
   });
 
@@ -705,7 +555,6 @@ export function setMediaSessionMetadata({ title = "", artist = "", album = "", a
 //
 // With the keep-alive AudioContext active, iOS keeps audio flowing through
 // the Web Audio graph in the background. If iOS does auto-suspend the
-// context despite the keep-alive, _resumeSharedCtx() brings it back on
 // any visibility/focus/resume event — without needing a new gesture, because
 // the context object was already unlocked in the original user tap.
 
@@ -752,15 +601,10 @@ if (typeof document !== "undefined") {
     if (mediaEl && mediaEl.playbackRate !== 1) mediaEl.playbackRate = 1;
     console.log("[MobileEngine]", _snap("restore"));
 
-    // ── Always restart the shadow visualizer ───────────────────────────────
-    // Resume the AudioContext unconditionally, then snap the shadow element
-    // back to primary's position and resume its play. This path runs regardless
-    // of whether the primary was playing, since the analyser must be live
-    // whenever the page is visible.
+    // Resume the AudioContext so the keep-alive stays active.
     const doCtxResume = (_sharedCtx && _sharedCtx.state !== "running")
       ? _sharedCtx.resume()
       : Promise.resolve();
-    doCtxResume.then(() => { _restartShadow(mediaEl); }).catch(() => {});
 
     // ── Primary restart — only if iOS killed the native element ───────────
     // The primary element routes through hardware only (no Web Audio), so iOS
@@ -841,33 +685,15 @@ if (typeof document !== "undefined") {
       // previous unlock cannot race with the new hide.
       _isRestoring = false;
 
-      // Pause the shadow element so it doesn't consume network or buffer in
-      // the background. The primary element is NOT touched — it routes through
-      // native hardware only and iOS lets it keep playing in the background.
-      if (_shadowAudio) {
-        try { _shadowAudio.pause(); } catch (_) {}
-      }
-
       // Explicitly suspend the AudioContext the moment the page hides.
-      // The shadow element (not the primary) feeds the Web Audio graph, so
-      // suspending here freezes only the analyser chain — never the primary
-      // playback stream, which bypasses Web Audio entirely.
-      // An explicit suspend gives us a clean, known baseline so the resume
-      // sequence in _onRestoreVisible() can wait for state === "running"
-      // before restarting the shadow, preventing chipmunk artifacts.
+      // The primary element routes through native hardware (not Web Audio),
+      // so this only freezes the keep-alive chain — never primary playback.
+      // Gives a clean, known baseline for the resume sequence in
+      // _onRestoreVisible() so ctx.state === "running" before any play().
       if (_sharedCtx && _sharedCtx.state === "running") {
         _sharedCtx.suspend().catch(() => {});
       }
 
-      // Drain the analyser's last snapshot so stale frequency data cannot
-      // bleed into the first animation frame after the page becomes visible.
-      if (_sharedAnalyser) {
-        try {
-          _sharedAnalyser.getByteFrequencyData(
-            new Uint8Array(_sharedAnalyser.frequencyBinCount)
-          );
-        } catch (_) {}
-      }
     } else {
       _onRestoreVisible();
     }
@@ -888,13 +714,9 @@ if (typeof document !== "undefined") {
       ..._snap("pagehide"),
       persisted: evt.persisted,
     });
-    // Ensure the shadow visualizer element is paused on pagehide.
-    // visibilitychange handles this for most iOS transitions, but pagehide
-    // fires independently on bfcache evictions and aggressive app-switch
-    // scenarios where visibilitychange may not have fired first. Pausing
-    // twice is harmless; leaving the shadow playing leaks network and keeps
-    // the AudioContext from suspending cleanly on the next restore cycle.
-    if (_shadowAudio) try { _shadowAudio.pause(); } catch (_) {}
+    // Belt-and-suspenders: suspend the AudioContext on pagehide too.
+    // visibilitychange covers most paths but pagehide fires independently on
+    // bfcache evictions where visibilitychange may not have fired first.
     if (_sharedCtx && _sharedCtx.state === "running") {
       _sharedCtx.suspend().catch(() => {});
     }
@@ -968,9 +790,6 @@ export function mountMobileEngine(container, url, handlers) {
     _detachNativeListeners?.();
     _detachNativeListeners = null;
     _isRestoring = false;
-    // Tear down the shadow element before destroying WaveSurfer so the
-    // shadow's sync listeners are removed from the old primary element.
-    _teardownShadowAudio();
     _ws.destroy();
     _ws = null;
   }
@@ -1097,12 +916,6 @@ export function mountMobileEngine(container, url, handlers) {
     _detachNativeListeners?.();
     _detachNativeListeners = attachNativeListeners(earlyMediaEl, ws);
   }
-
-  // Track-change path: if startKeepAlive() was already called (shared context
-  // is live), set up the shadow audio element now so the analyser is ready
-  // before the first play gesture. For the first-play path, startKeepAlive()
-  // will call _setupShadowAudio() itself after unlocking the context.
-  _setupShadowAudio(url);
 
   // Register lock-screen / notification-shade transport controls. Safe to call
   // on every track load — setActionHandler() is idempotent and the handlers
@@ -1272,7 +1085,6 @@ export function mountMobileEngine(container, url, handlers) {
           // very first action, bypassing any WaveSurfer async state machine so
           // the hardware audio output is silenced before anything else runs.
           try { mediaEl.pause(); } catch (_) {}
-          try { _shadowAudio?.pause(); } catch (_) {}
           _wasPlayingOnHide = false; // prevent any pending restore from restarting
           _isRestoring = false;      // cancel in-flight ctx-resume → play() chain
           _interruptedWhilePlaying = false; // user-pause disarms interruption recovery
@@ -1291,7 +1103,6 @@ export function mountMobileEngine(container, url, handlers) {
         const t = Math.max(0, Math.min(time, Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0));
         try { ws.setTime(t); } catch (_) { mediaEl.currentTime = t; }
         _handlers.current?.onTimeUpdate?.(t);
-        if (_shadowAudio) try { _shadowAudio.currentTime = t; } catch (_) {}
       },
     };
 
@@ -1338,7 +1149,6 @@ export function mountMobileEngine(container, url, handlers) {
           // very first action, bypassing any WaveSurfer async state machine so
           // the hardware audio output is silenced before anything else runs.
           try { mediaElement?.pause(); } catch (_) {}
-          try { _shadowAudio?.pause(); } catch (_) {}
           _wasPlayingOnHide = false;
           _isRestoring = false;
           _interruptedWhilePlaying = false; // user-pause disarms interruption recovery
@@ -1352,7 +1162,6 @@ export function mountMobileEngine(container, url, handlers) {
         const t = Math.min(Math.max(time, 0), ws.getDuration());
         ws.setTime(t);
         _handlers.current?.onTimeUpdate?.(t);
-        if (_shadowAudio) try { _shadowAudio.currentTime = t; } catch (_) {}
       },
     });
   });
@@ -1432,7 +1241,6 @@ export function disposeMobileEngine() {
   // after the engine has been torn down (e.g. on track change or unmount).
   _detachGestureRecovery?.();
   _detachGestureRecovery = null;
-  _teardownShadowAudio();
   if (_ws) {
     _ws.destroy();
     _ws = null;
@@ -1442,7 +1250,7 @@ export function disposeMobileEngine() {
   _urlOnHide = null;
   _wasTimeAdvancing = false;
   _handlers.current = null;
-  // _sharedCtx / _keepAliveSrc / _sharedAnalyser / _detachCtxStateListener are
+  // _sharedCtx / _keepAliveSrc / _detachCtxStateListener are
   // intentionally NOT cleared here. They live for the full page session so
   // MobileSpectrumStrip can reuse the already-unlocked context across track
   // switches, and the statechange listener must remain active to detect
