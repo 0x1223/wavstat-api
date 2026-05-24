@@ -1,7 +1,41 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
-import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
+import { disposeMobileEngine, getSharedAnalyser, mountMobileEngine } from "../lib/mobileAudioEngine.js";
+
+// ── Mobile spectrum analyzer ─────────────────────────────────────────────
+const _SPEC_CENTERS = [
+  25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200,
+  250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000,
+  2500, 3150, 4000, 5000, 6300, 8000, 10_000, 12_500, 16_000, 20_000,
+];
+const _SPEC_N = _SPEC_CENTERS.length; // 30
+const _SPEC_HALF_BW = Math.pow(2, 1 / 6);
+const _SPEC_LABELS = [
+  [1, "31"], [4, "63"], [7, "125"], [10, "250"], [13, "500"],
+  [16, "1k"], [19, "2k"], [22, "4k"], [25, "8k"], [28, "16kHz"],
+];
+// 6-stop gradient: Blue → Cyan → Green → Yellow-Green → Yellow → Orange (no red)
+const _SPEC_STOPS = [
+  { h: 212, s: 80,  l: 42 }, // #1565C0 blue
+  { h: 187, s: 100, l: 42 }, // #00BCD4 cyan
+  { h: 122, s: 39,  l: 49 }, // #4CAF50 green
+  { h: 88,  s: 50,  l: 53 }, // #8BC34A yellow-green
+  { h: 54,  s: 100, l: 62 }, // #FFEB3B yellow
+  { h: 36,  s: 100, l: 50 }, // #FF9800 orange
+];
+
+function spectrumBandColor(i, amp) {
+  const t = i / (_SPEC_N - 1);
+  const seg = Math.min(_SPEC_STOPS.length - 2, Math.floor(t * (_SPEC_STOPS.length - 1)));
+  const frac = t * (_SPEC_STOPS.length - 1) - seg;
+  const a = _SPEC_STOPS[seg], b = _SPEC_STOPS[seg + 1];
+  const hue = (a.h + frac * (b.h - a.h)) | 0;
+  const sat = (a.s + frac * (b.s - a.s)) | 0;
+  const baseL = a.l + frac * (b.l - a.l);
+  const lit = (28 + amp * Math.max(0, baseL - 28)) | 0;
+  return `hsl(${hue},${sat}%,${lit}%)`;
+}
 
 export function WaveformReview({
   audioSource,
@@ -479,7 +513,234 @@ export function WaveformReview({
         </div>
       )}
 
+      {isMobileViewport() && hasAudio && (
+        <div className="mobile-spectrum-container">
+          <MobileSpectrumStrip
+            key={audioSource?.playbackUrl || audioSource?.url}
+            wsRef={wavesurferRef}
+          />
+        </div>
+      )}
+
     </section>
+  );
+}
+
+// ── MobileSpectrumStrip ───────────────────────────────────────────────────────
+// Reads from the shared AnalyserNode exported by mobileAudioEngine.
+// Does NOT call createMediaElementSource — no connections to the <audio> element —
+// so it cannot disrupt the native playback path or the iOS lock-screen session.
+function MobileSpectrumStrip({ wsRef }) {
+  const canvasRef = useRef(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    let alive = true;
+    let rafId = null;
+    let isAnimating = false;
+    let lastDrawTime = null;
+    let analyser = null;
+    let freqData = null;
+    let decayBuf = null;
+    let audioCtx = null;
+    let detachWs = null;
+
+    // ── Drawing ────────────────────────────────────────────────────────────
+    function paint(dataOverride = null) {
+      if (!canvas || !analyser || !freqData || !audioCtx) return;
+
+      let data;
+      if (dataOverride) {
+        data = dataOverride;
+      } else {
+        analyser.getByteFrequencyData(freqData);
+        if (decayBuf) {
+          for (let i = 0; i < freqData.length; i++) decayBuf[i] = freqData[i];
+        }
+        data = freqData;
+      }
+
+      const ctx2d = canvas.getContext("2d");
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx2d.clearRect(0, 0, W, H);
+
+      const slotW = W / _SPEC_N;
+      const barW = Math.max(1, slotW - 1);
+      const binHz = audioCtx.sampleRate / analyser.fftSize;
+      const M = freqData.length;
+
+      for (let i = 0; i < _SPEC_N; i++) {
+        const fc = _SPEC_CENTERS[i];
+        const bLo = Math.max(0, Math.floor((fc / _SPEC_HALF_BW) / binHz));
+        const bHi = Math.min(M - 1, Math.ceil((fc * _SPEC_HALF_BW) / binHz));
+        let peak = 0;
+        for (let b = bLo; b <= bHi; b++) {
+          if (data[b] > peak) peak = data[b];
+        }
+        const amp = peak / 255;
+        ctx2d.fillStyle = spectrumBandColor(i, amp);
+        const x = (i * slotW + (slotW - barW) / 2) | 0;
+        const h = Math.max(2, (amp * H) | 0);
+        ctx2d.fillRect(x, H - h, barW, h);
+      }
+
+      ctx2d.save();
+      ctx2d.font = "bold 8px monospace";
+      ctx2d.textAlign = "center";
+      ctx2d.textBaseline = "top";
+      ctx2d.shadowColor = "rgba(0,0,0,0.65)";
+      ctx2d.shadowBlur = 2;
+      ctx2d.fillStyle = "#ffffff";
+      for (const [i, label] of _SPEC_LABELS) {
+        ctx2d.fillText(label, (i + 0.5) * slotW, 2);
+      }
+      ctx2d.restore();
+    }
+
+    // ── RAF loop ──────────────────────────────────────────────────────────
+    function tick(now) {
+      if (!alive || !isAnimating || document.hidden) { rafId = null; return; }
+      const dt = lastDrawTime !== null ? now - lastDrawTime : 0;
+      lastDrawTime = now;
+      // Flush stale analyser buffer accumulated during background suspension
+      if (dt > 200 && analyser && freqData) {
+        analyser.getByteFrequencyData(freqData); // discard; next paint() reads fresh
+      }
+      paint();
+      rafId = requestAnimationFrame(tick);
+    }
+
+    function decayTick() {
+      if (!alive || isAnimating || !decayBuf) return;
+      let anyActive = false;
+      for (let i = 0; i < decayBuf.length; i++) {
+        decayBuf[i] *= 0.82;
+        if (decayBuf[i] > 0.5) anyActive = true;
+      }
+      paint(decayBuf);
+      rafId = anyActive ? requestAnimationFrame(decayTick) : null;
+    }
+
+    function startAnim() {
+      isAnimating = true;
+      if (audioCtx?.state === "suspended") audioCtx.resume().catch(() => {});
+      if (rafId == null) rafId = requestAnimationFrame(tick);
+    }
+
+    function stopAnim() {
+      isAnimating = false;
+      if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+      decayTick();
+    }
+
+    // ── Connect to shared analyser ────────────────────────────────────────
+    // No createMediaElementSource — we read from the analyser already wired
+    // into the keep-alive chain by mobileAudioEngine.startKeepAlive().
+    function tryConnect() {
+      const ws = wsRef.current;
+      if (!ws) return false;
+
+      const analyserNode = getSharedAnalyser();
+      if (!analyserNode) return false;
+
+      analyser = analyserNode;
+      audioCtx = analyserNode.context;
+      freqData = new Uint8Array(analyserNode.frequencyBinCount);
+      decayBuf = new Float32Array(analyserNode.frequencyBinCount);
+
+      function onPlay() { if (alive) startAnim(); }
+      function onStop() { if (alive) stopAnim(); }
+      ws.on("play", onPlay);
+      ws.on("pause", onStop);
+      ws.on("finish", onStop);
+      detachWs = () => {
+        try { ws.un("play", onPlay); ws.un("pause", onStop); ws.un("finish", onStop); }
+        catch (_) {}
+      };
+
+      if (ws.isPlaying?.()) startAnim();
+      else paint();
+
+      return true;
+    }
+
+    // ── Visibility handling (iOS background safety) ───────────────────────
+    // On hide: cancel RAF immediately — no draws while backgrounded.
+    // On show: reset lastDrawTime so the first tick's dt is 0 (no false stale-flush),
+    //          resume context if iOS suspended it, restart RAF if audio is playing.
+    function onVisibilityChange() {
+      if (!alive) return;
+      if (document.hidden) {
+        isAnimating = false;
+        if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+      } else {
+        lastDrawTime = null;
+        if (audioCtx?.state === "suspended") audioCtx.resume().catch(() => {});
+        const ws = wsRef.current;
+        if (ws?.isPlaying?.()) startAnim();
+        else if (analyser && freqData) paint();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    // ── Canvas sizing ─────────────────────────────────────────────────────
+    const ro = new ResizeObserver(() => {
+      if (!canvas) return;
+      const w = canvas.getBoundingClientRect().width | 0;
+      if (w > 0 && canvas.width !== w) {
+        canvas.width = w;
+        if (!isAnimating) paint();
+      }
+    });
+    ro.observe(canvas);
+    const initW = canvas.getBoundingClientRect().width | 0;
+    if (initW > 0) canvas.width = initW;
+
+    // ── Cleanup ───────────────────────────────────────────────────────────
+    // The shared analyser is owned by mobileAudioEngine — do not disconnect it.
+    function cleanup() {
+      alive = false;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      if (rafId != null) cancelAnimationFrame(rafId);
+      detachWs?.();
+      analyser = null;
+      freqData = null;
+      decayBuf = null;
+      audioCtx = null;
+      ro.disconnect();
+    }
+
+    // Poll until both wsRef and the shared analyser are ready.
+    // On non-iOS where startKeepAlive() is a no-op, give up after 5 s so
+    // the interval doesn't run indefinitely.
+    if (!tryConnect()) {
+      const pollStart = Date.now();
+      const iv = setInterval(() => {
+        if (!alive) { clearInterval(iv); return; }
+        if (Date.now() - pollStart > 5_000) {
+          clearInterval(iv); // shared analyser unavailable (non-iOS path)
+          return;
+        }
+        if (tryConnect()) clearInterval(iv);
+      }, 80);
+      return () => { clearInterval(iv); cleanup(); };
+    }
+
+    return cleanup;
+  }, [wsRef]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="mobile-spectrum-canvas"
+      width="300"
+      height="80"
+      style={{ display: "block", width: "100%", height: "80px", borderRadius: "3px" }}
+      aria-hidden="true"
+    />
   );
 }
 

@@ -25,7 +25,8 @@ const _handlers = { current: null };
 // iOS from auto-suspending the context, which would cut audio routed through it.
 // MobileSpectrumAnalyzer shares this context rather than creating its own per-track.
 let _sharedCtx = null;
-let _keepAliveSrc = null;  // silent looping BufferSourceNode (volume 0)
+let _keepAliveSrc = null;    // silent looping BufferSourceNode (volume 0)
+let _sharedAnalyser = null;  // single AnalyserNode wired into the keep-alive chain
 
 /**
  * Detect iOS / iPadOS / Safari.
@@ -61,17 +62,26 @@ export function startKeepAlive() {
 
     // 1-sample silent buffer, looping forever.
     // Keeps iOS from reclaiming the audio session by ensuring the context is
-    // always producing some output (even silence). Must not affect analyser
-    // readings — it is connected directly to the destination, not to the analyser.
+    // always producing some output (even silence). Routed through _sharedAnalyser
+    // so the analyser node is live in the Web Audio graph. MobileSpectrumStrip
+    // reads from this analyser without ever calling createMediaElementSource,
+    // which prevents it from interfering with the native <audio> element and
+    // the iOS lock-screen audio session.
     const buf = _sharedCtx.createBuffer(1, 1, _sharedCtx.sampleRate);
     // buf.getChannelData(0)[0] === 0 by default (silent)
+    _sharedAnalyser = _sharedCtx.createAnalyser();
+    _sharedAnalyser.fftSize = 4096;
+    _sharedAnalyser.smoothingTimeConstant = 0.78;
+    _sharedAnalyser.minDecibels = -90;
+    _sharedAnalyser.maxDecibels = -10;
     const gain = _sharedCtx.createGain();
     gain.gain.value = 0; // completely inaudible
     _keepAliveSrc = _sharedCtx.createBufferSource();
     _keepAliveSrc.buffer = buf;
     _keepAliveSrc.loop = true;
     _keepAliveSrc.connect(gain);
-    gain.connect(_sharedCtx.destination);
+    gain.connect(_sharedAnalyser);
+    _sharedAnalyser.connect(_sharedCtx.destination);
     _keepAliveSrc.start(0);
 
     function _restartKeepAliveSrc() {
@@ -81,7 +91,7 @@ export function startKeepAlive() {
       _keepAliveSrc = _sharedCtx.createBufferSource();
       _keepAliveSrc.buffer = buf2;
       _keepAliveSrc.loop = true;
-      _keepAliveSrc.connect(_sharedCtx.destination);
+      _keepAliveSrc.connect(_sharedAnalyser ?? _sharedCtx.destination);
       _keepAliveSrc.start(0);
     }
 
@@ -101,6 +111,7 @@ export function startKeepAlive() {
     try { _sharedCtx?.close(); } catch (_) {}
     _sharedCtx = null;
     _keepAliveSrc = null;
+    _sharedAnalyser = null;
     return null;
   }
 }
@@ -112,6 +123,18 @@ export function startKeepAlive() {
 export function getSharedAudioContext() {
   if (!_sharedCtx || _sharedCtx.state === "closed") return null;
   return _sharedCtx;
+}
+
+/**
+ * Returns the shared AnalyserNode wired into the keep-alive chain, or null if
+ * startKeepAlive() has not been called yet (or failed).
+ * MobileSpectrumStrip reads from this node directly — no createMediaElementSource,
+ * no new connections to the <audio> element — so it cannot interfere with the
+ * native playback path or the iOS lock-screen audio session.
+ */
+export function getSharedAnalyser() {
+  if (!_sharedAnalyser || !_sharedCtx || _sharedCtx.state === "closed") return null;
+  return _sharedAnalyser;
 }
 
 /** Resume the shared context if iOS auto-suspended it. */
