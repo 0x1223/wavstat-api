@@ -3,6 +3,7 @@ import cors from "cors";
 import "dotenv/config";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -152,6 +153,7 @@ async function handleAudioUpload(req, res, next) {
     const audioPayload = {
       key: objectKey,
       playbackUrl: storageResult.playbackUrl,
+      peaksUrl: storageResult.peaksUrl || null,
       fileName: audioFile.originalname,
       contentType: validation.contentType,
       size: audioFile.size,
@@ -176,6 +178,7 @@ async function handleAudioUpload(req, res, next) {
       storage: storageResult.storage,
       key: objectKey,
       playbackUrl: storageResult.playbackUrl,
+      peaksUrl: storageResult.peaksUrl || null,
       fileName: audioFile.originalname,
       sessionId: sessionId || null,
       trackId,
@@ -196,16 +199,115 @@ async function uploadAudioToR2(objectKey, audioFile, contentType, req) {
       Body: audioFile.buffer,
       ContentLength: audioFile.size,
       ContentType: contentType,
+      CacheControl: "public, max-age=31536000",
+      ContentDisposition: "inline",
       Metadata: {
         originalName: encodeURIComponent(audioFile.originalname)
       }
     }),
   );
 
+  const peaksKey = `${objectKey}.peaks.json`;
+  const peaksUrl = buildApiPlaybackUrl(req, peaksKey);
+
+  // Non-blocking: generate and upload peaks after the audio is already in R2.
+  // Errors are logged but never surface to the caller.
+  generateAndUploadPeaks(audioFile.buffer, peaksKey).catch((err) => {
+    console.error("[MixReview] Peaks generation failed", { objectKey, error: err.message });
+  });
+
   return {
     storage: "r2",
-    playbackUrl: buildApiPlaybackUrl(req, objectKey)
+    playbackUrl: buildApiPlaybackUrl(req, objectKey),
+    peaksUrl
   };
+}
+
+// generateAndUploadPeaks — runs FFmpeg on the in-memory audio buffer, computes
+// 800 normalized peak values, and stores them as a .peaks.json object in R2.
+// Called fire-and-forget; errors are caught by the caller.
+async function generateAndUploadPeaks(audioBuffer, peaksKey, numPoints = 800) {
+  const peaks = await generatePeaksWithFfmpeg(audioBuffer, numPoints);
+  const body = JSON.stringify(peaks);
+  await r2Client.send(
+    new PutObjectCommand({
+      Bucket: r2Config.bucketName,
+      Key: peaksKey,
+      Body: body,
+      ContentType: "application/json",
+      CacheControl: "public, max-age=31536000",
+      ContentDisposition: "inline"
+    })
+  );
+  console.log("[MixReview] Peaks uploaded", { peaksKey, numPoints: peaks.length });
+}
+
+// generatePeaksWithFfmpeg — decodes any audio format to mono f32le PCM via
+// FFmpeg, then downsamples to `numPoints` peak values in the range [-1, 1].
+// Each point is the highest-magnitude sample in its window (sign preserved).
+async function generatePeaksWithFfmpeg(audioBuffer, numPoints = 800) {
+  return new Promise((resolve, reject) => {
+    const ff = spawn("ffmpeg", [
+      "-i", "pipe:0",   // read from stdin
+      "-ac", "1",       // mix down to mono
+      "-f", "f32le",    // raw float32-LE PCM output
+      "-ar", "44100",   // fixed sample rate so window maths is predictable
+      "pipe:1"          // write to stdout
+    ]);
+
+    const pcmChunks = [];
+    ff.stdout.on("data", (chunk) => pcmChunks.push(chunk));
+
+    const stderrChunks = [];
+    ff.stderr.on("data", (chunk) => stderrChunks.push(chunk));
+
+    ff.on("close", (code) => {
+      if (code !== 0) {
+        const stderr = Buffer.concat(stderrChunks).toString().slice(0, 500);
+        return reject(new Error(`FFmpeg exited with code ${code}: ${stderr}`));
+      }
+
+      const pcm = Buffer.concat(pcmChunks);
+      const numSamples = Math.floor(pcm.length / 4); // 4 bytes per float32
+
+      if (numSamples === 0) {
+        return resolve(new Array(numPoints).fill(0));
+      }
+
+      const windowSize = Math.max(1, Math.floor(numSamples / numPoints));
+      const peaks = [];
+
+      for (let i = 0; i < numPoints; i++) {
+        const start = i * windowSize;
+        const end = Math.min(start + windowSize, numSamples);
+        let peakSample = 0;
+        let maxAbs = 0;
+
+        for (let j = start; j < end; j++) {
+          const sample = pcm.readFloatLE(j * 4);
+          const abs = Math.abs(sample);
+          if (abs > maxAbs) {
+            maxAbs = abs;
+            peakSample = sample;
+          }
+        }
+
+        // Clamp to [-1, 1] to guard against float rounding beyond the nominal range.
+        peaks.push(Math.max(-1, Math.min(1, peakSample)));
+      }
+
+      resolve(peaks);
+    });
+
+    ff.on("error", (err) => {
+      reject(new Error(`Failed to spawn FFmpeg: ${err.message}`));
+    });
+
+    // Absorb EPIPE so Node does not throw if FFmpeg closes stdin early.
+    ff.stdin.on("error", () => {});
+    ff.stdin.write(audioBuffer);
+    ff.stdin.end();
+  });
 }
 
 // Map file extensions to MIME types for content-type fallback when R2 omits the header.
