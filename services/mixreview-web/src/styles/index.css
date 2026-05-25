@@ -1892,6 +1892,34 @@ h2 {
   justify-content: flex-end;
 }
 
+/* ── Transport nav: Prev / Next / Repeat ──────────────────────────────── */
+.transport-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.transport-nav-btn {
+  min-width: 38px !important;
+  min-height: 36px !important;
+  padding: 0 !important;
+  font-size: 1.05rem;
+  color: #a99f90;
+  font-weight: 400 !important;
+}
+
+/* Repeat state styles */
+.repeat-btn.repeat-off {
+  opacity: 0.35;
+}
+
+.repeat-btn.repeat-one,
+.repeat-btn.repeat-all {
+  color: var(--gold-bright);
+  opacity: 1;
+}
+
 .transport-controls {
   display: flex;
   align-items: center;
@@ -2319,6 +2347,12 @@ h2 {
 
   .reviewer-mode .transport .play-button {
     min-width: 76px;
+  }
+
+  .reviewer-mode .transport-nav-btn {
+    min-width: 28px !important;
+    min-height: 30px !important;
+    font-size: 0.9rem;
   }
 
   .mobile-note-popover {

@@ -8,7 +8,19 @@ export function TransportBar({
   onPlayPause,
   onSkipBackward,
   onSkipForward,
+  repeatMode = "off",
+  hasPrev = false,
+  hasNext = false,
+  onPrev,
+  onNext,
+  onRepeatChange,
 }) {
+  const repeatSymbol = repeatMode === "one" ? "↺¹" : "↺";
+  const repeatTitle =
+    repeatMode === "off" ? "Repeat off — click to enable Repeat One" :
+    repeatMode === "one" ? "Repeat one — click to enable Repeat All" :
+    "Repeat all — click to disable repeat";
+
   return (
     <footer className="transport" aria-label="Playback controls">
       <div className="transport-time">
@@ -47,12 +59,37 @@ export function TransportBar({
         </button>
       </div>
 
-      <div className="transport-meta">
-        <span>44.1 kHz</span>
-        <span>24-bit</span>
-        <span>Local audio</span>
+      <div className="transport-nav">
+        <button
+          type="button"
+          className="transport-nav-btn"
+          disabled={isDisabled || !hasPrev}
+          onClick={onPrev}
+          aria-label="Previous track"
+          title="Previous track"
+        >
+          ⏮
+        </button>
+        <button
+          type="button"
+          className="transport-nav-btn"
+          disabled={isDisabled || !hasNext}
+          onClick={onNext}
+          aria-label="Next track"
+          title="Next track"
+        >
+          ⏭
+        </button>
+        <button
+          type="button"
+          className={`transport-nav-btn repeat-btn repeat-${repeatMode}`}
+          onClick={onRepeatChange}
+          aria-label={repeatTitle}
+          title={repeatTitle}
+        >
+          {repeatSymbol}
+        </button>
       </div>
-
     </footer>
   );
 }

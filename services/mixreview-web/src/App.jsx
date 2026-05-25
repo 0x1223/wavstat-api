@@ -182,6 +182,7 @@ export default function App() {
   const [mobileCommentDrawerId, setMobileCommentDrawerId] = useState(null);
   const [mobileCommentDraft, setMobileCommentDraft] = useState("");
   const [deleteConfirmPending, setDeleteConfirmPending] = useState(false);
+  const [repeatMode, setRepeatMode] = useState("off");
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
     () =>
       window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
@@ -204,6 +205,7 @@ export default function App() {
   const tracksRef = useRef(tracks);
   const activeTrackIdRef = useRef(activeTrackId);
   const selectTrackRef = useRef(null);
+  const repeatModeRef = useRef("off");
 
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
@@ -214,6 +216,13 @@ export default function App() {
     [activeVersionId, versions],
   );
   const activeAudioUrl = normalizeAudioUrl(activeVersion?.audioSource);
+  const activeTrackIndex = tracks.findIndex((t) => t.id === activeTrackId);
+  const hasPrev =
+    activeTrackIndex > 0 ||
+    (repeatMode === "all" && tracks.length > 1);
+  const hasNext =
+    (activeTrackIndex >= 0 && activeTrackIndex < tracks.length - 1) ||
+    (repeatMode === "all" && tracks.length > 1);
 
   const comments = activeVersion?.comments || [];
   const mobileDrawerComment = useMemo(
@@ -1006,6 +1015,54 @@ export default function App() {
     selectTrackRef.current = selectTrack;
   }, [selectTrack]);
 
+  // Keep repeatModeRef current so ended-event handlers always see the latest mode.
+  useEffect(() => {
+    repeatModeRef.current = repeatMode;
+  }, [repeatMode]);
+
+  // ── Transport: Repeat / Prev / Next ──────────────────────────────────────
+  const handleRepeatChange = useCallback(() => {
+    setRepeatMode((current) => {
+      if (current === "off") return "one";
+      if (current === "one") return "all";
+      return "off";
+    });
+  }, []);
+
+  const handlePrevTrack = useCallback(() => {
+    const idx = tracks.findIndex((t) => t.id === activeTrackId);
+    let targetId = null;
+    if (idx > 0) {
+      targetId = tracks[idx - 1].id;
+    } else if (repeatMode === "all" && tracks.length > 1) {
+      targetId = tracks[tracks.length - 1].id;
+    }
+    if (!targetId) return;
+    autoPlayNextRef.current = false;
+    if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
+      unlockAudioSession();
+    }
+    selectTrack(targetId);
+  }, [activeTrackId, isReviewerMode, repeatMode, selectTrack, tracks]);
+
+  const handleNextTrack = useCallback(() => {
+    const idx = tracks.findIndex((t) => t.id === activeTrackId);
+    if (idx < 0) return;
+    let targetId = null;
+    if (idx < tracks.length - 1) {
+      targetId = tracks[idx + 1].id;
+    } else if (repeatMode === "all" && tracks.length > 1) {
+      targetId = tracks[0].id;
+    }
+    if (!targetId) return;
+    autoPlayNextRef.current = false;
+    if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
+      unlockAudioSession();
+    }
+    selectTrack(targetId);
+  }, [activeTrackId, isReviewerMode, repeatMode, selectTrack, tracks]);
+  // ─────────────────────────────────────────────────────────────────────────
+
   const shareSession = useCallback(() => {
     if (!permissions.canShare) {
       return;
@@ -1451,6 +1508,7 @@ export default function App() {
 
     function handleNativeEnded() {
       if (!userHasPlayedRef.current) return; // No play yet — never auto-advance
+      if (repeatModeRef.current !== "off") return; // Repeat handler manages this
       const currentTracks = tracksRef.current;
       const currentActiveTrackId = activeTrackIdRef.current;
       const currentIdx = currentTracks.findIndex((t) => t.id === currentActiveTrackId);
@@ -1464,6 +1522,52 @@ export default function App() {
     mediaElement.addEventListener("ended", handleNativeEnded);
     return () => mediaElement.removeEventListener("ended", handleNativeEnded);
   }, [mediaElement, isReviewerMode]);
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ── Repeat on track end (all modes, all viewports) ───────────────────────
+  // Uses refs for mode/tracks/activeTrackId so the listener is stable and never
+  // needs to be re-attached just because repeatMode or tracks change.
+  useEffect(() => {
+    if (!mediaElement) return;
+
+    function handleRepeatEnded() {
+      const mode = repeatModeRef.current;
+      if (mode === "off") return;
+
+      if (mode === "one") {
+        const p = playerRef.current;
+        setTimeout(() => {
+          p?.seekToTime(0);
+          p?.play()?.catch?.(() => {});
+        }, 80);
+        return;
+      }
+
+      if (mode === "all") {
+        const allTracks = tracksRef.current;
+        const currId = activeTrackIdRef.current;
+        const idx = allTracks.findIndex((t) => t.id === currId);
+        if (idx < 0) return;
+
+        if (allTracks.length === 1) {
+          // Single track — loop it
+          const p = playerRef.current;
+          setTimeout(() => {
+            p?.seekToTime(0);
+            p?.play()?.catch?.(() => {});
+          }, 80);
+          return;
+        }
+
+        const nextIdx = idx < allTracks.length - 1 ? idx + 1 : 0;
+        autoPlayNextRef.current = true;
+        selectTrackRef.current?.(allTracks[nextIdx].id);
+      }
+    }
+
+    mediaElement.addEventListener("ended", handleRepeatEnded);
+    return () => mediaElement.removeEventListener("ended", handleRepeatEnded);
+  }, [mediaElement]);
   // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1849,6 +1953,12 @@ export default function App() {
         }}
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}
+        repeatMode={repeatMode}
+        hasPrev={hasPrev}
+        hasNext={hasNext}
+        onPrev={handlePrevTrack}
+        onNext={handleNextTrack}
+        onRepeatChange={handleRepeatChange}
       />
 
       {isReviewerMode && mobileNoteDraft && (
