@@ -544,29 +544,43 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
 
     let alive = true;
     let rafId = null;
-    // Per-band decay buffer — values in [0,1]. Starts at zero so bars are
-    // invisible before audio plays; decays to absolute zero when paused.
-    const decay = new Float32Array(_SPEC_N).fill(0);
 
-    // ── Synthetic amplitude ────────────────────────────────────────────────
-    // Each column oscillates at a rate proportional to its index so adjacent
-    // bars are never in phase. A shared high-frequency cos() term
-    // (23.1 rad/s) acts as a rapidly-changing phase wobble that breaks up any
-    // lock-step patterns between nearby bands.
-    //
-    // Math.abs(sin()) gives full-wave rectification — always [0, 1], bars
-    // spend real time at zero rather than bouncing above a 50% baseline.
-    //
-    // Analyzer slope: bass (i=0) scales to 90% max; treble (i=29) to 40% max.
-    // This mirrors the energy distribution of real audio and prevents treble
-    // bars from dominating visually.
-    function synthAmp(i, t) {
-      const norm = i / (_SPEC_N - 1);                       // 0..1 across bands
-      const raw  = Math.abs(
-        Math.sin(t * (i * 7.3) + Math.cos(t * 23.1))       // per-column jitter
-      );
-      const maxScale = 0.9 - norm * 0.5;                    // 0.90 bass → 0.40 treble
-      return raw * maxScale;
+    // ── Frozen horizontal grid ─────────────────────────────────────────────
+    // Column x-positions and bar pixel width are computed ONCE per resize and
+    // stored here. The draw loop reads only from these arrays — no per-frame
+    // division, no float rounding, nothing time-dependent can affect X coords.
+    let barPx   = 1;            // integer pixel width of each bar
+    let colX    = new Int32Array(_SPEC_N);  // left edge of each column, pixels
+    let labelX  = new Float32Array(_SPEC_N); // centre of each column for labels
+    let canvasH = canvas.height || 80;
+
+    function buildGrid(w) {
+      // Integer slot width, gap of 1px between bars.
+      const slot = Math.max(2, (w / _SPEC_N) | 0);
+      barPx = Math.max(1, slot - 1);
+      const gutter = ((slot - barPx) / 2) | 0; // left padding within slot
+      for (let i = 0; i < _SPEC_N; i++) {
+        colX[i]   = i * slot + gutter;
+        labelX[i] = i * slot + slot / 2;
+      }
+    }
+
+    // ── Per-band state ─────────────────────────────────────────────────────
+    // displayed[i]: current rendered amplitude [0,1].
+    // Lerped toward the target each frame for smooth attack and decay.
+    const displayed = new Float32Array(_SPEC_N).fill(0);
+
+    // ── Vertical amplitude — pure time + band index, no cross-column terms ─
+    // scale = 0.1 + 0.9 × |sin(t × 11.5 + i × 4.7)|
+    //   → range [0.1, 1.0] per band, fully independent across columns.
+    //   → no cos(), no shared wobble that could bleed into neighbour bars.
+    // Analyzer slope: bass cols reach 90% max, treble cols 40% max.
+    //   maxScale = 0.9 − norm × 0.5   (norm = i / 29, 0..1)
+    function targetAmp(i, t) {
+      const norm     = i / (_SPEC_N - 1);
+      const scale    = 0.1 + 0.9 * Math.abs(Math.sin(t * 11.5 + i * 4.7));
+      const maxScale = 0.9 - norm * 0.5;  // 0.90 (bass) → 0.40 (treble)
+      return scale * maxScale;
     }
 
     // ── Drawing ────────────────────────────────────────────────────────────
@@ -574,30 +588,34 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
       const ctx2d = canvas.getContext("2d");
       if (!ctx2d) return;
       const W = canvas.width;
-      const H = canvas.height;
+      const H = canvasH;
       ctx2d.clearRect(0, 0, W, H);
 
-      const slotW = W / _SPEC_N;
-      const barW  = Math.max(1, slotW - 1);
-
       for (let i = 0; i < _SPEC_N; i++) {
-        let amp;
         if (playing) {
-          amp = synthAmp(i, t);
-          decay[i] = amp; // mirror into decay buffer so pause inherits live value
+          const tgt = targetAmp(i, t);
+          // Fast attack (lerp 55% of gap per frame), slow decay (12% drop).
+          // Mimics professional LED bar meters: bars jump up quickly and
+          // fall down gradually, giving the "bouncing" mechanical feel.
+          if (tgt > displayed[i]) {
+            displayed[i] += (tgt - displayed[i]) * 0.55;
+          } else {
+            displayed[i] *= 0.88;
+          }
         } else {
-          // Decay to absolute zero when paused — 0.88× per frame ≈ 60 ms half-life.
-          decay[i] *= 0.88;
-          if (decay[i] < 0.004) decay[i] = 0; // snap to zero to stop micro-drift
-          amp = decay[i];
+          // Paused: smooth decay to absolute zero.
+          displayed[i] *= 0.88;
+          if (displayed[i] < 0.004) displayed[i] = 0;
         }
+
+        const amp = displayed[i];
         ctx2d.fillStyle = spectrumBandColor(i, amp);
-        const x = (i * slotW + (slotW - barW) / 2) | 0;
-        const h = Math.max(2, (amp * H) | 0);
-        ctx2d.fillRect(x, H - h, barW, h);
+        // X is read from the pre-built frozen grid — never computed here.
+        const h = Math.max(1, (amp * H) | 0);
+        ctx2d.fillRect(colX[i], H - h, barPx, h);
       }
 
-      // Frequency labels
+      // Frequency labels — x coords also from frozen grid.
       ctx2d.save();
       ctx2d.font = "bold 8px monospace";
       ctx2d.textAlign = "center";
@@ -606,19 +624,16 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
       ctx2d.shadowBlur = 2;
       ctx2d.fillStyle = "#ffffff";
       for (const [i, label] of _SPEC_LABELS) {
-        ctx2d.fillText(label, (i + 0.5) * slotW, 2);
+        ctx2d.fillText(label, labelX[i], 2);
       }
       ctx2d.restore();
     }
 
     // ── RAF loop ──────────────────────────────────────────────────────────
-    // Always runs while visible. Reads primaryAudio.currentTime each frame so
-    // the visualization stays locked to actual playback position — seeking and
-    // interruptions are automatically reflected on the next tick.
     function tick() {
       if (!alive || document.hidden) { rafId = null; return; }
-      const el = getPrimaryElement();
-      const t  = el?.currentTime ?? 0;
+      const el      = getPrimaryElement();
+      const t       = el?.currentTime ?? 0;
       const playing = Boolean(el && !el.paused && !el.ended);
       paint(t, playing);
       rafId = requestAnimationFrame(tick);
@@ -634,9 +649,6 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
     }
 
     // ── Visibility handling ───────────────────────────────────────────────
-    // Cancel rAF instantly when hidden (no wasted GPU frames in background).
-    // Restart on show — no stale-buffer flush needed since we never read an
-    // AnalyserNode; currentTime is always current.
     function onVisibilityChange() {
       if (!alive) return;
       if (document.hidden) stopRaf();
@@ -645,16 +657,23 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
     document.addEventListener("visibilitychange", onVisibilityChange);
 
     // ── Canvas sizing ─────────────────────────────────────────────────────
+    // Rebuild the frozen grid whenever the container width changes.
+    // Setting canvas.width clears the bitmap — that is expected and harmless.
+    function applyWidth(w) {
+      if (w > 0 && canvas.width !== w) {
+        canvas.width = w;
+        buildGrid(w);
+      }
+    }
     const ro = new ResizeObserver(() => {
       if (!canvas) return;
-      const w = canvas.getBoundingClientRect().width | 0;
-      if (w > 0 && canvas.width !== w) canvas.width = w;
+      applyWidth(canvas.getBoundingClientRect().width | 0);
     });
     ro.observe(canvas);
     const initW = canvas.getBoundingClientRect().width | 0;
-    if (initW > 0) canvas.width = initW;
+    applyWidth(initW || 300); // safe fallback if layout hasn't settled yet
 
-    // Start immediately — no polling needed, no analyser to wait for.
+    // Start immediately — no polling, no analyser to wait for.
     startRaf();
 
     return () => {
