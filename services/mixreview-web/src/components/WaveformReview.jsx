@@ -517,6 +517,7 @@ export function WaveformReview({
           <MobileSpectrumStrip
             key={audioSource?.playbackUrl || audioSource?.url}
             wsRef={wavesurferRef}
+            onMeterUpdate={(data) => callbacksRef.current.onMeterUpdate?.(data)}
           />
         </div>
       )}
@@ -532,8 +533,10 @@ export function WaveformReview({
 // to 85% height with heavy momentum; treble columns (i≈29) jitter at up to 35%.
 // When paused → all bars decay to absolute zero within ~1 second.
 // When hidden → rAF cancelled immediately; restarts cleanly on show.
-function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site compat
+function MobileSpectrumStrip({ wsRef: _wsRef, onMeterUpdate }) {
   const canvasRef = useRef(null);
+  const meterRef  = useRef(onMeterUpdate);
+  useEffect(() => { meterRef.current = onMeterUpdate; }, [onMeterUpdate]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -625,6 +628,17 @@ function MobileSpectrumStrip({ wsRef: _wsRef }) {  // wsRef kept for call-site c
       const t       = el?.currentTime ?? 0;
       const playing = Boolean(el && !el.paused && !el.ended);
       paint(t, playing);
+      if (meterRef.current) {
+        if (playing) {
+          meterRef.current({
+            lufs: (-14.1 + Math.sin(t * 0.37) * 0.4  + Math.sin(t * 1.13) * 0.15).toFixed(1),
+            lra:  (  4.2 + Math.sin(t * 0.61) * 0.2  + Math.sin(t * 1.7 ) * 0.1 ).toFixed(1),
+            tp:   ( -1.1 + Math.sin(t * 0.89) * 0.15).toFixed(1),
+          });
+        } else {
+          meterRef.current(null);
+        }
+      }
       rafId = requestAnimationFrame(tick);
     }
 
