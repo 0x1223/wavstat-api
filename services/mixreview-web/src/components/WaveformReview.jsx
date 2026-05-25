@@ -526,35 +526,14 @@ export function WaveformReview({
   );
 }
 
-// ── MobileSpectrumStrip — CSS-only animation ─────────────────────────────────
-// No rAF, no canvas, no Math.sin height calculations.
-// Three GPU-composited keyframe sets (bass/mid/high) with per-bar duration+delay
-// so no two neighbours share the same period. A 10 Hz setInterval toggles the
-// "mss-playing" CSS class and drives meter text — zero JS painting per frame.
+// ── MobileSpectrumStrip — static placeholder ─────────────────────────────────
+// No keyframes, no rAF, no Math.sin/cos.
+// A 10 Hz setInterval detects play/pause transitions and flips React state.
+// Bar heights are frozen to a deterministic static array while playing;
+// all bars return to a low uniform idle baseline when paused.
 
-const _MSS_CSS_ID = "mss-css-v3";
+const _MSS_CSS_ID = "mss-css-v4";
 const _MSS_CSS = `
-@keyframes mss-bass {
-  0%  { transform:scaleY(.09) }
-  22% { transform:scaleY(.83) }
-  44% { transform:scaleY(.29) }
-  68% { transform:scaleY(.78) }
-  100%{ transform:scaleY(.09) }
-}
-@keyframes mss-mid {
-  0%  { transform:scaleY(.06) }
-  27% { transform:scaleY(.61) }
-  53% { transform:scaleY(.16) }
-  77% { transform:scaleY(.56) }
-  100%{ transform:scaleY(.06) }
-}
-@keyframes mss-high {
-  0%  { transform:scaleY(.04) }
-  32% { transform:scaleY(.29) }
-  57% { transform:scaleY(.07) }
-  81% { transform:scaleY(.27) }
-  100%{ transform:scaleY(.04) }
-}
 .mss-wrap {
   position:relative; overflow:hidden;
   width:100%; height:80px; flex-shrink:0;
@@ -562,56 +541,48 @@ const _MSS_CSS = `
 .mss-bar {
   position:absolute; bottom:0;
   transform-origin:center bottom;
-  transform:scaleY(.04);
   transition:transform .8s ease-out, opacity .5s ease;
   opacity:.28; border-radius:1px 1px 0 0;
-  will-change:transform;
 }
 .mss-playing .mss-bar {
   opacity:1;
   transition:opacity .22s ease;
-}
-.mss-playing .mss-bar[data-t="bass"] {
-  animation-name:mss-bass;
-  animation-timing-function:ease-in-out;
-  animation-iteration-count:infinite;
-}
-.mss-playing .mss-bar[data-t="mid"] {
-  animation-name:mss-mid;
-  animation-timing-function:ease-in-out;
-  animation-iteration-count:infinite;
-}
-.mss-playing .mss-bar[data-t="high"] {
-  animation-name:mss-high;
-  animation-timing-function:ease-in-out;
-  animation-iteration-count:infinite;
 }`;
 
-// Static per-bar config — computed once at module load, never changes.
+// Deterministic static display heights — computed once, never change.
+// _IDLE_SCALE: uniform low baseline while paused.
+// _PLAY_SCALES: frozen per-bar scaleY values while playing (realistic spectrum shape).
+const _IDLE_SCALE  = 0.04;
+const _PLAY_SCALES = [
+  // Bass  25–160 Hz  (bars 0–7) — rolls off from sub-bass
+  0.45, 0.58, 0.67, 0.73, 0.78, 0.82, 0.79, 0.75,
+  // Low-mid 200–1600 Hz (bars 8–20) — fullest energy range
+  0.72, 0.76, 0.81, 0.78, 0.74, 0.70, 0.68, 0.65, 0.63, 0.61, 0.58, 0.55, 0.52,
+  // High  2k–20kHz   (bars 21–29) — steadily rolling off
+  0.48, 0.44, 0.39, 0.34, 0.29, 0.24, 0.20, 0.16, 0.12,
+];
+
+// Static per-bar geometry — computed once at module load, never changes.
 // Percentage left/width keeps the horizontal grid entirely CSS-owned.
 const _BAR_CFGS = Array.from({ length: _SPEC_N }, (_, i) => {
-  const type  = i < 8 ? "bass" : i < 21 ? "mid" : "high";
-  const dur   = i < 8
-    ? (1.00 + i * 0.073).toFixed(3) + "s"
-    : i < 21
-    ? (0.53 + (i - 8) * 0.042).toFixed(3) + "s"
-    : (0.26 + (i - 21) * 0.032).toFixed(3) + "s";
-  // Negative delays scatter starting phases so bars are never in sync.
-  const delay = "-" + (i * (i < 8 ? 139 : i < 21 ? 107 : 83)) + "ms";
-  const color = spectrumBandColor(i, 0.68);
-  const slotPct = (100 / _SPEC_N).toFixed(4);
-  const left  = (i * 100 / _SPEC_N).toFixed(4) + "%";
-  const width = `calc(${slotPct}% - 1px)`;
-  return { type, dur, delay, color, left, width };
+  const color      = spectrumBandColor(i, 0.68);
+  const slotPct    = (100 / _SPEC_N).toFixed(4);
+  const left       = (i * 100 / _SPEC_N).toFixed(4) + "%";
+  const width      = `calc(${slotPct}% - 1px)`;
+  const playScale  = _PLAY_SCALES[i];
+  return { color, left, width, playScale };
 });
 
 // ── MobileSpectrumStrip ───────────────────────────────────────────────────────
+// Static placeholder: no rAF, no Math.sin/cos, no keyframe animations.
+// A 10 Hz setInterval detects play/pause transitions only.
+// Bar heights are frozen to _PLAY_SCALES while playing; _IDLE_SCALE when paused.
 function MobileSpectrumStrip({ wsRef: _wsRef, onMeterUpdate }) {
-  const wrapRef  = useRef(null);
-  const meterRef = useRef(onMeterUpdate);
+  const meterRef                = useRef(onMeterUpdate);
+  const [isPlaying, setIsPlaying] = useState(false);
   useEffect(() => { meterRef.current = onMeterUpdate; }, [onMeterUpdate]);
 
-  // Inject CSS keyframes once per page session — idempotent.
+  // Inject simplified CSS once per page session — idempotent.
   useEffect(() => {
     if (!document.getElementById(_MSS_CSS_ID)) {
       const s = document.createElement("style");
@@ -621,44 +592,37 @@ function MobileSpectrumStrip({ wsRef: _wsRef, onMeterUpdate }) {
     }
   }, []);
 
-  // 10 Hz poll — only touches the DOM when playing state actually changes.
-  // Drives meter text at the same cadence; no per-frame painting at all.
+  // 10 Hz poll — flips React state only when playing transitions.
+  // No Math.sin, no per-frame DOM mutations, no rAF.
   useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
     let wasPlaying = false;
     const id = setInterval(() => {
       const el      = getPrimaryElement();
       const playing = Boolean(el && !el.paused && !el.ended);
       if (playing !== wasPlaying) {
         wasPlaying = playing;
-        wrap.classList.toggle("mss-playing", playing);
-        if (!playing) meterRef.current?.(null);
-      }
-      if (playing) {
-        const t = Date.now() / 1000;
-        meterRef.current?.({
-          lufs: (-14.1 + Math.sin(t * 0.37) * 0.35).toFixed(1),
-          lra:  (  4.2 + Math.sin(t * 0.61) * 0.18).toFixed(1),
-          tp:   ( -1.1 + Math.sin(t * 0.89) * 0.12).toFixed(1),
-        });
+        setIsPlaying(playing);
+        if (!playing) {
+          meterRef.current?.(null);
+        } else {
+          // Fixed static meter values — no time-based oscillation.
+          meterRef.current?.({ lufs: "-14.1", lra: "4.2", tp: "-1.1" });
+        }
       }
     }, 100);
     return () => clearInterval(id);
   }, []);
 
   return (
-    <div ref={wrapRef} className="mss-wrap" aria-hidden="true">
-      {_BAR_CFGS.map(({ type, dur, delay, color, left, width }, i) => (
+    <div className={`mss-wrap${isPlaying ? " mss-playing" : ""}`} aria-hidden="true">
+      {_BAR_CFGS.map(({ color, left, width, playScale }, i) => (
         <div
           key={i}
           className="mss-bar"
-          data-t={type}
           style={{
             left, width, height: "100%",
             background: color,
-            animationDuration: dur,
-            animationDelay: delay,
+            transform: `scaleY(${isPlaying ? playScale : _IDLE_SCALE})`,
           }}
         />
       ))}
