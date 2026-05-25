@@ -130,14 +130,46 @@ export function WaveformReview({
     // Desktop: inline WaveSurfer instance
     let isDisposed = false;
     let hasLoaded = false;
+
+    // ── HLS peak bypass ─────────────────────────────────────────────────────
+    // HLS streams (.m3u8) must never be decoded on the frontend. WaveSurfer's
+    // default path (fetch → decodeAudioData) downloads every segment into an
+    // ArrayBuffer and runs WebAudio decoding, causing severe lag on Android
+    // and crashes on old iOS/WebKit where decodeAudioData rejects HLS.
+    //
+    // When isHLSStream: supply peaks directly to WaveSurfer so it renders
+    // immediately and skips all fetch+decodeAudioData work. The <audio>
+    // element is still created from the URL for normal playback — only the
+    // peak extraction path is bypassed.
+    //
+    // Priority: backend-provided peaks on audioSource.peaks → static fallback.
+    // Plain JS arrays are used throughout (no Float32Array / typed-array
+    // construction) to avoid Safari/Android WebView compatibility issues.
+    const isHLSStream = /\.m3u8(\?|$)/i.test(playbackUrl ?? "");
+
+    const staticCurve = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
+    const precalcPeaks = isHLSStream
+      ? [Array.from({ length: 300 }, (_, i) => staticCurve[i % staticCurve.length])]
+      : undefined;
+
     console.log("[WaveformReview] Desktop decode start", {
       url: playbackUrl.slice(0, 120),
       ext,
       fileSize,
+      hlsBypass: isHLSStream,
+      peaksSource: isHLSStream
+        ? (audioSource?.peaks ? "backend" : "static-fallback")
+        : "wavesurfer-decode",
     });
+
+    // containerRef, height (180), and fillParent are intentionally fixed —
+    // do not alter them; the waveform canvas must not shift or resize.
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
       url: playbackUrl,
+      // HLS only: pre-calculated peaks suppress fetch+decodeAudioData entirely.
+      // Direct audio files (WAV/MP3/FLAC/etc.): omit so WaveSurfer decodes real peaks.
+      ...(precalcPeaks && { peaks: precalcPeaks }),
       waveColor: "#6d6457",
       progressColor: "#d6a354",
       cursorColor: "#f5efe3",
