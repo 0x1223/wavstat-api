@@ -22,6 +22,34 @@
   box-sizing: border-box;
 }
 
+/* ── Gold scrollbar ───────────────────────────────────────────────────────── */
+/* Firefox */
+* {
+  scrollbar-color: var(--gold) rgba(255, 255, 255, 0.06);
+  scrollbar-width: thin;
+}
+
+/* Webkit (Chrome, Safari, Edge) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gold);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gold-bright);
+}
+/* ─────────────────────────────────────────────────────────────────────────── */
+
 button {
   font: inherit;
 }
