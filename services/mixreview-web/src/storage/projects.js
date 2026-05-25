@@ -113,7 +113,9 @@ export function getShareRoute() {
 }
 
 export function createShareLink(shareId, role) {
-  const url = new URL(window.location.href);
+  // Start from a clean origin+pathname so no admin params (?mode=, ?track=, ?version=)
+  // leak into the reviewer share link.  Only share/session/role are set explicitly.
+  const url = new URL(window.location.origin + window.location.pathname);
   url.searchParams.set("share", shareId);
   url.searchParams.set("session", shareId);
   url.searchParams.set("role", normalizeRole(role));

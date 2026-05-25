@@ -76,7 +76,13 @@ const restoredSession = (() => {
 })();
 const legacyInitialVersions = buildInitialVersions(restoredSession);
 const initialTracks = buildInitialTracks(restoredSession, legacyInitialVersions);
-const initialActiveTrackId = restoredSession?.activeTrackId || initialTracks[0]?.id || null;
+// If a specific ?track= param is present and valid, honour it; otherwise always
+// default to the absolute first track (index 0) so a clean reviewer share link
+// never silently lands on an arbitrary mid-session track.
+const initialActiveTrackId =
+  (routeTrackId && initialTracks.some((t) => t.id === routeTrackId))
+    ? routeTrackId
+    : initialTracks[0]?.id || null;
 const initialActiveTrack = initialTracks.find((track) => track.id === initialActiveTrackId) || initialTracks[0] || null;
 const initialVersions = initialActiveTrack?.versions || legacyInitialVersions;
 const initialReviewer =
@@ -313,10 +319,14 @@ export default function App() {
     }
 
     const nextTracks = buildInitialTracks(session, buildInitialVersions(session));
+    // Mirror the module-level policy: honour an explicit ?track= URL param if valid,
+    // otherwise default to tracks[0].  Never fall back to session.activeTrackId so
+    // that the post-hydration state exactly matches the pre-hydration initial state —
+    // preventing a mid-mount WaveSurfer re-init caused by an activeTrackId change.
     const nextActiveTrackId =
-      routeTrackId && nextTracks.some((track) => track.id === routeTrackId)
+      (routeTrackId && nextTracks.some((track) => track.id === routeTrackId))
         ? routeTrackId
-        : session.activeTrackId || nextTracks[0]?.id || null;
+        : nextTracks[0]?.id || null;
     const nextActiveTrack = nextTracks.find((track) => track.id === nextActiveTrackId) || nextTracks[0] || null;
     const nextVersions = nextActiveTrack?.versions || createEmptyVersions();
     revokeVersionUrls(versionsRef.current);
