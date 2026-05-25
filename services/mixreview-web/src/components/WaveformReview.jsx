@@ -526,176 +526,143 @@ export function WaveformReview({
   );
 }
 
+// ── MobileSpectrumStrip — CSS-only animation ─────────────────────────────────
+// No rAF, no canvas, no Math.sin height calculations.
+// Three GPU-composited keyframe sets (bass/mid/high) with per-bar duration+delay
+// so no two neighbours share the same period. A 10 Hz setInterval toggles the
+// "mss-playing" CSS class and drives meter text — zero JS painting per frame.
+
+const _MSS_CSS_ID = "mss-css-v3";
+const _MSS_CSS = `
+@keyframes mss-bass {
+  0%  { transform:scaleY(.09) }
+  22% { transform:scaleY(.83) }
+  44% { transform:scaleY(.29) }
+  68% { transform:scaleY(.78) }
+  100%{ transform:scaleY(.09) }
+}
+@keyframes mss-mid {
+  0%  { transform:scaleY(.06) }
+  27% { transform:scaleY(.61) }
+  53% { transform:scaleY(.16) }
+  77% { transform:scaleY(.56) }
+  100%{ transform:scaleY(.06) }
+}
+@keyframes mss-high {
+  0%  { transform:scaleY(.04) }
+  32% { transform:scaleY(.29) }
+  57% { transform:scaleY(.07) }
+  81% { transform:scaleY(.27) }
+  100%{ transform:scaleY(.04) }
+}
+.mss-wrap {
+  position:relative; overflow:hidden;
+  width:100%; height:80px; flex-shrink:0;
+}
+.mss-bar {
+  position:absolute; bottom:0;
+  transform-origin:center bottom;
+  transform:scaleY(.04);
+  transition:transform .8s ease-out, opacity .5s ease;
+  opacity:.28; border-radius:1px 1px 0 0;
+  will-change:transform;
+}
+.mss-playing .mss-bar {
+  opacity:1;
+  transition:opacity .22s ease;
+}
+.mss-playing .mss-bar[data-t="bass"] {
+  animation-name:mss-bass;
+  animation-timing-function:ease-in-out;
+  animation-iteration-count:infinite;
+}
+.mss-playing .mss-bar[data-t="mid"] {
+  animation-name:mss-mid;
+  animation-timing-function:ease-in-out;
+  animation-iteration-count:infinite;
+}
+.mss-playing .mss-bar[data-t="high"] {
+  animation-name:mss-high;
+  animation-timing-function:ease-in-out;
+  animation-iteration-count:infinite;
+}`;
+
+// Static per-bar config — computed once at module load, never changes.
+// Percentage left/width keeps the horizontal grid entirely CSS-owned.
+const _BAR_CFGS = Array.from({ length: _SPEC_N }, (_, i) => {
+  const type  = i < 8 ? "bass" : i < 21 ? "mid" : "high";
+  const dur   = i < 8
+    ? (1.00 + i * 0.073).toFixed(3) + "s"
+    : i < 21
+    ? (0.53 + (i - 8) * 0.042).toFixed(3) + "s"
+    : (0.26 + (i - 21) * 0.032).toFixed(3) + "s";
+  // Negative delays scatter starting phases so bars are never in sync.
+  const delay = "-" + (i * (i < 8 ? 139 : i < 21 ? 107 : 83)) + "ms";
+  const color = spectrumBandColor(i, 0.68);
+  const slotPct = (100 / _SPEC_N).toFixed(4);
+  const left  = (i * 100 / _SPEC_N).toFixed(4) + "%";
+  const width = `calc(${slotPct}% - 1px)`;
+  return { type, dur, delay, color, left, width };
+});
+
 // ── MobileSpectrumStrip ───────────────────────────────────────────────────────
-// Reads primaryAudio.currentTime each rAF tick — no Web Audio, no AnalyserNode.
-// Each of the 30 columns is driven by its own independent oscillator formula
-// so no two neighbouring bars ever move together. Bass columns (i≈0) swing up
-// to 85% height with heavy momentum; treble columns (i≈29) jitter at up to 35%.
-// When paused → all bars decay to absolute zero within ~1 second.
-// When hidden → rAF cancelled immediately; restarts cleanly on show.
 function MobileSpectrumStrip({ wsRef: _wsRef, onMeterUpdate }) {
-  const canvasRef = useRef(null);
-  const meterRef  = useRef(onMeterUpdate);
+  const wrapRef  = useRef(null);
+  const meterRef = useRef(onMeterUpdate);
   useEffect(() => { meterRef.current = onMeterUpdate; }, [onMeterUpdate]);
 
+  // Inject CSS keyframes once per page session — idempotent.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    let alive = true;
-    let rafId = null;
-
-    // ── Frozen horizontal grid ─────────────────────────────────────────────
-    // Column x-positions and bar pixel width are computed ONCE per resize and
-    // stored here. The draw loop reads only from these arrays — no per-frame
-    // division, no float rounding, nothing time-dependent can affect X coords.
-    let barPx   = 1;            // integer pixel width of each bar
-    let colX    = new Int32Array(_SPEC_N);  // left edge of each column, pixels
-    let labelX  = new Float32Array(_SPEC_N); // centre of each column for labels
-    let canvasH = canvas.height || 80;
-
-    function buildGrid(w) {
-      // Integer slot width, gap of 1px between bars.
-      const slot = Math.max(2, (w / _SPEC_N) | 0);
-      barPx = Math.max(1, slot - 1);
-      const gutter = ((slot - barPx) / 2) | 0; // left padding within slot
-      for (let i = 0; i < _SPEC_N; i++) {
-        colX[i]   = i * slot + gutter;
-        labelX[i] = i * slot + slot / 2;
-      }
+    if (!document.getElementById(_MSS_CSS_ID)) {
+      const s = document.createElement("style");
+      s.id = _MSS_CSS_ID;
+      s.textContent = _MSS_CSS;
+      document.head.appendChild(s);
     }
+  }, []);
 
-    // ── Per-band state ─────────────────────────────────────────────────────
-    // displayed[i]: current rendered amplitude [0,1].
-    // Lerped toward the target each frame for smooth attack and decay.
-    const displayed = new Float32Array(_SPEC_N).fill(0);
-
-    // ── Drawing ────────────────────────────────────────────────────────────
-    function paint(t, playing) {
-      const ctx2d = canvas.getContext("2d");
-      if (!ctx2d) return;
-      const W = canvas.width;
-      const H = canvasH;
-      ctx2d.clearRect(0, 0, W, H);
-
-      for (let i = 0; i < _SPEC_N; i++) {
-        if (playing) {
-          // Each column is driven by its own pair of incommensurable frequencies
-          // so no two bars share the same period — the oscillators never sync.
-          // (i+1) prevents degenerate band-0 (sin(0) = 0 always).
-          const raw  = Math.abs(Math.sin(t * ((i + 1) * 14.3)) * Math.cos(t * (31.7 - i)));
-          // Bass → treble slope: band 0 ≈ 85% ceiling, band 29 ≈ 35% ceiling.
-          const maxH = 0.85 - (i / (_SPEC_N - 1)) * 0.50;
-          const tgt  = raw * maxH;
-          // Instant attack: bar snaps to peak in a single frame.
-          // Clean release: smooth exponential decay (0.85^60 ≈ 0.0001 at 60fps).
-          if (tgt > displayed[i]) {
-            displayed[i] = tgt;
-          } else {
-            displayed[i] *= 0.85;
-          }
-        } else {
-          // Paused: identical decay — columns reach zero within ~1 second.
-          displayed[i] *= 0.85;
-          if (displayed[i] < 0.002) displayed[i] = 0;
-        }
-
-        const amp = displayed[i];
-        ctx2d.fillStyle = spectrumBandColor(i, amp);
-        // X is read from the pre-built frozen grid — never computed here.
-        const h = Math.max(1, (amp * H) | 0);
-        ctx2d.fillRect(colX[i], H - h, barPx, h);
-      }
-
-      // Frequency labels — x coords also from frozen grid.
-      ctx2d.save();
-      ctx2d.font = "bold 8px monospace";
-      ctx2d.textAlign = "center";
-      ctx2d.textBaseline = "top";
-      ctx2d.shadowColor = "rgba(0,0,0,0.65)";
-      ctx2d.shadowBlur = 2;
-      ctx2d.fillStyle = "#ffffff";
-      for (const [i, label] of _SPEC_LABELS) {
-        ctx2d.fillText(label, labelX[i], 2);
-      }
-      ctx2d.restore();
-    }
-
-    // ── RAF loop ──────────────────────────────────────────────────────────
-    function tick() {
-      if (!alive || document.hidden) { rafId = null; return; }
+  // 10 Hz poll — only touches the DOM when playing state actually changes.
+  // Drives meter text at the same cadence; no per-frame painting at all.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    let wasPlaying = false;
+    const id = setInterval(() => {
       const el      = getPrimaryElement();
-      const t       = el?.currentTime ?? 0;
       const playing = Boolean(el && !el.paused && !el.ended);
-      paint(t, playing);
-      if (meterRef.current) {
-        if (playing) {
-          meterRef.current({
-            lufs: (-14.1 + Math.sin(t * 0.37) * 0.4  + Math.sin(t * 1.13) * 0.15).toFixed(1),
-            lra:  (  4.2 + Math.sin(t * 0.61) * 0.2  + Math.sin(t * 1.7 ) * 0.1 ).toFixed(1),
-            tp:   ( -1.1 + Math.sin(t * 0.89) * 0.15).toFixed(1),
-          });
-        } else {
-          meterRef.current(null);
-        }
+      if (playing !== wasPlaying) {
+        wasPlaying = playing;
+        wrap.classList.toggle("mss-playing", playing);
+        if (!playing) meterRef.current?.(null);
       }
-      rafId = requestAnimationFrame(tick);
-    }
-
-    function startRaf() {
-      if (rafId == null && alive && !document.hidden) {
-        rafId = requestAnimationFrame(tick);
+      if (playing) {
+        const t = Date.now() / 1000;
+        meterRef.current?.({
+          lufs: (-14.1 + Math.sin(t * 0.37) * 0.35).toFixed(1),
+          lra:  (  4.2 + Math.sin(t * 0.61) * 0.18).toFixed(1),
+          tp:   ( -1.1 + Math.sin(t * 0.89) * 0.12).toFixed(1),
+        });
       }
-    }
-    function stopRaf() {
-      if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
-    }
-
-    // ── Visibility handling ───────────────────────────────────────────────
-    function onVisibilityChange() {
-      if (!alive) return;
-      if (document.hidden) stopRaf();
-      else startRaf();
-    }
-    document.addEventListener("visibilitychange", onVisibilityChange);
-
-    // ── Canvas sizing ─────────────────────────────────────────────────────
-    // Rebuild the frozen grid whenever the container width changes.
-    // Setting canvas.width clears the bitmap — that is expected and harmless.
-    function applyWidth(w) {
-      if (w > 0 && canvas.width !== w) {
-        canvas.width = w;
-        buildGrid(w);
-      }
-    }
-    const ro = new ResizeObserver(() => {
-      if (!canvas) return;
-      applyWidth(canvas.getBoundingClientRect().width | 0);
-    });
-    ro.observe(canvas);
-    const initW = canvas.getBoundingClientRect().width | 0;
-    applyWidth(initW || 300); // safe fallback if layout hasn't settled yet
-
-    // Start immediately — no polling, no analyser to wait for.
-    startRaf();
-
-    return () => {
-      alive = false;
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      stopRaf();
-      ro.disconnect();
-    };
+    }, 100);
+    return () => clearInterval(id);
   }, []);
 
   return (
-    <canvas
-      ref={canvasRef}
-      className="mobile-spectrum-canvas"
-      width="300"
-      height="80"
-      style={{ display: "block", width: "100%", height: "80px", borderRadius: "3px" }}
-      aria-hidden="true"
-    />
+    <div ref={wrapRef} className="mss-wrap" aria-hidden="true">
+      {_BAR_CFGS.map(({ type, dur, delay, color, left, width }, i) => (
+        <div
+          key={i}
+          className="mss-bar"
+          data-t={type}
+          style={{
+            left, width, height: "100%",
+            background: color,
+            animationDuration: dur,
+            animationDelay: delay,
+          }}
+        />
+      ))}
+    </div>
   );
 }
 
