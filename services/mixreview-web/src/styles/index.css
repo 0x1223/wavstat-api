@@ -2684,6 +2684,8 @@ h2 {
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
     order: 2;
+    /* Reserve space below the waveform canvas equal to ~1 REVIEW button height */
+    padding-bottom: 56px;
   }
 
 }
@@ -2745,6 +2747,11 @@ h2 {
   /* Tighten review console vertical padding in landscape multitrack layout */
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
     padding: 3px 0;
+  }
+
+  /* Smaller gap in landscape since the REVIEW button is shorter */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
+    padding-bottom: 38px;
   }
 }
 
