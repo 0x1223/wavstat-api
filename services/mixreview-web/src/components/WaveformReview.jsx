@@ -128,8 +128,19 @@ export function WaveformReview({
     }
 
     // Desktop: inline WaveSurfer instance
+    //
+    // Lifecycle note: WaveSurfer.create() and all event bindings are deferred
+    // one animation frame so the CSS grid/flex container has completed its
+    // first layout pass before the canvas reads container dimensions.
+    // Without this deferral, the initial default track fires the effect while
+    // the layout is still computing, giving WaveSurfer a zero-width container
+    // and producing a different rendering state than manually switched tracks
+    // (which always run after layout is stable). Deferring one frame makes
+    // both paths identical.
     let isDisposed = false;
     let hasLoaded = false;
+    let wavesurfer = null;
+    let decodeTimeout = null;
 
     // ── HLS peak bypass ─────────────────────────────────────────────────────
     // HLS streams (.m3u8) must never be decoded on the frontend. WaveSurfer's
@@ -142,165 +153,164 @@ export function WaveformReview({
     // element is still created from the URL for normal playback — only the
     // peak extraction path is bypassed.
     //
-    // Priority: backend-provided peaks on audioSource.peaks → static fallback.
-    // Plain JS arrays are used throughout (no Float32Array / typed-array
-    // construction) to avoid Safari/Android WebView compatibility issues.
+    // Plain JS arrays throughout — no Float32Array/typed-array construction —
+    // to avoid Safari/Android WebView compatibility issues.
     const isHLSStream = /\.m3u8(\?|$)/i.test(playbackUrl ?? "");
-
     const staticCurve = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
     const precalcPeaks = isHLSStream
       ? [Array.from({ length: 300 }, (_, i) => staticCurve[i % staticCurve.length])]
       : undefined;
 
-    console.log("[WaveformReview] Desktop decode start", {
-      url: playbackUrl.slice(0, 120),
-      ext,
-      fileSize,
-      hlsBypass: isHLSStream,
-      peaksSource: isHLSStream
-        ? (audioSource?.peaks ? "backend" : "static-fallback")
-        : "wavesurfer-decode",
-    });
+    // Defer DOM binding past first paint — same frame budget for initial load
+    // and all subsequent manual track switches.
+    const rafId = requestAnimationFrame(() => {
+      if (isDisposed || !containerRef.current) return;
 
-    // containerRef, height (180), and fillParent are intentionally fixed —
-    // do not alter them; the waveform canvas must not shift or resize.
-    const wavesurfer = WaveSurfer.create({
-      container: containerRef.current,
-      url: playbackUrl,
-      // HLS only: pre-calculated peaks suppress fetch+decodeAudioData entirely.
-      // Direct audio files (WAV/MP3/FLAC/etc.): omit so WaveSurfer decodes real peaks.
-      ...(precalcPeaks && { peaks: precalcPeaks }),
-      waveColor: "#6d6457",
-      progressColor: "#d6a354",
-      cursorColor: "#f5efe3",
-      cursorWidth: 2,
-      height: 180,
-      barWidth: 2,
-      barGap: 2,
-      barRadius: 2,
-      autoScroll: false,
-      autoCenter: false,
-      normalize: true,
-      dragToSeek: true,
-      fillParent: true
-    });
+      console.log("[WaveformReview] Desktop decode start", {
+        url: playbackUrl.slice(0, 120),
+        ext,
+        fileSize,
+        hlsBypass: isHLSStream,
+        peaksSource: isHLSStream
+          ? (audioSource?.peaks ? "backend" : "static-fallback")
+          : "wavesurfer-decode",
+      });
 
-    wavesurferRef.current = wavesurfer;
+      // containerRef, height (180), and fillParent are intentionally fixed —
+      // do not alter them; the waveform canvas must not shift or resize.
+      wavesurfer = WaveSurfer.create({
+        container: containerRef.current,
+        url: playbackUrl,
+        // HLS only: pre-calculated peaks suppress fetch+decodeAudioData entirely.
+        // Direct audio files (WAV/MP3/FLAC/etc.): omit so WaveSurfer decodes real peaks.
+        ...(precalcPeaks && { peaks: precalcPeaks }),
+        waveColor: "#6d6457",
+        progressColor: "#d6a354",
+        cursorColor: "#f5efe3",
+        cursorWidth: 2,
+        height: 180,
+        barWidth: 2,
+        barGap: 2,
+        barRadius: 2,
+        autoScroll: false,
+        autoCenter: false,
+        normalize: true,
+        dragToSeek: true,
+        fillParent: true
+      });
 
-    // ── Desktop decode timeout ──────────────────────────────────────────
-    // If WaveSurfer's fetch or decodeAudioData stalls, surface a clear message
-    // rather than leaving the UI stuck on "Preparing waveform" forever.
-    const DESKTOP_TIMEOUT_MS = 20_000;
-    const decodeTimeout = setTimeout(() => {
-      if (isDisposed || hasLoaded) return;
-      hasLoaded = true;
-      console.warn("[WaveformReview] Desktop decode timeout after", DESKTOP_TIMEOUT_MS, "ms");
-      const mediaEl = wavesurfer.getMediaElement?.();
-      if (mediaEl && !mediaEl.error && mediaEl.readyState >= 2) {
-        // Audio element has data even though waveform decode stalled — audio-only
-        mediaEl.muted = false;
-        mediaEl.volume = 1;
-        const dur = Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0;
-        setDuration(dur);
+      wavesurferRef.current = wavesurfer;
+
+      // ── Desktop decode timeout ────────────────────────────────────────────
+      // If WaveSurfer's fetch or decodeAudioData stalls, surface a clear
+      // message rather than leaving the UI stuck on "Preparing waveform".
+      const DESKTOP_TIMEOUT_MS = 20_000;
+      decodeTimeout = setTimeout(() => {
+        if (isDisposed || hasLoaded) return;
+        hasLoaded = true;
+        console.warn("[WaveformReview] Desktop decode timeout after", DESKTOP_TIMEOUT_MS, "ms");
+        const mediaEl = wavesurfer.getMediaElement?.();
+        if (mediaEl && !mediaEl.error && mediaEl.readyState >= 2) {
+          // Audio element has data even though waveform decode stalled — audio-only
+          mediaEl.muted = false;
+          mediaEl.volume = 1;
+          const dur = Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0;
+          setDuration(dur);
+          setIsLoading(false);
+          setLoadError("Waveform unavailable — audio is ready to play");
+          callbacksRef.current.onDurationChange(dur);
+          callbacksRef.current.onReady({
+            wavesurfer,
+            mediaElement: mediaEl,
+            play: async () => { await wavesurfer.play(); },
+            pause: () => wavesurfer.pause(),
+            playPause: async () => { await wavesurfer.playPause(); },
+            skip: (s) => wavesurfer.skip(s),
+            seekToTime: (time) => {
+              const t = Math.min(Math.max(time, 0), wavesurfer.getDuration());
+              wavesurfer.setTime(t);
+              callbacksRef.current.onTimeUpdate(t);
+            },
+          });
+        } else {
+          setIsLoading(false);
+          setLoadError("Waveform generation timed out — please refresh and try again.");
+          callbacksRef.current.onReady(null);
+          callbacksRef.current.onDurationChange(0);
+          callbacksRef.current.onPlaybackChange(false);
+        }
+      }, DESKTOP_TIMEOUT_MS);
+
+      wavesurfer.on("ready", () => {
+        if (isDisposed) return;
+
+        hasLoaded = true;
+        clearTimeout(decodeTimeout);
+        const audioDuration = wavesurfer.getDuration();
+        const mediaElement = wavesurfer.getMediaElement();
+        if (mediaElement) {
+          mediaElement.muted = false;
+          mediaElement.volume = 1;
+          mediaElement.preload = "auto";
+        }
+        console.log("[WaveformReview] Desktop decode success", {
+          duration: audioDuration,
+          readyState: mediaElement?.readyState,
+        });
+        setDuration(audioDuration);
         setIsLoading(false);
-        setLoadError("Waveform unavailable — audio is ready to play");
-        callbacksRef.current.onDurationChange(dur);
+        callbacksRef.current.onDurationChange(audioDuration);
         callbacksRef.current.onReady({
           wavesurfer,
-          mediaElement: mediaEl,
+          mediaElement,
           play: async () => { await wavesurfer.play(); },
           pause: () => wavesurfer.pause(),
           playPause: async () => { await wavesurfer.playPause(); },
-          skip: (s) => wavesurfer.skip(s),
+          skip: (seconds) => wavesurfer.skip(seconds),
           seekToTime: (time) => {
-            const t = Math.min(Math.max(time, 0), wavesurfer.getDuration());
-            wavesurfer.setTime(t);
-            callbacksRef.current.onTimeUpdate(t);
-          },
+            const nextTime = Math.min(Math.max(time, 0), wavesurfer.getDuration());
+            wavesurfer.setTime(nextTime);
+            callbacksRef.current.onTimeUpdate(nextTime);
+          }
         });
-      } else {
+      });
+
+      wavesurfer.on("error", (error) => {
+        if (isDisposed || hasLoaded) return;
+
+        hasLoaded = true;
+        clearTimeout(decodeTimeout);
+        console.warn("[WaveformReview] Desktop decode failure", error?.message ?? String(error));
         setIsLoading(false);
-        setLoadError("Waveform generation timed out — please refresh and try again.");
+        setLoadError("This audio file could not be decoded. Try a WAV or MP3 file.");
         callbacksRef.current.onReady(null);
         callbacksRef.current.onDurationChange(0);
         callbacksRef.current.onPlaybackChange(false);
-      }
-    }, DESKTOP_TIMEOUT_MS);
-
-    wavesurfer.on("ready", () => {
-      if (isDisposed) {
-        return;
-      }
-
-      hasLoaded = true;
-      clearTimeout(decodeTimeout);
-      const audioDuration = wavesurfer.getDuration();
-      const mediaElement = wavesurfer.getMediaElement();
-      if (mediaElement) {
-        mediaElement.muted = false;
-        mediaElement.volume = 1;
-        mediaElement.preload = "auto";
-      }
-      console.log("[WaveformReview] Desktop decode success", {
-        duration: audioDuration,
-        readyState: mediaElement?.readyState,
       });
-      setDuration(audioDuration);
-      setIsLoading(false);
-      callbacksRef.current.onDurationChange(audioDuration);
-      callbacksRef.current.onReady({
-        wavesurfer,
-        mediaElement,
-        play: async () => { await wavesurfer.play(); },
-        pause: () => wavesurfer.pause(),
-        playPause: async () => { await wavesurfer.playPause(); },
-        skip: (seconds) => wavesurfer.skip(seconds),
-        seekToTime: (time) => {
-          const nextTime = Math.min(Math.max(time, 0), wavesurfer.getDuration());
-          wavesurfer.setTime(nextTime);
-          callbacksRef.current.onTimeUpdate(nextTime);
-        }
+
+      wavesurfer.on("timeupdate", (time) => {
+        if (!isDisposed) callbacksRef.current.onTimeUpdate(time);
       });
-    });
 
-    wavesurfer.on("error", (error) => {
-      if (isDisposed || hasLoaded) {
-        return;
-      }
-
-      hasLoaded = true;
-      clearTimeout(decodeTimeout);
-      console.warn("[WaveformReview] Desktop decode failure", error?.message ?? String(error));
-      setIsLoading(false);
-      setLoadError("This audio file could not be decoded. Try a WAV or MP3 file.");
-      callbacksRef.current.onReady(null);
-      callbacksRef.current.onDurationChange(0);
-      callbacksRef.current.onPlaybackChange(false);
-    });
-
-    wavesurfer.on("timeupdate", (time) => {
-      if (!isDisposed) {
-        callbacksRef.current.onTimeUpdate(time);
-      }
-    });
-
-    wavesurfer.on("play", () => {
-      if (!isDisposed) callbacksRef.current.onPlaybackChange(true);
-    });
-    wavesurfer.on("pause", () => {
-      if (!isDisposed) callbacksRef.current.onPlaybackChange(false);
-    });
-    wavesurfer.on("finish", () => {
-      if (!isDisposed) callbacksRef.current.onPlaybackChange(false);
+      wavesurfer.on("play", () => {
+        if (!isDisposed) callbacksRef.current.onPlaybackChange(true);
+      });
+      wavesurfer.on("pause", () => {
+        if (!isDisposed) callbacksRef.current.onPlaybackChange(false);
+      });
+      wavesurfer.on("finish", () => {
+        if (!isDisposed) callbacksRef.current.onPlaybackChange(false);
+      });
     });
 
     return () => {
       isDisposed = true;
+      cancelAnimationFrame(rafId);
       clearTimeout(decodeTimeout);
-      if (wavesurferRef.current === wavesurfer) {
-        wavesurferRef.current = null;
+      if (wavesurfer) {
+        if (wavesurferRef.current === wavesurfer) wavesurferRef.current = null;
+        wavesurfer.destroy();
       }
-      wavesurfer.destroy();
       resizeObserver.disconnect();
     };
   }, [audioSource?.playbackUrl, audioSource?.url]);
