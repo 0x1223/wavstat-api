@@ -1,40 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
-import { disposeMobileEngine, getPrimaryElement, mountMobileEngine } from "../lib/mobileAudioEngine.js";
+import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
 
-// ── Mobile spectrum analyzer ─────────────────────────────────────────────
-const _SPEC_CENTERS = [
-  25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200,
-  250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000,
-  2500, 3150, 4000, 5000, 6300, 8000, 10_000, 12_500, 16_000, 20_000,
-];
-const _SPEC_N = _SPEC_CENTERS.length; // 30
-const _SPEC_LABELS = [
-  [1, "31"], [4, "63"], [7, "125"], [10, "250"], [13, "500"],
-  [16, "1k"], [19, "2k"], [22, "4k"], [25, "8k"], [28, "16kHz"],
-];
-// 6-stop gradient: Blue → Cyan → Green → Yellow-Green → Yellow → Orange (no red)
-const _SPEC_STOPS = [
-  { h: 212, s: 80,  l: 42 }, // #1565C0 blue
-  { h: 187, s: 100, l: 42 }, // #00BCD4 cyan
-  { h: 122, s: 39,  l: 49 }, // #4CAF50 green
-  { h: 88,  s: 50,  l: 53 }, // #8BC34A yellow-green
-  { h: 54,  s: 100, l: 62 }, // #FFEB3B yellow
-  { h: 36,  s: 100, l: 50 }, // #FF9800 orange
-];
-
-function spectrumBandColor(i, amp) {
-  const t = i / (_SPEC_N - 1);
-  const seg = Math.min(_SPEC_STOPS.length - 2, Math.floor(t * (_SPEC_STOPS.length - 1)));
-  const frac = t * (_SPEC_STOPS.length - 1) - seg;
-  const a = _SPEC_STOPS[seg], b = _SPEC_STOPS[seg + 1];
-  const hue = (a.h + frac * (b.h - a.h)) | 0;
-  const sat = (a.s + frac * (b.s - a.s)) | 0;
-  const baseL = a.l + frac * (b.l - a.l);
-  const lit = (28 + amp * Math.max(0, baseL - 28)) | 0;
-  return `hsl(${hue},${sat}%,${lit}%)`;
-}
 
 export function WaveformReview({
   audioSource,
@@ -51,7 +19,6 @@ export function WaveformReview({
   onPlaybackChange,
   isReviewerMode = false,
   onMobileNoteRequest,
-  onMeterUpdate
 }) {
   const containerRef = useRef(null);
   const wavesurferRef = useRef(null);
@@ -62,7 +29,6 @@ export function WaveformReview({
     onTimeUpdate,
     onTimestampCreate,
     onMobileNoteRequest,
-    onMeterUpdate
   });
   const [duration, setDuration] = useState(0);
   const [waveformWidth, setWaveformWidth] = useState(0);
@@ -78,9 +44,8 @@ export function WaveformReview({
       onTimeUpdate,
       onTimestampCreate,
       onMobileNoteRequest,
-      onMeterUpdate
     };
-  }, [onDurationChange, onMobileNoteRequest, onMeterUpdate, onPlaybackChange, onReady, onTimeUpdate, onTimestampCreate]);
+  }, [onDurationChange, onMobileNoteRequest, onPlaybackChange, onReady, onTimeUpdate, onTimestampCreate]);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -512,123 +477,10 @@ export function WaveformReview({
         </div>
       )}
 
-      {isMobileViewport() && hasAudio && (
-        <div className="mobile-spectrum-container">
-          <MobileSpectrumStrip
-            key={audioSource?.playbackUrl || audioSource?.url}
-            wsRef={wavesurferRef}
-            onMeterUpdate={(data) => callbacksRef.current.onMeterUpdate?.(data)}
-          />
-        </div>
-      )}
-
     </section>
   );
 }
 
-// ── MobileSpectrumStrip — static placeholder ─────────────────────────────────
-// No keyframes, no rAF, no Math.sin/cos.
-// A 10 Hz setInterval detects play/pause transitions and flips React state.
-// Bar heights are frozen to a deterministic static array while playing;
-// all bars return to a low uniform idle baseline when paused.
-
-const _MSS_CSS_ID = "mss-css-v4";
-const _MSS_CSS = `
-.mss-wrap {
-  position:relative; overflow:hidden;
-  width:100%; height:80px; flex-shrink:0;
-}
-.mss-bar {
-  position:absolute; bottom:0;
-  transform-origin:center bottom;
-  transition:transform .8s ease-out, opacity .5s ease;
-  opacity:.28; border-radius:1px 1px 0 0;
-}
-.mss-playing .mss-bar {
-  opacity:1;
-  transition:opacity .22s ease;
-}`;
-
-// Deterministic static display heights — computed once, never change.
-// _IDLE_SCALE: uniform low baseline while paused.
-// _PLAY_SCALES: frozen per-bar scaleY values while playing (realistic spectrum shape).
-const _IDLE_SCALE  = 0.04;
-const _PLAY_SCALES = [
-  // Bass  25–160 Hz  (bars 0–7) — rolls off from sub-bass
-  0.45, 0.58, 0.67, 0.73, 0.78, 0.82, 0.79, 0.75,
-  // Low-mid 200–1600 Hz (bars 8–20) — fullest energy range
-  0.72, 0.76, 0.81, 0.78, 0.74, 0.70, 0.68, 0.65, 0.63, 0.61, 0.58, 0.55, 0.52,
-  // High  2k–20kHz   (bars 21–29) — steadily rolling off
-  0.48, 0.44, 0.39, 0.34, 0.29, 0.24, 0.20, 0.16, 0.12,
-];
-
-// Static per-bar geometry — computed once at module load, never changes.
-// Percentage left/width keeps the horizontal grid entirely CSS-owned.
-const _BAR_CFGS = Array.from({ length: _SPEC_N }, (_, i) => {
-  const color      = spectrumBandColor(i, 0.68);
-  const slotPct    = (100 / _SPEC_N).toFixed(4);
-  const left       = (i * 100 / _SPEC_N).toFixed(4) + "%";
-  const width      = `calc(${slotPct}% - 1px)`;
-  const playScale  = _PLAY_SCALES[i];
-  return { color, left, width, playScale };
-});
-
-// ── MobileSpectrumStrip ───────────────────────────────────────────────────────
-// Static placeholder: no rAF, no Math.sin/cos, no keyframe animations.
-// A 10 Hz setInterval detects play/pause transitions only.
-// Bar heights are frozen to _PLAY_SCALES while playing; _IDLE_SCALE when paused.
-function MobileSpectrumStrip({ wsRef: _wsRef, onMeterUpdate }) {
-  const meterRef                = useRef(onMeterUpdate);
-  const [isPlaying, setIsPlaying] = useState(false);
-  useEffect(() => { meterRef.current = onMeterUpdate; }, [onMeterUpdate]);
-
-  // Inject simplified CSS once per page session — idempotent.
-  useEffect(() => {
-    if (!document.getElementById(_MSS_CSS_ID)) {
-      const s = document.createElement("style");
-      s.id = _MSS_CSS_ID;
-      s.textContent = _MSS_CSS;
-      document.head.appendChild(s);
-    }
-  }, []);
-
-  // 10 Hz poll — flips React state only when playing transitions.
-  // No Math.sin, no per-frame DOM mutations, no rAF.
-  useEffect(() => {
-    let wasPlaying = false;
-    const id = setInterval(() => {
-      const el      = getPrimaryElement();
-      const playing = Boolean(el && !el.paused && !el.ended);
-      if (playing !== wasPlaying) {
-        wasPlaying = playing;
-        setIsPlaying(playing);
-        if (!playing) {
-          meterRef.current?.(null);
-        } else {
-          // Fixed static meter values — no time-based oscillation.
-          meterRef.current?.({ lufs: "-14.1", lra: "4.2", tp: "-1.1" });
-        }
-      }
-    }, 100);
-    return () => clearInterval(id);
-  }, []);
-
-  return (
-    <div className={`mss-wrap${isPlaying ? " mss-playing" : ""}`} aria-hidden="true">
-      {_BAR_CFGS.map(({ color, left, width, playScale }, i) => (
-        <div
-          key={i}
-          className="mss-bar"
-          style={{
-            left, width, height: "100%",
-            background: color,
-            transform: `scaleY(${isPlaying ? playScale : _IDLE_SCALE})`,
-          }}
-        />
-      ))}
-    </div>
-  );
-}
 
 function isMobileViewport() {
   // Matches the CSS breakpoint: portrait phones (width ≤ 768px) OR

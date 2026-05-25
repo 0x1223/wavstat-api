@@ -5,7 +5,6 @@ import { Header } from "./components/Header.jsx";
 import { MobileTrackNav } from "./components/MobileTrackNav.jsx";
 import { ReviewDashboard } from "./components/ReviewDashboard.jsx";
 import { SharePanel } from "./components/SharePanel.jsx";
-import { SpectrumAnalyzer } from "./components/SpectrumAnalyzer.jsx";
 import { StartScreen } from "./components/StartScreen.jsx";
 import { TrackList } from "./components/TrackList.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
@@ -180,7 +179,6 @@ export default function App() {
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [mediaElement, setMediaElement] = useState(null);
   const [mobileNoteDraft, setMobileNoteDraft] = useState(null);
-  const [meterValues, setMeterValues] = useState(null);
   const [mobileCommentDrawerId, setMobileCommentDrawerId] = useState(null);
   const [mobileCommentDraft, setMobileCommentDraft] = useState("");
   const [deleteConfirmPending, setDeleteConfirmPending] = useState(false);
@@ -1356,10 +1354,6 @@ export default function App() {
     updateActiveVersion((version) => ({ ...version, duration: nextDuration }));
   }, [updateActiveVersion]);
 
-  const handleMeterUpdate = useCallback((vals) => {
-    setMeterValues(vals);
-  }, []);
-
   const handlePlaybackTimeUpdate = useCallback((time) => {
     setCurrentTime(time);
 
@@ -1725,12 +1719,7 @@ export default function App() {
             onPlaybackChange={setIsPlaying}
             isReviewerMode={isReviewerMode}
             onMobileNoteRequest={openMobileNote}
-            onMeterUpdate={isReviewerMode && tracks.length > 1 ? handleMeterUpdate : undefined}
           />
-          {/* Desktop analyzer only — MobileSpectrumAnalyzer owns the audio graph on mobile reviewer */}
-          {(!isReviewerMode || !isMobileViewport()) && (
-            <SpectrumAnalyzer mediaElement={mediaElement} isPlaying={isPlaying} />
-          )}
         </div>
 
         <div className="review-side">
@@ -1860,9 +1849,6 @@ export default function App() {
         }}
         onSkipBackward={() => playerRef.current?.skip(-5)}
         onSkipForward={() => playerRef.current?.skip(5)}
-        loudnessMeta={isReviewerMode && tracks.length > 1
-          ? (meterValues ?? { lufs: "–", lra: "–", tp: "–" })
-          : null}
       />
 
       {isReviewerMode && mobileNoteDraft && (

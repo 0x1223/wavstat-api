@@ -1,11 +1,5 @@
 import { formatTimecode } from "../lib/time.js";
 
-function dbToFill(db, min = -60, max = 0) {
-  const n = parseFloat(db);
-  if (!isFinite(n)) return 0;
-  return Math.min(1, Math.max(0, (n - min) / (max - min)));
-}
-
 export function TransportBar({
   currentTime,
   duration,
@@ -14,7 +8,6 @@ export function TransportBar({
   onPlayPause,
   onSkipBackward,
   onSkipForward,
-  loudnessMeta = null
 }) {
   return (
     <footer className="transport" aria-label="Playback controls">
@@ -60,28 +53,6 @@ export function TransportBar({
         <span>Local audio</span>
       </div>
 
-      {loudnessMeta && (
-        <div className="transport-loudness" aria-label="Loudness metrics">
-          <div className="transport-loudness-row">
-            <span className="transport-loudness-label">LUFS</span>
-            <div className="transport-loudness-bar">
-              <div className="transport-loudness-fill" style={{ "--meter-fill": dbToFill(loudnessMeta.lufs) }} />
-            </div>
-            <span className="transport-loudness-value">{loudnessMeta.lufs}</span>
-          </div>
-          <div className="transport-loudness-row transport-loudness-row--lra">
-            <span className="transport-loudness-label">LRA</span>
-            <span className="transport-loudness-value">{loudnessMeta.lra}</span>
-          </div>
-          <div className="transport-loudness-row">
-            <span className="transport-loudness-label">TP</span>
-            <div className="transport-loudness-bar">
-              <div className="transport-loudness-fill" style={{ "--meter-fill": dbToFill(loudnessMeta.tp) }} />
-            </div>
-            <span className="transport-loudness-value">{loudnessMeta.tp}</span>
-          </div>
-        </div>
-      )}
     </footer>
   );
 }

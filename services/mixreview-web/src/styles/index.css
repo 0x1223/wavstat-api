@@ -1860,79 +1860,6 @@ h2 {
   background: rgba(127, 210, 145, 0.08);
 }
 
-.spectrum-panel {
-  border: 1px solid rgba(255, 255, 255, 0.11);
-  border-radius: 8px;
-  padding: 18px 22px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 42%),
-    rgba(13, 13, 13, 0.9);
-  box-shadow:
-    0 20px 70px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  animation: rise-in 460ms ease both;
-}
-
-.spectrum-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-}
-
-.band-meter {
-  min-width: 220px;
-  display: grid;
-  gap: 6px;
-}
-
-.band-meter span {
-  display: grid;
-  grid-template-columns: 38px 1fr;
-  align-items: center;
-  gap: 8px;
-  color: var(--soft);
-  font-size: 0.72rem;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.band-meter i {
-  block-size: 5px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #8ec78f, #f1c15e);
-  box-shadow: 0 0 14px rgba(241, 193, 94, 0.28);
-}
-
-.spectrum-canvas-wrap {
-  position: relative;
-  min-height: 164px;
-  margin-top: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  overflow: hidden;
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(180deg, #151515, #0c0c0c);
-  background-size: 72px 100%, 100% 100%;
-}
-
-.spectrum-canvas-wrap canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: calc(100% - 24px);
-}
-
-.frequency-labels {
-  position: absolute;
-  inset: auto 12px 6px;
-  display: flex;
-  justify-content: space-between;
-  color: #7f766a;
-  font-size: 0.68rem;
-  font-variant-numeric: tabular-nums;
-}
 
 .transport {
   min-height: 78px;
@@ -2163,8 +2090,7 @@ h2 {
     gap: 6px;
   }
 
-  .reviewer-mode .track-list-panel,
-  .reviewer-mode .spectrum-panel {
+  .reviewer-mode .track-list-panel {
     padding: 8px;
   }
 
@@ -2324,7 +2250,6 @@ h2 {
     display: none;
   }
 
-  .reviewer-mode .spectrum-panel,
   .reviewer-mode .review-dashboard,
   .reviewer-mode .review-side,
   .reviewer-mode .comment-sidebar {
@@ -2471,18 +2396,6 @@ h2 {
     color: #130d04;
     border-color: rgba(215, 173, 98, 0.55);
     background: linear-gradient(180deg, #ffd889, #d6a354);
-  }
-
-  .mobile-spectrum-container {
-    margin-top: 14px;
-    padding-bottom: 4px;
-  }
-
-  .mobile-spectrum-canvas {
-    display: block;
-    width: 100%;
-    height: 52px;
-    border-radius: 3px;
   }
 
   /* Comment drawer must always clear the fixed transport.
@@ -2703,7 +2616,7 @@ h2 {
   }
 
   /* Waveform card becomes a flex column so its children stack in order:
-     mix-strip → waveform-stage (fills remaining space) → review-console → spectrum */
+     mix-strip → waveform-stage (fills remaining space) → review-console */
   .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
     flex: 1;
     min-height: 0;
@@ -2732,77 +2645,6 @@ h2 {
     pointer-events: auto;
   }
 
-  /* Spectrum — back in normal flow inside the card */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .mobile-spectrum-container {
-    position: relative;
-    inset: auto;
-    z-index: auto;
-    flex-shrink: 0;
-    margin: 0;
-    padding: 0;
-    background: rgba(10, 10, 10, 0.94);
-    border-radius: 4px;
-  }
-
-  /* ─ Loudness meter in multitrack transport ──────────────────────────── */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: stretch;
-    gap: 3px;
-    grid-column: 3;
-    padding-left: 8px;
-    margin-right: 10px;
-    border-left: 1px solid rgba(255, 255, 255, 0.07);
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-row {
-    display: grid;
-    grid-template-columns: 26px 1fr 38px;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-row--lra {
-    grid-template-columns: 26px 38px;
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-label {
-    font-size: 0.5rem;
-    font-weight: 800;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: rgba(215, 173, 98, 0.55);
-    text-align: right;
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-value {
-    font-size: 0.72rem;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.02em;
-    color: #fff4db;
-    min-width: 32px;
-    text-align: right;
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-bar {
-    height: 3px;
-    background: rgba(215, 173, 98, 0.12);
-    border-radius: 2px;
-    overflow: hidden;
-    position: relative;
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .transport-loudness-fill {
-    position: absolute;
-    inset: 0;
-    width: calc(var(--meter-fill, 0) * 100%);
-    background: linear-gradient(to right, rgba(80, 168, 100, 0.9), rgba(215, 163, 84, 0.9));
-    border-radius: 2px;
-    transition: width 0.08s linear;
-  }
 }
 
 /* ─ Landscape-phone-only overrides ─────────────────────────────────────────
