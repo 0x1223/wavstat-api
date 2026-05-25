@@ -467,8 +467,9 @@ export function WaveformReview({
                 onClick={() => setIsMarkerToolActive((c) => !c)}
               >
                 <span aria-hidden="true">✍️</span>
-                <span className="tool-label">Review</span>
+                <span className="tool-label">Click to Review</span>
               </button>
+              <span className="review-cta-hint">Click waveform to comment</span>
               {isMarkerToolActive && (
                 <span className="marker-tool-hint">Click the waveform to place a marker</span>
               )}

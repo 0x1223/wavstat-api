@@ -2217,11 +2217,17 @@ h2 {
 
   .reviewer-mode .review-console {
   display: flex;
-  width: 100%;
-  justify-content: center;
+  flex-direction: column;
   align-items: center;
-  padding-top: 6px;
-  margin-top: 4px;
+  justify-content: center;
+  gap: 6px;
+  /* Full-bleed to card edges — parent overflow:hidden clips visually */
+  width: calc(100% + 12px);
+  margin-left: -6px;
+  padding: 10px 6px;
+  border-top: 2px solid rgba(255, 214, 102, 0.55);
+  border-bottom: 2px solid rgba(255, 214, 102, 0.55);
+  background: rgba(10, 10, 10, 0.6);
 }
 .tool-label {
   font-size: 0.72rem;
@@ -2230,13 +2236,29 @@ h2 {
   text-transform: uppercase;
 }
 
+/* Hidden on desktop; shown only inside reviewer-mode mobile block below */
+.review-cta-hint {
+  display: none;
+}
+
+  .reviewer-mode .review-cta-hint {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffe680;
+  text-shadow: 0 0 8px rgba(255, 214, 102, 0.7), 0 0 18px rgba(255, 180, 0, 0.35);
+  text-align: center;
+}
+
 .reviewer-mode .marker-tool-toggle {
   min-width: 140px;
   height: 52px;
   border-radius: 14px;
   border: 1px solid rgba(255, 214, 102, 0.35);
   background: rgba(18, 18, 18, 0.92);
-  color: #ffd666;
+  color: #ffe680;
   font-size: 24px;
   display: flex;
   align-items: center;
@@ -2640,8 +2662,8 @@ h2 {
     inset: auto;
     z-index: auto;
     flex-shrink: 0;
-    padding: 6px 0;
-    margin: 0;
+    padding: 6px 6px;
+    margin: 0 0 0 -6px;
     pointer-events: auto;
   }
 
@@ -2703,7 +2725,7 @@ h2 {
 
   /* Tighten review console vertical padding in landscape multitrack layout */
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
-    padding: 3px 0;
+    padding: 3px 6px;
   }
 }
 
