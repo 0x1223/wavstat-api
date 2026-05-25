@@ -2149,7 +2149,7 @@ h2 {
   }
 
   .reviewer-mode .waveform-panel {
-    grid-template-rows: auto auto;
+    grid-template-rows: auto auto auto;
     gap: 6px;
     padding-bottom: 0;
   }
@@ -2157,6 +2157,7 @@ h2 {
   .reviewer-mode .waveform-stage {
   min-height: auto;
   padding-bottom: 0;
+  order: 2;
 }
 
   .reviewer-mode .waveform {
@@ -2220,8 +2221,9 @@ h2 {
   width: 100%;
   justify-content: center;
   align-items: center;
-  padding-top: 6px;
-  margin-top: 4px;
+  padding-bottom: 6px;
+  margin-bottom: 4px;
+  order: 1;
 }
 .tool-label {
   font-size: 0.72rem;
@@ -2634,7 +2636,7 @@ h2 {
     overflow: hidden;
   }
 
-  /* Review console — back in normal flow inside the card */
+  /* Review console — above waveform-stage via order */
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
     position: static;
     inset: auto;
@@ -2643,6 +2645,11 @@ h2 {
     padding: 6px 0;
     margin: 0;
     pointer-events: auto;
+    order: 1;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
+    order: 2;
   }
 
 }
