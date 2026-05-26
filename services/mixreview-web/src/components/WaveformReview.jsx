@@ -486,7 +486,6 @@ export function WaveformReview({
   <div
     ref={containerRef}
     className="waveform"
-    style={{ minHeight: 180 }}
     onTouchMove={(event) => {
       const touch = event.changedTouches?.[0];
       if (!touch || !containerRef.current || !duration) return;

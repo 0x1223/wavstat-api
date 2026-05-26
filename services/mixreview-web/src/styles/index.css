@@ -2079,14 +2079,26 @@ h2 {
       iPad landscape is ≥ 768 px so it is NOT matched here) */
 @media (max-width: 768px), (orientation: landscape) and (max-height: 500px) {
   .app-shell.reviewer-mode {
-    display: block;
-    padding: 8px 8px 76px;
-    /* clip doesn't create a scroll container, so iOS Safari doesn't
-       trap position:fixed drawers inside this element's paint region */
-    overflow-x: clip;
+    /* Rigid full-screen flex column — nothing scrolls, nothing overflows.
+       height: 100dvh uses the dynamic viewport height so the layout
+       adapts correctly when the iOS Safari address bar shows/hides.
+       overflow: hidden clips content that can't fit (e.g. ultra-short
+       screens) instead of creating a scrollable document. */
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+    padding: 8px 8px 0;
+    /* Reserve space for the fixed transport bar + iOS home indicator */
+    padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
   }
 
   .reviewer-mode .top-stack {
+    /* Don't let the header compress — it must keep its natural height */
+    flex-shrink: 0;
     gap: 4px;
   }
 
@@ -2134,15 +2146,22 @@ h2 {
   }
 
   .reviewer-mode .review-layout {
-    display: grid;
-    grid-template-columns: 1fr;
+    /* Stretch to fill all remaining height below the header */
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     gap: 6px;
+    overflow: hidden;
   }
 
   .reviewer-mode .review-main,
   .reviewer-mode .review-side {
-    display: grid;
-    grid-template-rows: auto;
+    /* Each section stretches to fill its parent */
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     gap: 6px;
   }
 
@@ -2186,6 +2205,8 @@ h2 {
   }
 
   .reviewer-mode .mix-strip {
+    /* Track title row: fixed height, never compressed by flex */
+    flex-shrink: 0;
     align-items: center;
     flex-direction: row;
   }
@@ -2205,16 +2226,25 @@ h2 {
   }
 
   .reviewer-mode .waveform-panel {
-    grid-template-rows: auto auto auto;
+    /* Waveform card fills whatever height review-main gives it */
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
     gap: 6px;
     padding-bottom: 0;
+    overflow: hidden;
   }
 
   .reviewer-mode .waveform-stage {
-  min-height: auto;
-  padding-bottom: 0;
-  order: 2;
-}
+    /* Waveform stage takes all remaining height inside the waveform card.
+       min-height: 0 lets it shrink below 320px on small screens;
+       overflow: hidden clips the WaveSurfer canvas on ultra-short viewports. */
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    order: 2;
+  }
 
   .reviewer-mode .waveform {
     min-height: 180px;
@@ -2273,14 +2303,16 @@ h2 {
   }
 
   .reviewer-mode .review-console {
-  display: flex;
-  width: 100%;
-  justify-content: center;
-  align-items: center;
-  padding-bottom: 6px;
-  margin-bottom: 4px;
-  order: 1;
-}
+    /* Review button row: fixed height above the waveform (order: 1) */
+    flex-shrink: 0;
+    display: flex;
+    width: 100%;
+    justify-content: center;
+    align-items: center;
+    padding-bottom: 6px;
+    margin-bottom: 4px;
+    order: 1;
+  }
 .tool-label {
   font-size: 0.72rem;
   font-weight: 700;
@@ -2493,7 +2525,10 @@ h2 {
     flex-direction: column;
     gap: 4px;
     overflow-y: auto;
-    max-height: 160px;
+    /* Dynamic cap: 22% of the live viewport height so the list never
+       dominates a small screen. Clamp keeps it between 80px (very
+       short phones) and 160px (normal portrait phones). */
+    max-height: clamp(80px, 22dvh, 160px);
     padding: 1px;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
@@ -2650,13 +2685,15 @@ h2 {
   }
 
   /* ─ Full-height flex layout for multitrack mobile reviewer ─────────── */
-  /* Transport is fixed at the bottom; everything else is in normal flow.
-     padding-bottom reserves space for the transport + safe area so the
-     card never slides behind the transport on any phone size. */
+  /* Matches the single-track base rule but explicitly locks the shell to
+     exactly 100dvh so the multi-track nav + waveform can never cause
+     the page to be taller than the viewport (which would create scroll). */
   .app-shell.reviewer-mode:has(.mobile-track-nav) {
     display: flex;
     flex-direction: column;
-    min-height: 100dvh;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
     padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
   }
 
