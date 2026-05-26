@@ -34,6 +34,19 @@ export function WaveformReview({
   // Once locked to an axis for a given gesture the decision is final until touchend.
   const touchStartRef = useRef(null);
   const gestureAxisRef = useRef(null);
+  // ── Pinch-to-zoom refs ────────────────────────────────────────────────────
+  // zoomScaleRef    — always-current scale factor; never stale inside RAF/native listeners.
+  // zoomWrapperRef  — div that wraps canvas + marker-layer; scaleX written directly here
+  //                   so both children move on the same GPU layer in the same frame.
+  // waveformStageRef — stage element; pinch listeners are attached here to cover the
+  //                   full touch area, not just the canvas.
+  // pinchStateRef   — { initialDist, initialZoom } captured on touchstart with 2 fingers.
+  // rafPinchId      — cancelAnimationFrame handle; ensures one DOM write per frame.
+  const zoomScaleRef = useRef(1.0);
+  const zoomWrapperRef = useRef(null);
+  const waveformStageRef = useRef(null);
+  const pinchStateRef = useRef(null);
+  const rafPinchId = useRef(null);
   const callbacksRef = useRef({
     onDurationChange,
     onPlaybackChange,
@@ -58,6 +71,71 @@ export function WaveformReview({
       onMobileNoteRequest,
     };
   }, [onDurationChange, onMobileNoteRequest, onPlaybackChange, onReady, onTimeUpdate, onTimestampCreate]);
+
+  // ── Pinch-to-zoom: non-passive native listeners on the stage ─────────────
+  // Must use addEventListener({ passive: false }) so e.preventDefault() can
+  // suppress browser pan/zoom while a 2-finger gesture is active.
+  // All mutable state lives in refs so this effect never needs to re-run.
+  useEffect(() => {
+    const stage = waveformStageRef.current;
+    if (!stage) return;
+
+    function getPinchDist(touches) {
+      return Math.hypot(
+        touches[1].clientX - touches[0].clientX,
+        touches[1].clientY - touches[0].clientY,
+      );
+    }
+
+    function onPinchStart(e) {
+      if (e.touches.length !== 2) return;
+      e.preventDefault();
+      pinchStateRef.current = {
+        initialDist: getPinchDist(e.touches),
+        initialZoom: zoomScaleRef.current,
+      };
+    }
+
+    function onPinchMove(e) {
+      if (e.touches.length !== 2 || !pinchStateRef.current) return;
+      e.preventDefault();
+      const dist = getPinchDist(e.touches);
+      const next = Math.min(
+        8.0,
+        Math.max(1.0, pinchStateRef.current.initialZoom * (dist / pinchStateRef.current.initialDist)),
+      );
+      if (rafPinchId.current !== null) cancelAnimationFrame(rafPinchId.current);
+      rafPinchId.current = requestAnimationFrame(() => {
+        rafPinchId.current = null;
+        zoomScaleRef.current = next;
+        if (zoomWrapperRef.current) {
+          zoomWrapperRef.current.style.transform = `scaleX(${next})`;
+        }
+      });
+    }
+
+    function onPinchEnd(e) {
+      if (!pinchStateRef.current || e.touches.length >= 2) return;
+      pinchStateRef.current = null;
+      if (rafPinchId.current !== null) {
+        cancelAnimationFrame(rafPinchId.current);
+        rafPinchId.current = null;
+      }
+    }
+
+    stage.addEventListener('touchstart', onPinchStart, { passive: false });
+    stage.addEventListener('touchmove', onPinchMove, { passive: false });
+    stage.addEventListener('touchend', onPinchEnd, { passive: true });
+    stage.addEventListener('touchcancel', onPinchEnd, { passive: true });
+
+    return () => {
+      stage.removeEventListener('touchstart', onPinchStart);
+      stage.removeEventListener('touchmove', onPinchMove);
+      stage.removeEventListener('touchend', onPinchEnd);
+      stage.removeEventListener('touchcancel', onPinchEnd);
+      if (rafPinchId.current !== null) cancelAnimationFrame(rafPinchId.current);
+    };
+  }, []); // empty deps — all access is via refs, stable for component lifetime
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -474,144 +552,166 @@ export function WaveformReview({
       )}
 
         <div
-  className="waveform-stage"
-  style={{ position: "relative" }}
-  onClickCapture={(event) => {
-    if (!isReviewerMode || !isMarkerToolActive || !isMobileViewport()) return;
-    if (event.target.closest(".wave-marker") || isLoading || loadError || duration <= 0) return;
-    const metrics = getWaveformMetrics(containerRef.current);
-    if (!metrics.width) return;
-    event.stopPropagation();
-    const ratio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
-    callbacksRef.current.onMobileNoteRequest?.(ratio * duration);
-    setIsMarkerToolActive(false);
-  }}
-  onClick={handleWaveformClick}>
+          ref={waveformStageRef}
+          className="waveform-stage"
+          style={{ position: "relative" }}
+          onClickCapture={(event) => {
+            if (!isReviewerMode || !isMarkerToolActive || !isMobileViewport()) return;
+            if (event.target.closest(".wave-marker") || isLoading || loadError || duration <= 0) return;
+            const metrics = getWaveformMetrics(containerRef.current);
+            if (!metrics.width) return;
+            event.stopPropagation();
+            const ratio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
+            callbacksRef.current.onMobileNoteRequest?.(ratio * duration);
+            setIsMarkerToolActive(false);
+          }}
+          onClick={handleWaveformClick}
+        >
+          {/* ── Zoom wrapper ─────────────────────────────────────────────────────
+              Canvas + markers share one CSS transform so scaleX applied here
+              moves both in the same GPU composite frame — no marker catch-up lag.
+              transform-origin: left center keeps the left edge pinned while
+              stretching rightward.  willChange: transform promotes to its own GPU
+              layer so pinch updates bypass React re-renders entirely.            */}
+          <div
+            ref={zoomWrapperRef}
+            style={{
+              position: "absolute",
+              inset: 0,
+              transformOrigin: "left center",
+              willChange: "transform",
+            }}
+          >
+            {/* Canvas — WaveSurfer mounts here */}
+            <div
+              ref={containerRef}
+              className="waveform"
+              onTouchStart={(event) => {
+                if (event.touches.length > 1) return; // 2-finger pinch → stage listener
+                // Record the initial touch position so we can determine gesture
+                // direction on the first significant movement in onTouchMove.
+                const t = event.touches[0];
+                if (t) {
+                  touchStartRef.current = { x: t.clientX, y: t.clientY };
+                  gestureAxisRef.current = null; // reset — axis unknown until first move
+                }
+              }}
+              onTouchMove={(event) => {
+                if (event.touches.length > 1) return; // 2-finger pinch → stage listener
+                const touch = event.changedTouches?.[0];
+                if (!touch || !containerRef.current || !duration) return;
 
-  {/* Canvas container always renders first so the layout height is reserved */}
-  <div
-    ref={containerRef}
-    className="waveform"
-    onTouchStart={(event) => {
-      // Record the initial touch position so we can determine gesture
-      // direction on the first significant movement in onTouchMove.
-      const t = event.touches[0];
-      if (t) {
-        touchStartRef.current = { x: t.clientX, y: t.clientY };
-        gestureAxisRef.current = null; // reset — axis unknown until first move
-      }
-    }}
-    onTouchMove={(event) => {
-      const touch = event.changedTouches?.[0];
-      if (!touch || !containerRef.current || !duration) return;
+                const start = touchStartRef.current;
+                if (!start) return;
 
-      const start = touchStartRef.current;
-      if (!start) return;
+                // ── Axis-lock: decide once, commit for the rest of the gesture ──
+                // Require at least 6px of movement before committing so a stationary
+                // press never accidentally locks to either axis.
+                if (!gestureAxisRef.current) {
+                  const dx = Math.abs(touch.clientX - start.x);
+                  const dy = Math.abs(touch.clientY - start.y);
+                  if (dx < 6 && dy < 6) return; // not enough movement yet
+                  gestureAxisRef.current = dx >= dy ? 'h' : 'v';
+                }
 
-      // ── Axis-lock: decide once, commit for the rest of the gesture ──
-      // Require at least 6px of movement before committing so a stationary
-      // press never accidentally locks to either axis.
-      if (!gestureAxisRef.current) {
-        const dx = Math.abs(touch.clientX - start.x);
-        const dy = Math.abs(touch.clientY - start.y);
-        if (dx < 6 && dy < 6) return; // not enough movement yet
-        gestureAxisRef.current = dx >= dy ? 'h' : 'v';
-      }
+                // Vertical gesture → let the browser's native pan-y scroll take over.
+                if (gestureAxisRef.current === 'v') return;
 
-      // Vertical gesture → let the browser's native pan-y scroll take over.
-      if (gestureAxisRef.current === 'v') return;
+                // Horizontal gesture → scrub the playhead.
+                // getBoundingClientRect() returns the post-transform (visual) rect so
+                // the scrub ratio is automatically correct at any zoom level.
+                const rect = containerRef.current.getBoundingClientRect();
+                const ratio = Math.min(
+                  1,
+                  Math.max(0, (touch.clientX - rect.left) / rect.width)
+                );
+                seekToTime(ratio * duration);
+              }}
+              onTouchEnd={() => {
+                // Clear gesture state so the next touch starts fresh.
+                touchStartRef.current = null;
+                gestureAxisRef.current = null;
+              }}
+              onTouchCancel={() => {
+                touchStartRef.current = null;
+                gestureAxisRef.current = null;
+              }}
+            />
 
-      // Horizontal gesture → scrub the playhead.
-      const rect = containerRef.current.getBoundingClientRect();
-      const ratio = Math.min(
-        1,
-        Math.max(0, (touch.clientX - rect.left) / rect.width)
-      );
-      seekToTime(ratio * duration);
-    }}
-    onTouchEnd={() => {
-      // Clear gesture state so the next touch starts fresh.
-      touchStartRef.current = null;
-      gestureAxisRef.current = null;
-    }}
-    onTouchCancel={() => {
-      touchStartRef.current = null;
-      gestureAxisRef.current = null;
-    }}
-  />
-
-  {/* Loading / error overlays sit on top of the canvas, never push it down */}
-  {hasAudio && isLoading && (
-    <div
-      className="loading-waveform"
-      style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}
-    >
-      Preparing waveform
-    </div>
-  )}
-  {hasAudio && loadError && (
-    <div
-      className="waveform-error"
-      style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}
-    >
-      {loadError}
-    </div>
-  )}
-
-  {/* Mobile "Tap to Listen" overlay — bypasses iOS/Android autoplay block */}
-  {hasAudio && isMobileViewport() && !mobilePlayUnlocked && (
-    <button
-      type="button"
-      className="tap-to-listen"
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 10,
-        background: "rgba(0, 0, 0, 0.50)",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 10,
-        border: "none",
-        cursor: "pointer",
-        color: "#f5efe3",
-      }}
-      onClick={(e) => {
-        e.stopPropagation();
-        onMobileTapPlay?.();
-      }}
-    >
-      <span style={{ fontSize: "2.5rem", lineHeight: 1 }} aria-hidden="true">▶</span>
-      <span style={{ fontSize: "0.85rem", letterSpacing: "0.06em", textTransform: "uppercase" }}>
-        Tap to Listen
-      </span>
-    </button>
-  )}
-
-        {duration > 0 && (
-          <div className="marker-layer">
-            {markerItems.map((comment) => (
-              <button
-                type="button"
-                className={`wave-marker${comment.resolved ? " resolved" : ""}${
-                  comment.id === selectedCommentId ? " selected" : ""
-                }${comment.isPreview ? " preview" : ""}`}
-                key={comment.id}
-                data-time={formatTimecode(comment.time)}
-                style={{ left: comment.left }}
-                aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (!comment || comment.isPreview) return;
-                  if (!isMobileViewport()) seekToTime(comment.time);
-                  onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
-                }}
-              />
-            ))}
+            {/* Markers live inside the zoom wrapper — they scale in sync with the canvas */}
+            {duration > 0 && (
+              <div className="marker-layer">
+                {markerItems.map((comment) => (
+                  <button
+                    type="button"
+                    className={`wave-marker${comment.resolved ? " resolved" : ""}${
+                      comment.id === selectedCommentId ? " selected" : ""
+                    }${comment.isPreview ? " preview" : ""}`}
+                    key={comment.id}
+                    data-time={formatTimecode(comment.time)}
+                    style={{ left: comment.left }}
+                    aria-label={`Go to comment at ${formatTimecode(comment.time)}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (!comment || comment.isPreview) return;
+                      if (!isMobileViewport()) seekToTime(comment.time);
+                      onMarkerSelect?.(comment, { autoplay: !isMobileViewport() });
+                    }}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+
+          {/* Loading / error overlays — outside zoom wrapper so they stay full-width */}
+          {hasAudio && isLoading && (
+            <div
+              className="loading-waveform"
+              style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}
+            >
+              Preparing waveform
+            </div>
+          )}
+          {hasAudio && loadError && (
+            <div
+              className="waveform-error"
+              style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}
+            >
+              {loadError}
+            </div>
+          )}
+
+          {/* Mobile "Tap to Listen" overlay — outside zoom wrapper, bypasses iOS/Android autoplay block */}
+          {hasAudio && isMobileViewport() && !mobilePlayUnlocked && (
+            <button
+              type="button"
+              className="tap-to-listen"
+              style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 10,
+                background: "rgba(0, 0, 0, 0.50)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 10,
+                border: "none",
+                cursor: "pointer",
+                color: "#f5efe3",
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onMobileTapPlay?.();
+              }}
+            >
+              <span style={{ fontSize: "2.5rem", lineHeight: 1 }} aria-hidden="true">▶</span>
+              <span style={{ fontSize: "0.85rem", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                Tap to Listen
+              </span>
+            </button>
+          )}
+        </div>
 
       {(duration > 0 || (isReviewerMode && isMobileViewport())) && (
         <div className="review-console">
