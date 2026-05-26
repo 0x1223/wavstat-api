@@ -585,7 +585,7 @@ export function WaveformReview({
         <div
           ref={waveformStageRef}
           className="waveform-stage"
-          style={{ position: "relative" }}
+          style={{ position: "relative", minHeight: "80px" }}
           onClickCapture={(event) => {
             if (!isReviewerMode || !isMarkerToolActive || !isMobileViewport()) return;
             if (event.target.closest(".wave-marker") || isLoading || loadError || duration <= 0) return;

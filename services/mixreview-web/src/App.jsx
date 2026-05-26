@@ -58,6 +58,14 @@ const emptySessionDetails = {
   status: "Draft"
 };
 
+// Safe wrapper for sessionStorage access.  Raw window.sessionStorage.getItem()
+// calls throw SecurityError on some iOS versions during WebKit process
+// re-initialization after deep-sleep eviction.  All module-scope and
+// lazy-useState reads use this instead of calling the API directly.
+function safeSessionGet(key) {
+  try { return window.sessionStorage.getItem(key); } catch { return null; }
+}
+
 const routeParams = new URLSearchParams(window.location.search);
 const shareRoute = getShareRoute();
 const routeMode = routeParams.get("mode");
@@ -90,14 +98,14 @@ const initialReviewer =
     ? "Engineer"
     : routeMode === "reviewer"
     ? "Artist"
-    : routeMode === "admin" && window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true"
+    : routeMode === "admin" && safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true"
       ? "Engineer"
       :
   restoredSession?.currentReviewer === "Engineer" &&
-  window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) !== "true"
+  safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) !== "true"
     ? "Artist"
     : restoredSession?.currentReviewer ||
-      (window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ? "Engineer" : "Artist");
+      (safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true" ? "Engineer" : "Artist");
 
 // Unlock the iOS audio session and start the persistent keep-alive AudioContext.
 // Called once from the first user Play tap.
@@ -129,7 +137,14 @@ function unlockAudioSession() {
   } catch (_) {}
 }
 
-export default function App() {
+export default function App({ onFirstRender } = {}) {
+  // Remove the loading guard (html.app-loading → #root visibility:hidden) after
+  // React's first render commits.  useEffect fires post-paint so CSS has been
+  // applied before we reveal the UI — eliminates the unstyled-HTML flash.
+  useEffect(() => {
+    onFirstRender?.();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [sessionId, setSessionId] = useState(
     restoredSession?.id || createSessionId(),
   );
@@ -194,7 +209,7 @@ export default function App() {
   const [mobileHasPlayed, setMobileHasPlayed] = useState(false);
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
     () =>
-      window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
+      safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
       savedAccessState?.mode === "admin",
   );
   const activeMarkerRef = useRef(null);
