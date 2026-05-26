@@ -368,6 +368,11 @@ async function streamAudioPlayback(req, res, next) {
     }
     response.Body.pipe(res);
   } catch (error) {
+    // R2 NoSuchKey → 404 so the browser and frontend receive a clean "not found"
+    // rather than a generic 500 that hides the real cause in logs.
+    if (error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404) {
+      return res.status(404).json({ error: "Audio object not found." });
+    }
     next(error);
   }
 }
