@@ -35,14 +35,19 @@ export function WaveformReview({
   const touchStartRef = useRef(null);
   const gestureAxisRef = useRef(null);
   // ── Pinch-to-zoom refs ────────────────────────────────────────────────────
-  // zoomScaleRef    — always-current scale factor; never stale inside RAF/native listeners.
-  // zoomWrapperRef  — div that wraps canvas + marker-layer; scaleX written directly here
+  // zoomScaleRef    — current scale factor (≥ 1.0).
+  // zoomTxRef       — current translateX in px; moves the wrapper left so the focal
+  //                   audio point stays visually anchored under the fingers.
+  // zoomWrapperRef  — div that wraps canvas + marker-layer; transform written directly
   //                   so both children move on the same GPU layer in the same frame.
-  // waveformStageRef — stage element; pinch listeners are attached here to cover the
-  //                   full touch area, not just the canvas.
-  // pinchStateRef   — { initialDist, initialZoom } captured on touchstart with 2 fingers.
-  // rafPinchId      — cancelAnimationFrame handle; ensures one DOM write per frame.
+  // waveformStageRef — stage element; pinch listeners attached here, not on the canvas.
+  // pinchStateRef   — { initialDist, initialZoom, initialTx, focalX, stageWidth }
+  //                   captured once on two-finger touchstart; all values are fixed for
+  //                   the lifetime of that gesture so onPinchMove can derive the new
+  //                   transform purely from the live finger distance.
+  // rafPinchId      — cancelAnimationFrame handle; one DOM write per frame.
   const zoomScaleRef = useRef(1.0);
+  const zoomTxRef = useRef(0);          // translateX offset in px, always in sync with zoomScaleRef
   const zoomWrapperRef = useRef(null);
   const waveformStageRef = useRef(null);
   const pinchStateRef = useRef(null);
@@ -90,26 +95,52 @@ export function WaveformReview({
     function onPinchStart(e) {
       if (e.touches.length !== 2) return;
       e.preventDefault();
+      // focalX — horizontal midpoint between the two fingers, measured from the
+      // stage's left edge.  This is the screen coordinate that must stay fixed on
+      // screen as zoom changes (the "pivot" point for the gesture).
+      const stageRect = stage.getBoundingClientRect();
+      const focalX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - stageRect.left;
       pinchStateRef.current = {
         initialDist: getPinchDist(e.touches),
         initialZoom: zoomScaleRef.current,
+        initialTx:   zoomTxRef.current,
+        focalX,
+        stageWidth:  stageRect.width,
       };
     }
 
     function onPinchMove(e) {
       if (e.touches.length !== 2 || !pinchStateRef.current) return;
       e.preventDefault();
-      const dist = getPinchDist(e.touches);
-      const next = Math.min(
-        8.0,
-        Math.max(1.0, pinchStateRef.current.initialZoom * (dist / pinchStateRef.current.initialDist)),
-      );
+      const { initialDist, initialZoom, initialTx, focalX, stageWidth } = pinchStateRef.current;
+
+      const dist     = getPinchDist(e.touches);
+      const nextZoom = Math.min(8.0, Math.max(1.0, initialZoom * (dist / initialDist)));
+
+      // Derive translateX so that the audio position at focalX stays at focalX.
+      //
+      // With transform: translateX(tx) scaleX(N) and transform-origin: left center,
+      // a point at natural waveform coordinate X maps to screen position X*N + tx.
+      //
+      // The natural coordinate of the focal audio point is:
+      //   audioFocal = (focalX - initialTx) / initialZoom
+      //
+      // We want:  audioFocal * nextZoom + nextTx = focalX
+      //   ⟹  nextTx = focalX − (focalX − initialTx) * (nextZoom / initialZoom)
+      const rawTx  = focalX - (focalX - initialTx) * (nextZoom / initialZoom);
+
+      // Clamp so the waveform never drifts away from filling the visible stage:
+      //   • nextTx ≤ 0            — left edge of waveform cannot go right of stage left
+      //   • nextTx ≥ stageWidth*(1−nextZoom) — right edge cannot go left of stage right
+      const nextTx = Math.min(0, Math.max(stageWidth * (1 - nextZoom), rawTx));
+
       if (rafPinchId.current !== null) cancelAnimationFrame(rafPinchId.current);
       rafPinchId.current = requestAnimationFrame(() => {
         rafPinchId.current = null;
-        zoomScaleRef.current = next;
+        zoomScaleRef.current = nextZoom;
+        zoomTxRef.current    = nextTx;
         if (zoomWrapperRef.current) {
-          zoomWrapperRef.current.style.transform = `scaleX(${next})`;
+          zoomWrapperRef.current.style.transform = `translateX(${nextTx}px) scaleX(${nextZoom})`;
         }
       });
     }
