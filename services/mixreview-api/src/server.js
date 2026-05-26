@@ -1043,11 +1043,23 @@ async function refreshSessionPlaybackUrls(session, req = null) {
       return version;
     }
 
+    // Rebuild all three URL aliases at once so that whichever field the
+    // frontend reads first (normalizeAudioUrl priority: playbackUrl →
+    // audioUrl → url) it always gets a fresh, non-expired value.
+    const freshUrl = buildApiPlaybackUrl(req, key);
+
+    // Re-derive the peaks URL from the well-known naming convention.
+    // peaksKey is never stored separately — it is always ${key}.peaks.json.
+    const freshPeaksUrl = buildApiPlaybackUrl(req, `${key}.peaks.json`);
+
     return {
       ...version,
       audioMetadata: {
         ...version.audioMetadata,
-        url: buildApiPlaybackUrl(req, key)
+        url: freshUrl,
+        playbackUrl: freshUrl,
+        audioUrl: freshUrl,
+        peaksUrl: freshPeaksUrl,
       }
     };
   };
