@@ -189,6 +189,9 @@ export default function App() {
   const [mobileCommentDraft, setMobileCommentDraft] = useState("");
   const [deleteConfirmPending, setDeleteConfirmPending] = useState(false);
   const [repeatMode, setRepeatMode] = useState("off");
+  // True once the user has tapped the "Tap to Listen" overlay on mobile.
+  // Passed to WaveformReview so the overlay is hidden after first play.
+  const [mobileHasPlayed, setMobileHasPlayed] = useState(false);
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
     () =>
       window.sessionStorage.getItem(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
@@ -1417,6 +1420,17 @@ export default function App() {
     }
   }, []);
 
+  // Called when the user taps the "Tap to Listen" overlay on mobile.
+  // Unlocks the iOS AudioContext in the user-gesture callback, marks
+  // userHasPlayedRef so auto-play-next logic is unblocked, hides the overlay,
+  // and starts playback if the player is already ready.
+  const handleMobileTapPlay = useCallback(() => {
+    userHasPlayedRef.current = true;
+    setMobileHasPlayed(true);
+    unlockAudioSession();
+    playerRef.current?.play();
+  }, []);
+
   const updateDuration = useCallback((nextDuration) => {
     updateActiveVersion((version) => ({ ...version, duration: nextDuration }));
   }, [updateActiveVersion]);
@@ -1833,6 +1847,8 @@ export default function App() {
             onPlaybackChange={setIsPlaying}
             isReviewerMode={isReviewerMode}
             onMobileNoteRequest={openMobileNote}
+            onMobileTapPlay={handleMobileTapPlay}
+            mobilePlayUnlocked={mobileHasPlayed}
           />
         </div>
 
@@ -1955,6 +1971,7 @@ export default function App() {
           // user is about to start playback.
           if (isMobileViewport() && isReviewerMode && !isPlaying) {
             userHasPlayedRef.current = true;
+            setMobileHasPlayed(true);
             // Prime the iOS audio session so that AudioContext.resume() calls
             // in MobileSpectrumAnalyzer succeed without their own gesture token.
             unlockAudioSession();

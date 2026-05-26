@@ -19,6 +19,12 @@ export function WaveformReview({
   onPlaybackChange,
   isReviewerMode = false,
   onMobileNoteRequest,
+  // Mobile first-play helpers.
+  // onMobileTapPlay — callback invoked when the "Tap to Listen" overlay is pressed;
+  //   caller is responsible for unlocking the audio session and starting playback.
+  // mobilePlayUnlocked — when true the overlay is hidden (user has already played once).
+  onMobileTapPlay = undefined,
+  mobilePlayUnlocked = false,
 }) {
   const containerRef = useRef(null);
   const wavesurferRef = useRef(null);
@@ -141,6 +147,7 @@ export function WaveformReview({
     let hasLoaded = false;
     let wavesurfer = null;
     let decodeTimeout = null;
+    let audioReadyTimer = null;
 
     // ── HLS peak bypass ─────────────────────────────────────────────────────
     // HLS streams (.m3u8) must never be decoded on the frontend. WaveSurfer's
@@ -201,10 +208,55 @@ export function WaveformReview({
 
       wavesurferRef.current = wavesurfer;
 
+      // ── canplay fast-path ──────────────────────────────────────────────────
+      // decodeAudioData for large files can take 10–30 s on slow devices even
+      // though the browser has buffered enough to start playback within seconds.
+      // When the internal <audio> element fires "canplay", start a short grace
+      // timer. If WaveSurfer hasn't fired "ready" within that window we surface
+      // the player in audio-only mode so the user can listen while decoding
+      // continues in the background. When WaveSurfer eventually fires "ready"
+      // the waveform canvas updates automatically and we clear the status message.
+      {
+        const AUDIO_READY_GRACE_MS = 1_500;
+        const mediaElEarly = wavesurfer.getMediaElement?.();
+        if (mediaElEarly) {
+          const onCanPlay = () => {
+            if (isDisposed || hasLoaded) return;
+            audioReadyTimer = setTimeout(() => {
+              if (isDisposed || hasLoaded) return;
+              hasLoaded = true;
+              clearTimeout(decodeTimeout);
+              const dur = Number.isFinite(mediaElEarly.duration) ? mediaElEarly.duration : 0;
+              console.log("[WaveformReview] canplay fast-path — surfacing player before full decode", { dur });
+              mediaElEarly.muted = false;
+              mediaElEarly.volume = 1;
+              setDuration(dur);
+              setIsLoading(false);
+              setLoadError("Waveform loading… tap ▶ to listen now");
+              callbacksRef.current.onDurationChange(dur);
+              callbacksRef.current.onReady({
+                wavesurfer,
+                mediaElement: mediaElEarly,
+                play: async () => { await wavesurfer.play(); },
+                pause: () => wavesurfer.pause(),
+                playPause: async () => { await wavesurfer.playPause(); },
+                skip: (s) => wavesurfer.skip(s),
+                seekToTime: (time) => {
+                  const t = Math.min(Math.max(time, 0), wavesurfer.getDuration() || dur);
+                  wavesurfer.setTime(t);
+                  callbacksRef.current.onTimeUpdate(t);
+                },
+              });
+            }, AUDIO_READY_GRACE_MS);
+          };
+          mediaElEarly.addEventListener("canplay", onCanPlay, { once: true });
+        }
+      }
+
       // ── Desktop decode timeout ────────────────────────────────────────────
       // If WaveSurfer's fetch or decodeAudioData stalls, surface a clear
       // message rather than leaving the UI stuck on "Preparing waveform".
-      const DESKTOP_TIMEOUT_MS = 20_000;
+      const DESKTOP_TIMEOUT_MS = 45_000;
       decodeTimeout = setTimeout(() => {
         if (isDisposed || hasLoaded) return;
         hasLoaded = true;
@@ -243,6 +295,21 @@ export function WaveformReview({
 
       wavesurfer.on("ready", () => {
         if (isDisposed) return;
+        clearTimeout(audioReadyTimer);
+
+        if (hasLoaded) {
+          // canplay fast-path already surfaced the player — the waveform canvas
+          // has now finished rendering, so just clear the interim status message
+          // and update duration in case it wasn't available at canplay time.
+          clearTimeout(decodeTimeout);
+          const audioDuration = wavesurfer.getDuration();
+          if (audioDuration > 0) {
+            setDuration(audioDuration);
+            callbacksRef.current.onDurationChange(audioDuration);
+          }
+          setLoadError("");
+          return;
+        }
 
         hasLoaded = true;
         clearTimeout(decodeTimeout);
@@ -280,6 +347,7 @@ export function WaveformReview({
 
         hasLoaded = true;
         clearTimeout(decodeTimeout);
+        clearTimeout(audioReadyTimer);
         console.warn("[WaveformReview] Desktop decode failure", error?.message ?? String(error));
         setIsLoading(false);
         setLoadError("This audio file could not be decoded. Try a WAV or MP3 file.");
@@ -307,6 +375,7 @@ export function WaveformReview({
       isDisposed = true;
       cancelAnimationFrame(rafId);
       clearTimeout(decodeTimeout);
+      clearTimeout(audioReadyTimer);
       if (wavesurfer) {
         if (wavesurferRef.current === wavesurfer) wavesurferRef.current = null;
         wavesurfer.destroy();
@@ -400,6 +469,7 @@ export function WaveformReview({
 
         <div
   className="waveform-stage"
+  style={{ position: "relative" }}
   onClickCapture={(event) => {
     if (!isReviewerMode || !isMarkerToolActive || !isMobileViewport()) return;
     if (event.target.closest(".wave-marker") || isLoading || loadError || duration <= 0) return;
@@ -411,27 +481,73 @@ export function WaveformReview({
     setIsMarkerToolActive(false);
   }}
   onClick={handleWaveformClick}>
-  {hasAudio && isLoading && <div className="loading-waveform">Preparing waveform</div>}
-  {hasAudio && loadError && <div className="waveform-error">{loadError}</div>}
 
+  {/* Canvas container always renders first so the layout height is reserved */}
   <div
-  ref={containerRef}
-  className="waveform"
-  onTouchMove={(event) => {
-    const touch = event.changedTouches?.[0];
-    if (!touch || !containerRef.current || !duration) return;
+    ref={containerRef}
+    className="waveform"
+    style={{ minHeight: 180 }}
+    onTouchMove={(event) => {
+      const touch = event.changedTouches?.[0];
+      if (!touch || !containerRef.current || !duration) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const ratio = Math.min(
+        1,
+        Math.max(0, (touch.clientX - rect.left) / rect.width)
+      );
+      seekToTime(ratio * duration);
+    }}
+  />
 
-    const rect = containerRef.current.getBoundingClientRect();
-    const ratio = Math.min(
-      1,
-      Math.max(0, (touch.clientX - rect.left) / rect.width)
-    );
+  {/* Loading / error overlays sit on top of the canvas, never push it down */}
+  {hasAudio && isLoading && (
+    <div
+      className="loading-waveform"
+      style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}
+    >
+      Preparing waveform
+    </div>
+  )}
+  {hasAudio && loadError && (
+    <div
+      className="waveform-error"
+      style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}
+    >
+      {loadError}
+    </div>
+  )}
 
-    const nextTime = ratio * duration;
+  {/* Mobile "Tap to Listen" overlay — bypasses iOS/Android autoplay block */}
+  {hasAudio && isMobileViewport() && !mobilePlayUnlocked && (
+    <button
+      type="button"
+      className="tap-to-listen"
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 10,
+        background: "rgba(0, 0, 0, 0.50)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+        border: "none",
+        cursor: "pointer",
+        color: "#f5efe3",
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onMobileTapPlay?.();
+      }}
+    >
+      <span style={{ fontSize: "2.5rem", lineHeight: 1 }} aria-hidden="true">▶</span>
+      <span style={{ fontSize: "0.85rem", letterSpacing: "0.06em", textTransform: "uppercase" }}>
+        Tap to Listen
+      </span>
+    </button>
+  )}
 
-    seekToTime(nextTime);
-  }}
-/>
         {duration > 0 && (
           <div className="marker-layer">
             {markerItems.map((comment) => (
