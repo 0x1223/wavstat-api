@@ -28,6 +28,12 @@ export function WaveformReview({
 }) {
   const containerRef = useRef(null);
   const wavesurferRef = useRef(null);
+  // Touch-gesture axis lock: populated on touchstart, read on touchmove.
+  // touchStartRef   — {x, y} of the first touch point.
+  // gestureAxisRef  — 'h' (horizontal/scrub) | 'v' (vertical/scroll) | null (undecided).
+  // Once locked to an axis for a given gesture the decision is final until touchend.
+  const touchStartRef = useRef(null);
+  const gestureAxisRef = useRef(null);
   const callbacksRef = useRef({
     onDurationChange,
     onPlaybackChange,
@@ -486,15 +492,51 @@ export function WaveformReview({
   <div
     ref={containerRef}
     className="waveform"
+    onTouchStart={(event) => {
+      // Record the initial touch position so we can determine gesture
+      // direction on the first significant movement in onTouchMove.
+      const t = event.touches[0];
+      if (t) {
+        touchStartRef.current = { x: t.clientX, y: t.clientY };
+        gestureAxisRef.current = null; // reset — axis unknown until first move
+      }
+    }}
     onTouchMove={(event) => {
       const touch = event.changedTouches?.[0];
       if (!touch || !containerRef.current || !duration) return;
+
+      const start = touchStartRef.current;
+      if (!start) return;
+
+      // ── Axis-lock: decide once, commit for the rest of the gesture ──
+      // Require at least 6px of movement before committing so a stationary
+      // press never accidentally locks to either axis.
+      if (!gestureAxisRef.current) {
+        const dx = Math.abs(touch.clientX - start.x);
+        const dy = Math.abs(touch.clientY - start.y);
+        if (dx < 6 && dy < 6) return; // not enough movement yet
+        gestureAxisRef.current = dx >= dy ? 'h' : 'v';
+      }
+
+      // Vertical gesture → let the browser's native pan-y scroll take over.
+      if (gestureAxisRef.current === 'v') return;
+
+      // Horizontal gesture → scrub the playhead.
       const rect = containerRef.current.getBoundingClientRect();
       const ratio = Math.min(
         1,
         Math.max(0, (touch.clientX - rect.left) / rect.width)
       );
       seekToTime(ratio * duration);
+    }}
+    onTouchEnd={() => {
+      // Clear gesture state so the next touch starts fresh.
+      touchStartRef.current = null;
+      gestureAxisRef.current = null;
+    }}
+    onTouchCancel={() => {
+      touchStartRef.current = null;
+      gestureAxisRef.current = null;
     }}
   />
 

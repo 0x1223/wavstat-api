@@ -2251,7 +2251,10 @@ h2 {
     height: 180px;
     padding: 0 12px;
     cursor: pointer;
-    touch-action: none;
+    /* pan-y: browser handles vertical scrolling natively; horizontal
+       gestures are left to JS so the playhead scrub does not conflict
+       with native scroll. Changed from `none` which captured everything. */
+    touch-action: pan-y;
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
