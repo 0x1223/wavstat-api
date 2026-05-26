@@ -52,6 +52,12 @@ export function WaveformReview({
   const waveformStageRef = useRef(null);
   const pinchStateRef = useRef(null);
   const rafPinchId = useRef(null);
+  // markerLayerRef — direct scaleX DOM write so markers scale in the same RAF frame
+  //                  as the WaveSurfer canvas redraw (no React re-render required).
+  // durationRef    — mirrors `duration` state so onPinchStart can compute basePxPerSec
+  //                  without adding `duration` to the pinch-effect's dependency array.
+  const markerLayerRef = useRef(null);
+  const durationRef = useRef(0);
   const callbacksRef = useRef({
     onDurationChange,
     onPlaybackChange,
@@ -77,6 +83,10 @@ export function WaveformReview({
     };
   }, [onDurationChange, onMobileNoteRequest, onPlaybackChange, onReady, onTimeUpdate, onTimestampCreate]);
 
+  // Keep durationRef current so the pinch-effect (empty deps) can read duration
+  // without re-registering its touch listeners on every duration change.
+  useEffect(() => { durationRef.current = duration; }, [duration]);
+
   // ── Pinch-to-zoom: non-passive native listeners on the stage ─────────────
   // Must use addEventListener({ passive: false }) so e.preventDefault() can
   // suppress browser pan/zoom while a 2-finger gesture is active.
@@ -98,14 +108,20 @@ export function WaveformReview({
       // focalX — horizontal midpoint between the two fingers, measured from the
       // stage's left edge.  This is the screen coordinate that must stay fixed on
       // screen as zoom changes (the "pivot" point for the gesture).
+      //
+      // basePxPerSec — pixels-per-second at zoom=1, computed from the stage width
+      // (which never changes) divided by the current duration. Captured once per
+      // gesture so wavesurfer.zoom() is always called relative to the unscaled
+      // baseline, regardless of how many sequential pinch gestures have occurred.
       const stageRect = stage.getBoundingClientRect();
       const focalX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - stageRect.left;
       pinchStateRef.current = {
-        initialDist: getPinchDist(e.touches),
-        initialZoom: zoomScaleRef.current,
-        initialTx:   zoomTxRef.current,
+        initialDist:  getPinchDist(e.touches),
+        initialZoom:  zoomScaleRef.current,
+        initialTx:    zoomTxRef.current,
         focalX,
-        stageWidth:  stageRect.width,
+        stageWidth:   stageRect.width,
+        basePxPerSec: durationRef.current > 0 ? stageRect.width / durationRef.current : 0,
       };
     }
 
@@ -139,8 +155,28 @@ export function WaveformReview({
         rafPinchId.current = null;
         zoomScaleRef.current = nextZoom;
         zoomTxRef.current    = nextTx;
+
+        // translateX pans the canvas to keep the focal audio point under the fingers.
+        // scaleX is intentionally omitted — the canvas is redrawn natively below
+        // so the waveform peaks are always sharp, never CSS-pixel-stretched.
         if (zoomWrapperRef.current) {
-          zoomWrapperRef.current.style.transform = `translateX(${nextTx}px) scaleX(${nextZoom})`;
+          zoomWrapperRef.current.style.transform = `translateX(${nextTx}px)`;
+        }
+
+        // Force WaveSurfer to redraw peaks at the zoomed resolution.
+        // basePxPerSec is the zoom=1 baseline (stageWidth / duration) captured at
+        // gesture start — always the same reference point regardless of prior zooms.
+        const { basePxPerSec } = pinchStateRef.current;
+        if (wavesurferRef.current?.zoom && basePxPerSec > 0) {
+          wavesurferRef.current.zoom(basePxPerSec * nextZoom);
+        }
+
+        // Scale the marker layer to match the zoomed canvas — same RAF frame,
+        // no catch-up lag. The markers' `left` values are in zoom=1 pixel space
+        // so scaleX(nextZoom) with origin at left maps them to the correct
+        // positions on the wider canvas.
+        if (markerLayerRef.current) {
+          markerLayerRef.current.style.transform = `scaleX(${nextZoom})`;
         }
       });
     }
@@ -520,7 +556,7 @@ export function WaveformReview({
       return;
     }
 
-    const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
+    const clickRatio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / (metrics.width * zoomScaleRef.current)));
     const clickedTime = clickRatio * duration;
 
     // Mobile reviewer: WaveSurfer's dragToSeek handles the seek internally on waveform tap,
@@ -592,18 +628,21 @@ export function WaveformReview({
             const metrics = getWaveformMetrics(containerRef.current);
             if (!metrics.width) return;
             event.stopPropagation();
-            const ratio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / metrics.width));
+            const ratio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / (metrics.width * zoomScaleRef.current)));
             callbacksRef.current.onMobileNoteRequest?.(ratio * duration);
             setIsMarkerToolActive(false);
           }}
           onClick={handleWaveformClick}
         >
           {/* ── Zoom wrapper ─────────────────────────────────────────────────────
-              Canvas + markers share one CSS transform so scaleX applied here
-              moves both in the same GPU composite frame — no marker catch-up lag.
-              transform-origin: left center keeps the left edge pinned while
-              stretching rightward.  willChange: transform promotes to its own GPU
-              layer so pinch updates bypass React re-renders entirely.            */}
+              translateX pans the canvas and marker layer together (same GPU
+              composite frame).  scaleX is NOT applied here — the waveform canvas
+              is redrawn natively at the correct resolution via wavesurfer.zoom()
+              so peaks are always sharp.  The marker layer receives its own
+              scaleX(N) written directly on markerLayerRef in the same RAF, keeping
+              pins locked to their audio positions without a React re-render.
+              willChange: transform promotes to its own GPU layer so pinch updates
+              bypass React's commit phase entirely.                               */}
           <div
             ref={zoomWrapperRef}
             style={{
@@ -649,12 +688,14 @@ export function WaveformReview({
                 if (gestureAxisRef.current === 'v') return;
 
                 // Horizontal gesture → scrub the playhead.
-                // getBoundingClientRect() returns the post-transform (visual) rect so
-                // the scrub ratio is automatically correct at any zoom level.
+                // With WaveSurfer native zoom the wrapper carries only translateX —
+                // no CSS scaleX — so getBoundingClientRect().width is the layout
+                // width (stageWidth), not the zoomed canvas width. Multiply by the
+                // current zoom scale to convert screen pixels into canvas coordinates.
                 const rect = containerRef.current.getBoundingClientRect();
                 const ratio = Math.min(
                   1,
-                  Math.max(0, (touch.clientX - rect.left) / rect.width)
+                  Math.max(0, (touch.clientX - rect.left) / (rect.width * zoomScaleRef.current))
                 );
                 seekToTime(ratio * duration);
               }}
@@ -669,9 +710,17 @@ export function WaveformReview({
               }}
             />
 
-            {/* Markers live inside the zoom wrapper — they scale in sync with the canvas */}
+            {/* Markers live inside the zoom wrapper — scaleX written directly on
+                markerLayerRef in the same RAF frame as wavesurfer.zoom() so pins
+                stay locked to their audio positions at every zoom level.
+                transformOrigin: left center keeps the scale anchored at time=0,
+                matching the canvas origin set by transform-origin on the wrapper. */}
             {duration > 0 && (
-              <div className="marker-layer">
+              <div
+                className="marker-layer"
+                ref={markerLayerRef}
+                style={{ transformOrigin: 'left center' }}
+              >
                 {markerItems.map((comment) => (
                   <button
                     type="button"
