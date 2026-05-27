@@ -60,8 +60,8 @@ juce::String getPlaceholderHtml()
     <h1>Kingz Listen</h1>
     <p id="mount-status">LAN monitoring bridge ready. The full telemetry interface will mount here.</p>
     <dl>
-      <dt>Studio IP</dt><dd><input id="studio-ip" value="127.0.0.1" inputmode="decimal"></dd>
-      <dt>Port</dt><dd><input id="studio-port" value="8081" inputmode="numeric"></dd>
+      <dt>Studio IP</dt><dd><input id="studio-ip" inputmode="decimal"></dd>
+      <dt>Port</dt><dd><input id="studio-port" inputmode="numeric"></dd>
       <dt>Telemetry</dt><dd id="telemetry-status">Waiting</dd>
     </dl>
     <button id="connect">Connect Telemetry</button>
