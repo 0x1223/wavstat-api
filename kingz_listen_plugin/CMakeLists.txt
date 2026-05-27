@@ -40,13 +40,15 @@ juce_add_plugin(KingzListenPlugin
     PLUGIN_NAME "Kingz Listen"
     PLUGIN_MANUFACTURER_CODE KbEn
     PLUGIN_CODE KzLi
+    BUNDLE_ID "com.kingzbreadent.kingzlisten"
     FORMATS VST3 AU
     PRODUCT_NAME "Kingz Listen"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
-    COPY_PLUGIN_AFTER_BUILD TRUE
+    VST3_AUTO_MANIFEST TRUE
+    COPY_PLUGIN_AFTER_BUILD FALSE
 )
 
 target_sources(KingzListenPlugin

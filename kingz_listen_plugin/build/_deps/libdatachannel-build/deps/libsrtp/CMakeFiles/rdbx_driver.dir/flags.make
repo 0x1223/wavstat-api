@@ -6,7 +6,5 @@ C_DEFINES = -DHAVE_CONFIG_H
 
 C_INCLUDES = -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-build/deps/libsrtp -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libsrtp/test -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libsrtp/crypto/include -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libsrtp/include -isystem /opt/homebrew/include
 
-C_FLAGSarm64 = -g -std=gnu99 -arch arm64 -fPIE -Wall -Wextra -Wshadow -Wpedantic -Wunused -Wnull-dereference -Wdouble-promotion -Wcast-qual -Werror
-
-C_FLAGS = -g -std=gnu99 -arch arm64 -fPIE -Wall -Wextra -Wshadow -Wpedantic -Wunused -Wnull-dereference -Wdouble-promotion -Wcast-qual -Werror
+C_FLAGS = -g -std=gnu99 -fPIE -Wall -Wextra -Wshadow -Wpedantic -Wunused -Wnull-dereference -Wdouble-promotion -Wcast-qual -Werror
 

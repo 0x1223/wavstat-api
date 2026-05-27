@@ -6,7 +6,5 @@ CXX_DEFINES = -DJUCE_GLOBAL_MODULE_SETTINGS_INCLUDED=1 -DNDEBUG=1 -D_NDEBUG=1
 
 CXX_INCLUDES = -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/juce-src/modules/juce_audio_processors/format_types/VST3_SDK -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/juce-src/modules -F/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks
 
-CXX_FLAGSarm64 = -std=c++17 -arch arm64 -fobjc-arc
-
-CXX_FLAGS = -std=c++17 -arch arm64 -fobjc-arc
+CXX_FLAGS = -std=c++17 -fobjc-arc
 

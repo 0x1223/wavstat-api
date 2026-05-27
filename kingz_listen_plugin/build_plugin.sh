@@ -8,6 +8,6 @@ mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
 cmake ..
-cmake --build . --config Release
+cmake --build . --target KingzListenPlugin_All --config Release
 
 echo "Kingz Listen plugin build complete: ${BUILD_DIR}"

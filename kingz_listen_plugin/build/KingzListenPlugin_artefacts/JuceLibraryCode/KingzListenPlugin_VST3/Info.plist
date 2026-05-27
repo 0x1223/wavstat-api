@@ -8,7 +8,7 @@
     <key>CFBundleIconFile</key>
     <string></string>
     <key>CFBundleIdentifier</key>
-    <string>com.Kingzbreadent.KingzListenPlugin</string>
+    <string>com.kingzbreadent.kingzlisten</string>
     <key>CFBundleName</key>
     <string>Kingz Listen</string>
     <key>CFBundleDisplayName</key>

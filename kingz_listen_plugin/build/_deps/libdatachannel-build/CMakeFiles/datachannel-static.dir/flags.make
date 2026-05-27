@@ -6,7 +6,5 @@ CXX_DEFINES = -DJUICE_STATIC -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=1 -DRTC
 
 CXX_INCLUDES = -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/include -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/include/rtc -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/src -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/usrsctp/usrsctplib -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/plog/include -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libsrtp/crypto/include -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libsrtp/include -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libjuice/include -isystem /opt/homebrew/include
 
-CXX_FLAGSarm64 = -std=c++17 -arch arm64 -fPIC -Wall -Wextra
-
-CXX_FLAGS = -std=c++17 -arch arm64 -fPIC -Wall -Wextra
+CXX_FLAGS = -std=c++17 -fPIC -Wall -Wextra
 

@@ -6,7 +6,5 @@ C_DEFINES = -DJUICE_EXPORTS -DJUICE_STATIC -DUSE_NETTLE=0
 
 C_INCLUDES = -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libjuice/include -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libjuice/include/juice -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/libjuice/src -I/usr/local/include
 
-C_FLAGSarm64 = -std=gnu11 -arch arm64 -fPIC -fvisibility=hidden -Wall -Wextra
-
-C_FLAGS = -std=gnu11 -arch arm64 -fPIC -fvisibility=hidden -Wall -Wextra
+C_FLAGS = -std=gnu11 -fPIC -fvisibility=hidden -Wall -Wextra
 

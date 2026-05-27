@@ -6,7 +6,5 @@ C_DEFINES = -DHAVE_NETINET_IP_ICMP_H -DHAVE_NET_ROUTE_H -DHAVE_SA_LEN -DHAVE_SCO
 
 C_INCLUDES = -I/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-src/deps/usrsctp/usrsctplib
 
-C_FLAGSarm64 =  -std=c99 -pedantic -Wall -Wextra -Wfloat-equal -Wshadow -Wpointer-arith -Wunreachable-code -Winit-self -Wno-unused-function -Wno-unused-parameter -Wno-unreachable-code -Wstrict-prototypes -Wno-address-of-packed-member -Wno-deprecated-declarations -g -arch arm64 -fPIC
-
-C_FLAGS =  -std=c99 -pedantic -Wall -Wextra -Wfloat-equal -Wshadow -Wpointer-arith -Wunreachable-code -Winit-self -Wno-unused-function -Wno-unused-parameter -Wno-unreachable-code -Wstrict-prototypes -Wno-address-of-packed-member -Wno-deprecated-declarations -g -arch arm64 -fPIC
+C_FLAGS =  -std=c99 -pedantic -Wall -Wextra -Wfloat-equal -Wshadow -Wpointer-arith -Wunreachable-code -Winit-self -Wno-unused-function -Wno-unused-parameter -Wno-unreachable-code -Wstrict-prototypes -Wno-address-of-packed-member -Wno-deprecated-declarations -g -fPIC
 
