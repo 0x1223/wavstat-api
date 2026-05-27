@@ -26,6 +26,9 @@ class KingzPcmRenderer extends AudioWorkletProcessor {
       if (message.type === "pcm") {
         this._pushPcm(message);
       }
+      if (message.type === "pcm-bytes") {
+        this._pushPcmBytes(message);
+      }
     };
   }
 
@@ -52,6 +55,45 @@ class KingzPcmRenderer extends AudioWorkletProcessor {
       const writeIndex = this.writeFrame * this.channelCount;
       this.buffer[writeIndex] = left;
       this.buffer[writeIndex + 1] = right;
+      this.writeFrame = (this.writeFrame + 1) % this.capacityFrames;
+    }
+    this.bufferedFrames = Math.min(
+      this.capacityFrames,
+      this.bufferedFrames + frameCount,
+    );
+  }
+
+  _pushPcmBytes(message) {
+    const bytes =
+      message.bytes instanceof Uint8Array
+        ? message.bytes
+        : new Uint8Array(message.bytes);
+    const inputChannels = Math.max(1, Math.min(2, message.channels || 2));
+    const frameCount = Math.max(
+      0,
+      message.frameCount || Math.floor(bytes.byteLength / (inputChannels * 2)),
+    );
+    if (!bytes || frameCount <= 0) return;
+
+    const overflowFrames = Math.max(
+      0,
+      this.bufferedFrames + frameCount - this.capacityFrames,
+    );
+    if (overflowFrames > 0) {
+      this.readFrame = (this.readFrame + overflowFrames) % this.capacityFrames;
+      this.bufferedFrames -= overflowFrames;
+      this.droppedFrames += overflowFrames;
+    }
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      const inputIndex = frame * inputChannels;
+      const left = view.getInt16(inputIndex * 2, true) / 32768;
+      const right =
+        inputChannels > 1 ? view.getInt16((inputIndex + 1) * 2, true) / 32768 : left;
+      const writeIndex = this.writeFrame * this.channelCount;
+      this.buffer[writeIndex] = Math.max(-1, Math.min(1, left));
+      this.buffer[writeIndex + 1] = Math.max(-1, Math.min(1, right));
       this.writeFrame = (this.writeFrame + 1) % this.capacityFrames;
     }
     this.bufferedFrames = Math.min(

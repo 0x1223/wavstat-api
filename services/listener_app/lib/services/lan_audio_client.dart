@@ -12,6 +12,7 @@ import 'listener_audio_engine_service.dart';
 import 'pcm_playback_bridge.dart';
 import 'realtime_stream_listener.dart';
 import 'transport_telemetry_service.dart';
+import 'webrtc_playback_bridge.dart';
 
 enum LanAudioConnectionState {
   disconnected,
@@ -70,12 +71,20 @@ class LanAudioClient {
       ListenerAudioEngineService();
   final BufferControllerService _bufferControllerService =
       BufferControllerService();
+  final WebRtcPlaybackBridge _webRtcPlaybackBridge = WebRtcPlaybackBridge();
   final PcmPlaybackBridge _pcmPlaybackBridge = PcmPlaybackBridge();
   final TransportTelemetryService _transportTelemetryService =
       TransportTelemetryService();
+  bool _webRtcActive = false;
+  bool _pcmFallbackActive = false;
+  bool _pcmFallbackAllowed = false;
 
   LanAudioClient() {
+    _webRtcPlaybackBridge.onTelemetry = _emitPlaybackTelemetry;
     _pcmPlaybackBridge.onTelemetry = _emitPlaybackTelemetry;
+    _webRtcPlaybackBridge
+        .configureTransport(_audioEngineService.transportConfig);
+    _pcmPlaybackBridge.configureTransport(_audioEngineService.transportConfig);
   }
 
   Stream<LanAudioEvent> get events => _events.stream;
@@ -101,6 +110,10 @@ class LanAudioClient {
     _channel = null;
     _subscription = null;
     _reconnectCount = 0;
+    _webRtcActive = false;
+    _pcmFallbackActive = false;
+    _pcmFallbackAllowed = false;
+    await _webRtcPlaybackBridge.stop();
     await _pcmPlaybackBridge.stop();
     _latestTelemetry = const StreamTelemetry();
     final realtimeMetrics = _realtimeStreamListener.reset();
@@ -117,6 +130,8 @@ class LanAudioClient {
 
   void prepare(MonitoringMode mode) {
     final state = _audioEngineService.selectMode(mode);
+    _webRtcPlaybackBridge.configureTransport(state.transportConfig);
+    _pcmPlaybackBridge.configureTransport(state.transportConfig);
     _events.add(
       LanAudioEvent(
         playbackState: state.playbackState,
@@ -131,11 +146,33 @@ class LanAudioClient {
     bool enablePcmPlayback = false,
   }) async {
     _wasListening = true;
+    _pcmFallbackAllowed = enablePcmPlayback;
+    _pcmFallbackActive = false;
     final state = _audioEngineService.selectMode(mode);
+    _webRtcPlaybackBridge.configureTransport(state.transportConfig);
+    _pcmPlaybackBridge.configureTransport(state.transportConfig);
     _realtimeStreamListener.startSession();
-    final playbackTelemetry = enablePcmPlayback
-        ? await _pcmPlaybackBridge.start()
-        : await _pcmPlaybackBridge.stop();
+    await _pcmPlaybackBridge.stop();
+    var playbackTelemetry = _webRtcPlaybackBridge.telemetry;
+    if (enablePcmPlayback) {
+      try {
+        _webRtcActive = await _webRtcPlaybackBridge.start(
+          sendSignal: _send,
+          onFallback: (reason) {
+            unawaited(_startPcmFallback(reason));
+          },
+        );
+      } catch (_) {
+        _webRtcActive = false;
+      }
+      if (!_webRtcActive) {
+        playbackTelemetry = await _startPcmFallback('webrtc-start-failed');
+      }
+    } else {
+      _webRtcActive = false;
+      await _webRtcPlaybackBridge.stop();
+      playbackTelemetry = await _pcmPlaybackBridge.stop();
+    }
     _events.add(
       LanAudioEvent(
         playbackState: state.playbackState,
@@ -145,7 +182,7 @@ class LanAudioClient {
       ),
     );
     _sendStart(mode);
-    return playbackTelemetry.outputActive;
+    return _webRtcActive || playbackTelemetry.outputActive;
   }
 
   Future<void> stopListening() async {
@@ -153,6 +190,10 @@ class LanAudioClient {
     _activeStartMode = null;
     _startRetryTimer?.cancel();
     _pcmIdleTimer?.cancel();
+    _webRtcActive = false;
+    _pcmFallbackActive = false;
+    _pcmFallbackAllowed = false;
+    await _webRtcPlaybackBridge.stop();
     final playbackTelemetry = await _pcmPlaybackBridge.stop();
     _realtimeStreamListener.stopped();
     _events.add(
@@ -167,7 +208,9 @@ class LanAudioClient {
   }
 
   Future<void> resumeAudioOutput() async {
-    final playbackTelemetry = await _pcmPlaybackBridge.manualResume();
+    final playbackTelemetry = _pcmFallbackActive
+        ? await _pcmPlaybackBridge.manualResume()
+        : await _webRtcPlaybackBridge.manualResume();
     _events.add(
       LanAudioEvent(
         realtimeMetrics:
@@ -181,6 +224,7 @@ class LanAudioClient {
     _startRetryTimer?.cancel();
     _pcmIdleTimer?.cancel();
     await disconnect();
+    await _webRtcPlaybackBridge.dispose();
     await _pcmPlaybackBridge.dispose();
     await _events.close();
   }
@@ -236,6 +280,11 @@ class LanAudioClient {
       _startClientPing();
       _isOpening = false;
       if (isReconnect && _wasListening) {
+        if (_pcmFallbackAllowed && !_pcmFallbackActive) {
+          unawaited(
+            _restartWebRtcAfterReconnect(),
+          );
+        }
         _sendStart(_audioEngineService.transportConfig.mode);
       } else if (_pendingStartMode != null) {
         final mode = _pendingStartMode;
@@ -269,6 +318,19 @@ class LanAudioClient {
 
     final type = message['type'] as String?;
 
+    if (type == 'webrtc.answer' ||
+        type == 'webrtc.ice-candidate' ||
+        type == 'webrtc.connected' ||
+        type == 'webrtc.ping' ||
+        type == 'webrtc.error') {
+      if (type == 'webrtc.ping') {
+        _send({'type': 'webrtc.pong', 'sentAt': message['sentAt']});
+        return;
+      }
+      unawaited(_webRtcPlaybackBridge.handleSignal(message));
+      return;
+    }
+
     if (type == 'pong') {
       final sentAt = message['sentAt'];
       if (sentAt is int) {
@@ -284,7 +346,9 @@ class LanAudioClient {
         type == 'pcm.chunk') {
       _startRetryTimer?.cancel();
       final realtimeMetrics = _realtimeStreamListener.handleChunk(message);
-      final playbackTelemetry = _pcmPlaybackBridge.enqueue(message);
+      final playbackTelemetry = _pcmFallbackActive
+          ? _pcmPlaybackBridge.enqueue(message)
+          : _webRtcPlaybackBridge.telemetry;
       final playbackMetrics =
           _realtimeStreamListener.withPlaybackTelemetry(playbackTelemetry);
       _armPcmIdleTimer();
@@ -362,6 +426,7 @@ class LanAudioClient {
 
     _clientPingTimer?.cancel();
     _pcmIdleTimer?.cancel();
+    _webRtcActive = false;
     _channel = null;
     _subscription = null;
     _scheduleReconnect();
@@ -421,6 +486,46 @@ class LanAudioClient {
         'sentAt': DateTime.now().millisecondsSinceEpoch,
       });
     });
+  }
+
+  Future<PcmPlaybackTelemetry> _startPcmFallback(String reason) async {
+    if (!_pcmFallbackAllowed ||
+        !_wasListening ||
+        _manualDisconnect ||
+        _isDisposed ||
+        _pcmFallbackActive) {
+      return _pcmPlaybackBridge.telemetry;
+    }
+
+    _webRtcActive = false;
+    _pcmFallbackActive = true;
+    await _webRtcPlaybackBridge.stop();
+    final playbackTelemetry = await _pcmPlaybackBridge.start();
+    _events.add(
+      LanAudioEvent(
+        realtimeMetrics:
+            _realtimeStreamListener.withPlaybackTelemetry(playbackTelemetry),
+        streamStatus: 'pcm_fallback_$reason',
+      ),
+    );
+    return playbackTelemetry;
+  }
+
+  Future<void> _restartWebRtcAfterReconnect() async {
+    try {
+      _webRtcActive = await _webRtcPlaybackBridge.start(
+        sendSignal: _send,
+        onFallback: (reason) {
+          unawaited(_startPcmFallback(reason));
+        },
+      );
+    } catch (_) {
+      _webRtcActive = false;
+    }
+
+    if (!_webRtcActive) {
+      await _startPcmFallback('webrtc-reconnect-failed');
+    }
   }
 
   void _send(Map<String, dynamic> payload) {

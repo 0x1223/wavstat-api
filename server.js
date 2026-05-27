@@ -1,5 +1,6 @@
 import express from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync } from 'fs';
@@ -10,10 +11,12 @@ import soundcloudRouter from './routes/soundcloud.js';
 import artistRouter     from './routes/artist.js';
 import chartsRouter     from './routes/charts.js';
 
+const require = createRequire(import.meta.url);
+const WebSocket = require('ws');
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DIGITIZER_URL = process.env.DIGITIZER_URL || 'http://localhost:3001';
+const DIGITIZER_URL = process.env.DIGITIZER_URL || 'http://localhost:8081';
 
 // ── Spotify Client Credentials ────────────────────────────────────────────────
 let _spotifyToken = null;
@@ -97,3 +100,24 @@ if (existsSync(distPath)) {
 }
 
 app.listen(PORT, () => console.log(`Wavstat API on port ${PORT} | digitizer → ${DIGITIZER_URL}`));
+
+// New WebSocket Server for Plugin Telemetry
+const wss = new WebSocket.Server({ port: 8081, host: '0.0.0.0' });
+
+wss.on('connection', (ws, req) => {
+    console.log('--- Handshake initiated from:', req.socket.remoteAddress, '---');
+    
+    ws.on('message', (message) => {
+        console.log('Message received from plugin:', message);
+    });
+
+    ws.on('close', (code, reason) => {
+        console.log('Connection closed. Code:', code, 'Reason:', reason);
+    });
+
+    ws.on('error', (error) => {
+        console.error('WebSocket connection error details:', error);
+    });
+});
+
+console.log('WebSocket server is active and waiting for a handshake on port 8081');

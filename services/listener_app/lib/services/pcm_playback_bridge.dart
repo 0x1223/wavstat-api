@@ -6,6 +6,24 @@ import 'dart:typed_data' as typed;
 
 import 'package:web/web.dart' as web;
 
+import '../models/transport_config.dart';
+
+class _QueuedPcmBytes {
+  const _QueuedPcmBytes({
+    required this.bytes,
+    required this.channels,
+    required this.sampleRate,
+    required this.bitDepth,
+    required this.chunkDurationMs,
+  });
+
+  final typed.Uint8List bytes;
+  final int channels;
+  final int sampleRate;
+  final int bitDepth;
+  final int chunkDurationMs;
+}
+
 class PcmPlaybackTelemetry {
   const PcmPlaybackTelemetry({
     this.audioContextState = 'idle',
@@ -39,9 +57,6 @@ class PcmPlaybackTelemetry {
 }
 
 class PcmPlaybackBridge {
-  static const double _smallLeadSeconds = 0.035;
-  static const double _resumeLeadSeconds = 0.08;
-  static const double _maxScheduleAheadSeconds = 0.25;
   static const double _resyncDriftSeconds = 0.38;
   static const double _fadeSeconds = 0.003;
   static const Duration _outputRefreshGrace = Duration(milliseconds: 700);
@@ -57,12 +72,14 @@ class PcmPlaybackBridge {
 
   web.AudioContext? _context;
   web.GainNode? _outputGain;
+  web.AudioWorkletNode? _workletNode;
   void Function(PcmPlaybackTelemetry telemetry)? onTelemetry;
   final List<web.AudioBufferSourceNode> _sources =
       <web.AudioBufferSourceNode>[];
   final List<Timer> _resumeRetryTimers = <Timer>[];
   final List<Map<String, dynamic>> _queuedPcmMessages =
       <Map<String, dynamic>>[];
+  final List<_QueuedPcmBytes> _queuedPcmBytes = <_QueuedPcmBytes>[];
   Timer? _outputRefreshProbeTimer;
   Timer? _silentOutputRefreshTimer;
   Timer? _delayedRestoreCheckTimer;
@@ -72,6 +89,9 @@ class PcmPlaybackBridge {
   DateTime? _lastSilentOutputRefreshAt;
   DateTime? _lastSoftFallbackAt;
   double _scheduledAt = 0;
+  double _targetLeadSeconds = 0.08;
+  double _resumeLeadSeconds = 0.10;
+  double _maxScheduleAheadSeconds = 0.25;
   int _underrunCount = 0;
   int _generation = 0;
   int _decodedSampleRate = 0;
@@ -93,6 +113,8 @@ class PcmPlaybackBridge {
   bool _softFallbackInFlight = false;
   bool _softFallbackAwaitingRecovery = false;
   bool _awaitingOutputRestart = false;
+  bool _workletModuleLoaded = false;
+  bool _workletUnavailable = false;
   JSFunction? _visibilityListener;
   JSFunction? _focusListener;
   JSFunction? _pageShowListener;
@@ -102,6 +124,15 @@ class PcmPlaybackBridge {
 
   PcmPlaybackTelemetry get telemetry => _telemetry;
 
+  void configureTransport(TransportConfig config) {
+    _targetLeadSeconds = config.targetBufferMs / 1000;
+    _resumeLeadSeconds = max(_targetLeadSeconds, config.safeBufferMs / 1000);
+    _maxScheduleAheadSeconds = max(
+      _resumeLeadSeconds + 0.08,
+      config.safeBufferMs / 1000,
+    );
+  }
+
   Future<PcmPlaybackTelemetry> start() async {
     if (_starting) {
       return _telemetry;
@@ -110,6 +141,7 @@ class PcmPlaybackBridge {
     _starting = true;
     try {
       final context = _context ??= web.AudioContext();
+      await _ensureWorkletRenderer(context);
       _attachLifecycleListeners();
       _cancelResumeRetries();
       _logRecoveryState('scheduler-start-requested', reason: 'start');
@@ -118,7 +150,7 @@ class PcmPlaybackBridge {
       _manualResumeRequired = false;
       _lastResumeResult = 'starting';
       _active = true;
-      _scheduledAt = context.currentTime + _smallLeadSeconds;
+      _scheduledAt = context.currentTime + _targetLeadSeconds;
       _logDiagnostic('start.before-resume');
       await context.resume().toDart;
       _logDiagnostic('start.resume-success');
@@ -152,7 +184,9 @@ class PcmPlaybackBridge {
     _cancelDelayedRestoreCheck();
     _cancelSoftFallback();
     _queuedPcmMessages.clear();
+    _queuedPcmBytes.clear();
     _stopSources();
+    _stopWorkletRenderer();
     _disconnectOutputChain();
     final context = _context;
     if (context != null && context.state != 'closed') {
@@ -228,16 +262,54 @@ class PcmPlaybackBridge {
     }
 
     final now = context.currentTime;
+    final worklet = _workletNode;
+    if (worklet != null) {
+      try {
+        worklet.port.postMessage(
+          <String, Object>{
+            'type': 'pcm-bytes',
+            'bytes': bytes.toJS,
+            'channels': channels,
+            'frameCount': frames,
+            'sampleRate': sampleRate,
+          }.jsify(),
+        );
+        if (_scheduledAt > 0 && _scheduledAt < now) {
+          _underrunCount += 1;
+          _scheduledAt = now + _targetLeadSeconds;
+        }
+        _scheduledAt =
+            max(_scheduledAt, now + _targetLeadSeconds) + frames / sampleRate;
+        if (_awaitingOutputRestart) {
+          _awaitingOutputRestart = false;
+          _manualResumeRequired = false;
+          _outputRestartCount += 1;
+          _lastResumeResult = 'worklet-scheduled';
+          _cancelResumeRetries();
+        }
+        _decodedSampleRate = sampleRate;
+        _decodedChannels = channels;
+        _chunkDurationMs = chunkDurationMs > 0
+            ? chunkDurationMs
+            : ((frames / sampleRate) * 1000).round();
+        _scheduledLeadMs = max(0, ((_scheduledAt - now) * 1000).round());
+        return _updateTelemetry(outputActive: true);
+      } catch (_) {
+        _workletUnavailable = true;
+        _stopWorkletRenderer();
+      }
+    }
+
     if (_scheduledAt > 0 && _scheduledAt < now) {
       _underrunCount += 1;
-      _scheduledAt = now + _smallLeadSeconds;
+      _scheduledAt = now + _targetLeadSeconds;
     }
 
     final scheduleDepth = _scheduledAt - now;
     if (scheduleDepth > _resyncDriftSeconds) {
       _generation += 1;
       _stopSources();
-      _scheduledAt = now + _smallLeadSeconds;
+      _scheduledAt = now + _targetLeadSeconds;
     } else if (scheduleDepth > _maxScheduleAheadSeconds) {
       return _updateTelemetry(outputActive: true);
     }
@@ -267,7 +339,7 @@ class PcmPlaybackBridge {
     }).toJS;
     _sources.add(source);
 
-    final minStartAt = now + _smallLeadSeconds;
+    final minStartAt = now + _targetLeadSeconds;
     final startAt =
         _scheduledAt <= 0 ? minStartAt : max(minStartAt, _scheduledAt);
     final duration = buffer.duration;
@@ -303,6 +375,169 @@ class PcmPlaybackBridge {
       );
     }
     _logDiagnostic('pcm.scheduled');
+
+    return _updateTelemetry(outputActive: true);
+  }
+
+  PcmPlaybackTelemetry enqueueBytes(
+    typed.Uint8List bytes, {
+    int channels = 2,
+    int sampleRate = 48000,
+    int bitDepth = 16,
+    int chunkDurationMs = 10,
+  }) {
+    final context = _context;
+    if (!_active || context == null) {
+      return _updateTelemetry(outputActive: false);
+    }
+    _pcmPacketArrivalCount += 1;
+    _lastPcmArrivedAt = DateTime.now();
+
+    if (context.state == 'suspended' || context.state == 'interrupted') {
+      _queuePcmBytes(
+        bytes,
+        channels: channels,
+        sampleRate: sampleRate,
+        bitDepth: bitDepth,
+        chunkDurationMs: chunkDurationMs,
+      );
+      _logRecoveryState(
+        'pcm-arrival-context-blocked',
+        reason: 'pcm-bytes',
+        detail: 'arrival-count=$_pcmPacketArrivalCount',
+      );
+      _logDiagnostic('pcm.bytes-arrived-context-blocked');
+      _requestForegroundResume('chunk');
+      return _updateTelemetry(outputActive: false);
+    }
+
+    if (!_telemetry.outputActive) {
+      _pcmWhileInactiveLogs += 1;
+      if (_pcmWhileInactiveLogs == 1 || _pcmWhileInactiveLogs % 50 == 0) {
+        _logRecoveryState(
+          'pcm-arrival-output-inactive',
+          reason: 'pcm-bytes',
+          detail: 'arrival-count=$_pcmPacketArrivalCount',
+        );
+        _logDiagnostic('pcm.bytes-arriving-output-inactive');
+      }
+    }
+
+    channels = channels.clamp(1, 2);
+    if (bitDepth != 16 || sampleRate <= 0 || bytes.isEmpty) {
+      return _updateTelemetry(outputActive: false);
+    }
+
+    final bytesPerFrame = channels * 2;
+    final frames = bytes.length ~/ bytesPerFrame;
+    if (frames <= 0) {
+      return _updateTelemetry(outputActive: false);
+    }
+
+    final now = context.currentTime;
+    final worklet = _workletNode;
+    if (worklet != null) {
+      try {
+        worklet.port.postMessage(
+          <String, Object>{
+            'type': 'pcm-bytes',
+            'bytes': bytes.toJS,
+            'channels': channels,
+            'frameCount': frames,
+            'sampleRate': sampleRate,
+          }.jsify(),
+        );
+        if (_scheduledAt > 0 && _scheduledAt < now) {
+          _underrunCount += 1;
+          _scheduledAt = now + _targetLeadSeconds;
+        }
+        _scheduledAt =
+            max(_scheduledAt, now + _targetLeadSeconds) + frames / sampleRate;
+        if (_awaitingOutputRestart) {
+          _awaitingOutputRestart = false;
+          _manualResumeRequired = false;
+          _outputRestartCount += 1;
+          _lastResumeResult = 'worklet-scheduled';
+          _cancelResumeRetries();
+        }
+        _decodedSampleRate = sampleRate;
+        _decodedChannels = channels;
+        _chunkDurationMs = chunkDurationMs > 0
+            ? chunkDurationMs
+            : ((frames / sampleRate) * 1000).round();
+        _scheduledLeadMs = max(0, ((_scheduledAt - now) * 1000).round());
+        return _updateTelemetry(outputActive: true);
+      } catch (_) {
+        _workletUnavailable = true;
+        _stopWorkletRenderer();
+      }
+    }
+
+    if (_scheduledAt > 0 && _scheduledAt < now) {
+      _underrunCount += 1;
+      _scheduledAt = now + _targetLeadSeconds;
+    }
+
+    final scheduleDepth = _scheduledAt - now;
+    if (scheduleDepth > _resyncDriftSeconds) {
+      _generation += 1;
+      _stopSources();
+      _scheduledAt = now + _targetLeadSeconds;
+    } else if (scheduleDepth > _maxScheduleAheadSeconds) {
+      return _updateTelemetry(outputActive: true);
+    }
+
+    final buffer = context.createBuffer(channels, frames, sampleRate);
+    final data = typed.ByteData.sublistView(bytes);
+
+    for (var channel = 0; channel < channels; channel += 1) {
+      final samples = typed.Float32List(frames);
+      for (var frame = 0; frame < frames; frame += 1) {
+        final offset = (frame * channels + channel) * 2;
+        final sample = data.getInt16(offset, typed.Endian.little);
+        samples[frame] = (sample / 32768).clamp(-1.0, 1.0);
+      }
+      _smoothEdges(samples, sampleRate);
+      buffer.copyToChannel(samples.toJS, channel);
+    }
+
+    final source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(_outputDestination(context));
+    final generation = _generation;
+    source.onended = ((web.Event _) {
+      if (generation == _generation) {
+        _sources.remove(source);
+      }
+    }).toJS;
+    _sources.add(source);
+
+    final minStartAt = now + _targetLeadSeconds;
+    final startAt =
+        _scheduledAt <= 0 ? minStartAt : max(minStartAt, _scheduledAt);
+    final duration = buffer.duration;
+    source.start(startAt);
+    _scheduledAt = startAt + duration;
+    if (_awaitingOutputRestart) {
+      _awaitingOutputRestart = false;
+      _manualResumeRequired = false;
+      _outputRestartCount += 1;
+      _lastResumeResult = 'scheduled';
+      _cancelResumeRetries();
+    }
+    _decodedSampleRate = sampleRate;
+    _decodedChannels = channels;
+    _chunkDurationMs =
+        chunkDurationMs > 0 ? chunkDurationMs : (duration * 1000).round();
+    _scheduledLeadMs = max(0, ((_scheduledAt - now) * 1000).round());
+    if (_pcmPacketArrivalCount == 1 || _pcmPacketArrivalCount % 100 == 0) {
+      _logRecoveryState(
+        'pcm-byte-arrival-count',
+        reason: 'pcm-bytes',
+        detail: 'arrival-count=$_pcmPacketArrivalCount bytes=${bytes.length}',
+      );
+    }
+    _logDiagnostic('pcm.bytes-scheduled');
 
     return _updateTelemetry(outputActive: true);
   }
@@ -529,7 +764,9 @@ class PcmPlaybackBridge {
     _cancelDelayedRestoreCheck();
     _cancelSoftFallback();
     _queuedPcmMessages.clear();
+    _queuedPcmBytes.clear();
     _stopSources();
+    _stopWorkletRenderer();
     _disconnectOutputChain();
 
     if (_listenersAttached) {
@@ -646,6 +883,39 @@ class PcmPlaybackBridge {
     nextGain.connect(context.destination);
     _outputGain = nextGain;
     return nextGain;
+  }
+
+  Future<void> _ensureWorkletRenderer(web.AudioContext context) async {
+    if (_workletNode != null || _workletUnavailable) {
+      return;
+    }
+
+    try {
+      if (!_workletModuleLoaded) {
+        await context.audioWorklet.addModule('kingz_pcm_worklet.js').toDart;
+        _workletModuleLoaded = true;
+      }
+      final node = web.AudioWorkletNode(context, 'kingz-pcm-renderer');
+      node.connect(_outputDestination(context));
+      _workletNode = node;
+    } catch (_) {
+      _workletUnavailable = true;
+    }
+  }
+
+  void _stopWorkletRenderer() {
+    final node = _workletNode;
+    _workletNode = null;
+    if (node == null) {
+      return;
+    }
+
+    try {
+      node.port.postMessage(<String, Object>{'type': 'stop'}.jsify());
+    } catch (_) {}
+    try {
+      node.disconnect();
+    } catch (_) {}
   }
 
   void _disconnectOutputChain() {
@@ -1331,9 +1601,55 @@ class PcmPlaybackBridge {
     }
   }
 
+  void _queuePcmBytes(
+    typed.Uint8List bytes, {
+    required int channels,
+    required int sampleRate,
+    required int bitDepth,
+    required int chunkDurationMs,
+  }) {
+    _queuedPcmBytes.add(
+      _QueuedPcmBytes(
+        bytes: typed.Uint8List.fromList(bytes),
+        channels: channels,
+        sampleRate: sampleRate,
+        bitDepth: bitDepth,
+        chunkDurationMs: chunkDurationMs,
+      ),
+    );
+    while (_queuedPcmBytes.length > 16) {
+      _queuedPcmBytes.removeAt(0);
+    }
+  }
+
   void _drainQueuedPcmMessages() {
-    if (_queuedPcmMessages.isEmpty) {
+    if (_queuedPcmMessages.isEmpty && _queuedPcmBytes.isEmpty) {
       return;
+    }
+
+    final queuedBytes = List<_QueuedPcmBytes>.from(_queuedPcmBytes);
+    _queuedPcmBytes.clear();
+    for (final packet in queuedBytes) {
+      if (!_active || _context?.state != 'running') {
+        _queuePcmBytes(
+          packet.bytes,
+          channels: packet.channels,
+          sampleRate: packet.sampleRate,
+          bitDepth: packet.bitDepth,
+          chunkDurationMs: packet.chunkDurationMs,
+        );
+        return;
+      }
+      enqueueBytes(
+        packet.bytes,
+        channels: packet.channels,
+        sampleRate: packet.sampleRate,
+        bitDepth: packet.bitDepth,
+        chunkDurationMs: packet.chunkDurationMs,
+      );
+      if (!_awaitingOutputRestart) {
+        return;
+      }
     }
 
     final queued = List<Map<String, dynamic>>.from(_queuedPcmMessages);

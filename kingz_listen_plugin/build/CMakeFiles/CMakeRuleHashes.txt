@@ -1,0 +1,3 @@
+# Hashes of file build rules.
+7b45d04896d4d317ad314337a689e0b7 KingzListenPlugin_artefacts/JuceLibraryCode/KingzListenPlugin_AU/PkgInfo
+4f4a11deb03d5c9f319a29780044eaab KingzListenPlugin_artefacts/JuceLibraryCode/KingzListenPlugin_VST3/PkgInfo

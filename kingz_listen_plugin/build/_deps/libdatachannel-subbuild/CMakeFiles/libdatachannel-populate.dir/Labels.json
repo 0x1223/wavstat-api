@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/CMakeFiles/libdatachannel-populate"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/CMakeFiles/libdatachannel-populate.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/CMakeFiles/libdatachannel-populate-complete.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/libdatachannel-populate-prefix/src/libdatachannel-populate-stamp/libdatachannel-populate-build.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/libdatachannel-populate-prefix/src/libdatachannel-populate-stamp/libdatachannel-populate-configure.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/libdatachannel-populate-prefix/src/libdatachannel-populate-stamp/libdatachannel-populate-download.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/libdatachannel-populate-prefix/src/libdatachannel-populate-stamp/libdatachannel-populate-install.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/libdatachannel-populate-prefix/src/libdatachannel-populate-stamp/libdatachannel-populate-mkdir.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/libdatachannel-populate-prefix/src/libdatachannel-populate-stamp/libdatachannel-populate-patch.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/libdatachannel-populate-prefix/src/libdatachannel-populate-stamp/libdatachannel-populate-test.rule"
+		},
+		{
+			"file" : "/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/libdatachannel-populate-prefix/src/libdatachannel-populate-stamp/libdatachannel-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libdatachannel-populate"
+		],
+		"name" : "libdatachannel-populate"
+	}
+}

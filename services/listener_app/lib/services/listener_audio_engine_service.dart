@@ -31,8 +31,8 @@ class ListenerAudioEngineService {
     _transportConfig = switch (mode) {
       MonitoringMode.lowLatency => const TransportConfig(
           mode: MonitoringMode.lowLatency,
-          targetBufferMs: 40,
-          safeBufferMs: 80,
+          targetBufferMs: 49,
+          safeBufferMs: 96,
           adaptive: true,
         ),
       MonitoringMode.balanced => const TransportConfig(),
