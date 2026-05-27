@@ -1059,19 +1059,23 @@ export default function App({ onFirstRender } = {}) {
 
   const handlePrevTrack = useCallback(() => {
     const idx = tracks.findIndex((t) => t.id === activeTrackId);
+    if (idx < 0) return;
     let targetId = null;
     if (idx > 0) {
       targetId = tracks[idx - 1].id;
-    } else if (repeatMode === "all" && tracks.length > 1) {
-      targetId = tracks[tracks.length - 1].id;
+    } else {
+      // First track — always wrap to last (standard DAW behaviour; Repeat All
+      // also wraps so no special-case needed here).
+      targetId = tracks.length > 1 ? tracks[tracks.length - 1].id : tracks[0]?.id ?? null;
     }
     if (!targetId) return;
-    autoPlayNextRef.current = false;
+    // Signal isPlayerReady to call play() once the new track is loaded.
+    autoPlayNextRef.current = true;
     if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
       unlockAudioSession();
     }
     selectTrack(targetId);
-  }, [activeTrackId, isReviewerMode, repeatMode, selectTrack, tracks]);
+  }, [activeTrackId, isReviewerMode, selectTrack, tracks]);
 
   const handleNextTrack = useCallback(() => {
     const idx = tracks.findIndex((t) => t.id === activeTrackId);
@@ -1080,10 +1084,17 @@ export default function App({ onFirstRender } = {}) {
     if (idx < tracks.length - 1) {
       targetId = tracks[idx + 1].id;
     } else if (repeatMode === "all" && tracks.length > 1) {
+      // Repeat All — wrap around to the beginning.
       targetId = tracks[0].id;
     }
-    if (!targetId) return;
-    autoPlayNextRef.current = false;
+    if (!targetId) {
+      // Last track, Repeat All off — stop and park; do not change the track.
+      playerRef.current?.pause();
+      setIsPlaying(false);
+      return;
+    }
+    // Signal isPlayerReady to call play() once the new track is loaded.
+    autoPlayNextRef.current = true;
     if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
       unlockAudioSession();
     }
@@ -1484,19 +1495,24 @@ export default function App({ onFirstRender } = {}) {
   }, [activeTrackId, activeVersionId]);
 
   // When the player is ready, attempt play if:
-  //  • autoPlayNextRef is set (track ended naturally → auto-advance), OR
-  //  • userHasPlayedRef is set (user has tapped Play before → manual selection).
+  //  • autoPlayNextRef is set — track ended naturally OR the user pressed
+  //    Prev/Next (all platforms: desktop engineer, desktop reviewer, mobile).
+  //  • OR: mobile reviewer who has already tapped Play once manually switches
+  //    tracks (session-level intent → keep listening seamlessly).
   // autoplayAttemptedRef prevents firing twice for the same track load.
   useEffect(() => {
-    if (!isReviewerMode || !isPlayerReady) return;
-    if (!isMobileViewport()) return;
+    if (!isPlayerReady) return;
     if (autoplayAttemptedRef.current) return;
 
     const isAutoNext = Boolean(autoPlayNextRef.current);
     if (isAutoNext) autoPlayNextRef.current = false;
 
-    // Only autoplay if this is an auto-next advance OR the user has played before.
-    if (!isAutoNext && !userHasPlayedRef.current) return;
+    // Mobile-reviewer resume: user has previously tapped Play and then manually
+    // selected a track — continue playback without requiring another tap.
+    const isMobileReviewerResume =
+      isMobileViewport() && isReviewerMode && userHasPlayedRef.current;
+
+    if (!isAutoNext && !isMobileReviewerResume) return;
 
     autoplayAttemptedRef.current = true;
     const el = mediaElement; // capture — may change if another track is selected mid-await
@@ -1531,81 +1547,85 @@ export default function App({ onFirstRender } = {}) {
     })();
   }, [isPlayerReady, isReviewerMode, activeTrackId, activeVersionId]);
 
-  // Listen to the native ended event on the active media element.
-  // Only auto-advances if the user has already tapped Play once this session.
+  // ── Track-end state machine (all modes, all platforms) ───────────────────
+  // Single "ended" listener replaces the old split between handleNativeEnded
+  // (mobile-reviewer only) and handleRepeatEnded.  All mutable values come from
+  // refs so the listener is attached exactly once per mediaElement and always
+  // reads the latest state without needing to be re-registered on every render.
   //
-  // Implementation note: handleNativeEnded reads tracks / activeTrackId / selectTrack
-  // from always-current refs (tracksRef, activeTrackIdRef, selectTrackRef) rather
-  // than from the effect closure.  This prevents stale-closure failures on the
-  // 3rd-and-beyond track: updateDuration / updateActiveVersion call setTracks()
-  // during playback, which would recreate selectTrack and re-trigger this effect —
-  // removing the old listener and re-adding a new one.  With refs the listener is
-  // attached exactly once per media element and always sees the latest state.
-  useEffect(() => {
-    if (!isReviewerMode || !isMobileViewport()) return;
-    if (!mediaElement) return;
-
-    function handleNativeEnded() {
-      if (!userHasPlayedRef.current) return; // No play yet — never auto-advance
-      if (repeatModeRef.current !== "off") return; // Repeat handler manages this
-      const currentTracks = tracksRef.current;
-      const currentActiveTrackId = activeTrackIdRef.current;
-      const currentIdx = currentTracks.findIndex((t) => t.id === currentActiveTrackId);
-      if (currentIdx < 0 || currentIdx >= currentTracks.length - 1) return; // Last track
-      const nextTrack = currentTracks[currentIdx + 1];
-      console.log("[MixReview] Track ended — auto-advancing to:", nextTrack.title);
-      autoPlayNextRef.current = true;
-      selectTrackRef.current?.(nextTrack.id);
-    }
-
-    mediaElement.addEventListener("ended", handleNativeEnded);
-    return () => mediaElement.removeEventListener("ended", handleNativeEnded);
-  }, [mediaElement, isReviewerMode]);
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // ── Repeat on track end (all modes, all viewports) ───────────────────────
-  // Uses refs for mode/tracks/activeTrackId so the listener is stable and never
-  // needs to be re-attached just because repeatMode or tracks change.
+  // Repeat One  — seekToTime(0) + play() in a short timeout.  playerRef is read
+  //               INSIDE the timeout (not captured before it) to avoid operating
+  //               on a destroyed WaveSurfer instance if the user skips during the
+  //               80 ms window.
+  // Repeat All  — advance sequentially and wrap from the last track to index 0.
+  //               Single-track playlists loop by seeking rather than re-selecting.
+  // Repeat Off  — advance sequentially to the next track.  On mobile, guard with
+  //               userHasPlayedRef so we never trigger before the iOS AudioContext
+  //               has been unlocked by the user's first tap.  On desktop there is
+  //               no such restriction.  When the last track ends, do nothing —
+  //               WaveSurfer already stopped; the UI parks at the end position.
   useEffect(() => {
     if (!mediaElement) return;
 
-    function handleRepeatEnded() {
+    function handleTrackEnded() {
       const mode = repeatModeRef.current;
-      if (mode === "off") return;
 
+      // ── Repeat One ──────────────────────────────────────────────────────
       if (mode === "one") {
-        const p = playerRef.current;
         setTimeout(() => {
-          p?.seekToTime(0);
-          p?.play()?.catch?.(() => {});
+          // Read playerRef.current inside the callback — guarantees we target the
+          // live player even if the user skips within the 80 ms settling window.
+          playerRef.current?.seekToTime(0);
+          playerRef.current?.play()?.catch?.(() => {});
         }, 80);
         return;
       }
 
+      // ── Repeat All ──────────────────────────────────────────────────────
       if (mode === "all") {
         const allTracks = tracksRef.current;
-        const currId = activeTrackIdRef.current;
-        const idx = allTracks.findIndex((t) => t.id === currId);
+        const currId   = activeTrackIdRef.current;
+        const idx      = allTracks.findIndex((t) => t.id === currId);
         if (idx < 0) return;
 
         if (allTracks.length === 1) {
-          // Single track — loop it
-          const p = playerRef.current;
+          // Single-track playlist — loop in place without re-selecting.
           setTimeout(() => {
-            p?.seekToTime(0);
-            p?.play()?.catch?.(() => {});
+            playerRef.current?.seekToTime(0);
+            playerRef.current?.play()?.catch?.(() => {});
           }, 80);
           return;
         }
 
         const nextIdx = idx < allTracks.length - 1 ? idx + 1 : 0;
+        console.log("[MixReview] Repeat All — advancing to track index", nextIdx);
         autoPlayNextRef.current = true;
         selectTrackRef.current?.(allTracks[nextIdx].id);
+        return;
       }
+
+      // ── Repeat Off: sequential auto-advance ─────────────────────────────
+      // Mobile guard: require at least one user-initiated Play so we never
+      // trigger programmatic playback before the iOS AudioContext is unlocked.
+      if (isMobileViewport() && !userHasPlayedRef.current) return;
+
+      const allTracks = tracksRef.current;
+      const currId   = activeTrackIdRef.current;
+      const idx      = allTracks.findIndex((t) => t.id === currId);
+
+      if (idx < 0 || idx >= allTracks.length - 1) {
+        // Last track — stop and park. WaveSurfer has already stopped; nothing to do.
+        return;
+      }
+
+      const nextTrack = allTracks[idx + 1];
+      console.log("[MixReview] Track ended — auto-advancing to:", nextTrack.title);
+      autoPlayNextRef.current = true;
+      selectTrackRef.current?.(nextTrack.id);
     }
 
-    mediaElement.addEventListener("ended", handleRepeatEnded);
-    return () => mediaElement.removeEventListener("ended", handleRepeatEnded);
+    mediaElement.addEventListener("ended", handleTrackEnded);
+    return () => mediaElement.removeEventListener("ended", handleTrackEnded);
   }, [mediaElement]);
   // ─────────────────────────────────────────────────────────────────────────
 
