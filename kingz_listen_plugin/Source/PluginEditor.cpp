@@ -69,11 +69,27 @@ juce::String getPlaceholderHtml()
     <pre id="telemetry-preview"></pre>
   </main>
   <script>
+    const studioIpInput = document.getElementById("studio-ip");
+    const studioPortInput = document.getElementById("studio-port");
+    let connectionFieldsEdited = false;
+
+    function markConnectionFieldsEdited() {
+      connectionFieldsEdited = true;
+    }
+
+    studioIpInput.addEventListener("focus", markConnectionFieldsEdited);
+    studioIpInput.addEventListener("input", markConnectionFieldsEdited);
+    studioPortInput.addEventListener("focus", markConnectionFieldsEdited);
+    studioPortInput.addEventListener("input", markConnectionFieldsEdited);
+
     function applyConnectionState(payload) {
       if (!payload) return;
-      document.getElementById("studio-ip").value = payload.localIp || "127.0.0.1";
-      document.getElementById("studio-port").value = String(payload.port || 8081);
       window.__KINGZ_LISTEN_CONNECTION__ = payload;
+
+      if (!connectionFieldsEdited) {
+        studioIpInput.value = payload.localIp || studioIpInput.value || "127.0.0.1";
+        studioPortInput.value = String(payload.port || studioPortInput.value || 8081);
+      }
     }
 
     function applyTelemetry(payload) {
@@ -109,8 +125,8 @@ juce::String getPlaceholderHtml()
     });
 
     document.getElementById("connect").addEventListener("click", () => {
-      const host = document.getElementById("studio-ip").value.trim();
-      const port = Number.parseInt(document.getElementById("studio-port").value, 10) || 8081;
+      const host = studioIpInput.value.trim();
+      const port = Number.parseInt(studioPortInput.value, 10) || 8081;
       document.getElementById("telemetry-status").textContent = "Connecting";
       sendToNative({ action: "connectTelemetry", source: "placeholder-ui", host, port });
     });

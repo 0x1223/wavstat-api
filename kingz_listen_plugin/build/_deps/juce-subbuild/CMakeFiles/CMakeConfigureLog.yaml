@@ -52,7 +52,6 @@ events:
         - "/Library/Apple/usr/bin"
         - "/opt/homebrew/bin"
         - "/opt/homebrew/Caskroom/flutter/latest/flutter/bin"
-        - "/opt/homebrew/Caskroom/flutter/latest/flutter/bin"
   -
     kind: "message-v1"
     backtrace:
@@ -111,7 +110,6 @@ events:
         - "/opt/pmk/env/global/bin"
         - "/Library/Apple/usr/bin"
         - "/opt/homebrew/bin"
-        - "/opt/homebrew/Caskroom/flutter/latest/flutter/bin"
         - "/opt/homebrew/Caskroom/flutter/latest/flutter/bin"
       CMAKE_INSTALL_PREFIX: "/usr/local"
 ...
