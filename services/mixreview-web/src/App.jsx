@@ -2034,7 +2034,6 @@ export default function App({ onFirstRender } = {}) {
         onPrev={handlePrevTrack}
         onNext={handleNextTrack}
         onRepeatChange={handleRepeatChange}
-        trackTitle={activeTrack?.title}
       />
 
       {isReviewerMode && mobileNoteDraft && (

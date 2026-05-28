@@ -14,7 +14,6 @@ export function TransportBar({
   onPrev,
   onNext,
   onRepeatChange,
-  trackTitle,
 }) {
   const repeatSymbol = repeatMode === "one" ? "↺¹" : "↺";
   const repeatTitle =
@@ -24,12 +23,6 @@ export function TransportBar({
 
   return (
     <footer className="transport" aria-label="Playback controls">
-      {trackTitle && (
-        <div className="transport-track-title">
-          <span>{trackTitle}</span>
-        </div>
-      )}
-
       <div className="transport-time">
         <span>{formatTimecode(currentTime)}</span>
         <span>{formatTimecode(duration)}</span>
