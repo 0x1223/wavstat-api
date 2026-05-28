@@ -1312,15 +1312,16 @@ export default function App({ onFirstRender } = {}) {
     setDeleteConfirmPending(false);
   }, []);
 
-  // Pre-warm the seekAndPlay lazy chunk the moment a comment drawer opens
-  // so the module is in memory before the user taps the button.
+  // Pre-warm the seekAndPlay lazy chunk the moment either drawer opens
+  // (existing comment drawer OR new marker creation drawer) so the module
+  // is resident before the user taps the button.
   useEffect(() => {
-    if (mobileCommentDrawerId && !_seekAndPlayRef.current) {
+    if ((mobileCommentDrawerId || mobileNoteDraft) && !_seekAndPlayRef.current) {
       import("./lib/seekAndPlay.js").then((mod) => {
         _seekAndPlayRef.current = mod.seekAndPlay;
       });
     }
-  }, [mobileCommentDrawerId]);
+  }, [mobileCommentDrawerId, mobileNoteDraft]);
 
   // Seek to a comment's timestamp and begin playback.
   // Synchronous on first tap (module is pre-warmed above); falls back to
@@ -2097,7 +2098,19 @@ export default function App({ onFirstRender } = {}) {
             <div className="mobile-comment-drawer-header">
               <div>
                 <p className="eyebrow">New Timestamp Note</p>
-                <h3>{formatTime(mobileNoteDraft.time)}</h3>
+                <div className="drawer-timestamp-row">
+                  <h3>{formatTime(mobileNoteDraft.time)}</h3>
+                  <button
+                    type="button"
+                    className="drawer-play-btn"
+                    disabled={!isPlayerReady}
+                    onClick={() => handlePlayFromTimestamp(mobileNoteDraft.time)}
+                    aria-label={`Play from ${formatTime(mobileNoteDraft.time)}`}
+                    title={`Play from ${formatTime(mobileNoteDraft.time)}`}
+                  >
+                    ▶ Play from here
+                  </button>
+                </div>
               </div>
               <button type="button" onClick={() => setMobileNoteDraft(null)}>✕</button>
             </div>
