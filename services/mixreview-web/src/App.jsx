@@ -632,7 +632,6 @@ export default function App({ onFirstRender } = {}) {
       setIsPlaying(false);
       setIsPlayerReady(false);
       setMobileNoteDraft(null);
-      playerRef.current = null;
 
       if (!activeTrackId) {
         const nextVersions = createEmptyVersions().map((version) =>
@@ -766,7 +765,6 @@ export default function App({ onFirstRender } = {}) {
     setIsPlaying(false);
     setIsPlayerReady(false);
     setMobileNoteDraft(null);
-    playerRef.current = null;
 
     setUploadError(
       lastError
@@ -990,6 +988,7 @@ export default function App({ onFirstRender } = {}) {
   }, [projectName, sessionSnapshot]);
 
   const switchVersion = useCallback((versionId) => {
+    playerRef.current?.pause();
     setActiveVersionId(versionId);
     setTracks((currentTracks) =>
       currentTracks.map((track) =>
@@ -1007,7 +1006,6 @@ export default function App({ onFirstRender } = {}) {
     setIsPlayerReady(false);
     activeMarkerRef.current = null;
     setMobileNoteDraft(null);
-    playerRef.current = null;
   }, [activeTrackId, currentReviewer, isEngineerMode, sessionId]);
 
   const selectTrack = useCallback((trackId) => {
@@ -1017,6 +1015,11 @@ export default function App({ onFirstRender } = {}) {
       return;
     }
 
+    // Pause immediately before state updates so the old audio stops cleanly.
+    // Do NOT null playerRef — the WaveSurfer/<audio> instance is reused for the
+    // next track (iOS retains audio permission when the element stays alive).
+    playerRef.current?.pause();
+
     setTracks(nextTracks);
     setActiveTrackId(trackId);
     setVersions(nextTrack.versions);
@@ -1024,10 +1027,8 @@ export default function App({ onFirstRender } = {}) {
     setCurrentTime(0);
     setIsPlaying(false);
     setIsPlayerReady(false);
-    setMediaElement(null);
     activeMarkerRef.current = null;
     setMobileNoteDraft(null);
-    playerRef.current = null;
     setReviewRoute(
       isEngineerMode ? "admin" : "reviewer",
       nextTrack.activeVersionId || nextTrack.versions[0]?.id || "version-v1",
@@ -1572,12 +1573,8 @@ export default function App({ onFirstRender } = {}) {
 
       // ── Repeat One ──────────────────────────────────────────────────────
       if (mode === "one") {
-        setTimeout(() => {
-          // Read playerRef.current inside the callback — guarantees we target the
-          // live player even if the user skips within the 80 ms settling window.
-          playerRef.current?.seekToTime(0);
-          playerRef.current?.play()?.catch?.(() => {});
-        }, 80);
+        playerRef.current?.seekToTime(0);
+        playerRef.current?.play()?.catch?.(() => {});
         return;
       }
 
@@ -1589,11 +1586,8 @@ export default function App({ onFirstRender } = {}) {
         if (idx < 0) return;
 
         if (allTracks.length === 1) {
-          // Single-track playlist — loop in place without re-selecting.
-          setTimeout(() => {
-            playerRef.current?.seekToTime(0);
-            playerRef.current?.play()?.catch?.(() => {});
-          }, 80);
+          playerRef.current?.seekToTime(0);
+          playerRef.current?.play()?.catch?.(() => {});
           return;
         }
 
@@ -1867,7 +1861,6 @@ export default function App({ onFirstRender } = {}) {
           )}
 
           <WaveformReview
-            key={`${activeTrackId || "no-track"}-${activeVersionId}`}
             audioSource={audioSource}
             comments={comments}
             selectedCommentId={selectedCommentId}

@@ -204,6 +204,15 @@ export function WaveformReview({
     };
   }, []); // empty deps — all access is via refs, stable for component lifetime
 
+  // Dispose the mobile engine only when the component truly unmounts (not on
+  // URL changes between tracks). Keeping the engine alive across URL changes
+  // preserves the same HTMLAudioElement so iOS retains audio session permission.
+  useEffect(() => {
+    return () => {
+      disposeMobileEngine();
+    };
+  }, []);
+
   useEffect(() => {
     if (!containerRef.current) {
       return undefined;
@@ -280,7 +289,9 @@ export function WaveformReview({
       return () => {
         if (wavesurferRef.current === ws) wavesurferRef.current = null;
         resizeObserver.disconnect();
-        disposeMobileEngine();
+        // Do NOT dispose engine here — URL change keeps the same <audio> element
+        // alive so iOS retains audio session permission across track switches.
+        // True unmount disposal is handled by the dedicated empty-deps effect above.
       };
     }
 

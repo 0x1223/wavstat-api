@@ -777,26 +777,37 @@ export function mountMobileEngine(container, url, handlers) {
     return _ws;
   }
 
-  // New URL means a different track is being loaded. Clear all background-play
-  // guard state so the visibility/pageshow resume handlers cannot fire play()
-  // on a track the user never started in the foreground.
   _wasPlayingOnHide = false;
   _urlOnHide = null;
   _wasTimeAdvancing = false;
   _isRestoring = false;
-  _mediaDuration = 0; // reset so position state isn't stale from the previous track
+  _mediaDuration = 0;
 
+  // Reuse the existing WaveSurfer instance when one is available — calling
+  // ws.load(newUrl) keeps the same HTMLAudioElement alive so iOS retains the
+  // user-gesture audio permission across track switches without a new gesture.
+  const _reusingInstance = Boolean(_ws);
   if (_ws) {
     _detachNativeListeners?.();
     _detachNativeListeners = null;
-    _isRestoring = false;
-    _ws.destroy();
-    _ws = null;
+    _interruptedWhilePlaying = false;
+    // Scrub per-track WaveSurfer listeners (ready/error) so stale handlers from
+    // the previous track don't fire on the new load.  Native <audio> element
+    // events (play/pause/timeupdate/ended) survive because attachNativeListeners
+    // puts them on the HTMLAudioElement, not on WaveSurfer's EventEmitter.
+    _ws.unAll();
+    const reuseMediaEl = _ws.getMediaElement?.();
+    if (reuseMediaEl) {
+      _detachNativeListeners = attachNativeListeners(reuseMediaEl, _ws);
+    }
   }
 
   _url = url;
 
-  if (!url) return null;
+  if (!url) {
+    if (_ws) { _ws.destroy(); _ws = null; }
+    return null;
+  }
 
   // ── Logging ────────────────────────────────────────────────────────────
   const ext = url.split("?")[0].split(".").pop().toLowerCase();
@@ -857,71 +868,50 @@ export function mountMobileEngine(container, url, handlers) {
   //                    minPxPerSec ceiling only matters when the calculated
   //                    width would exceed fillParent; keep it as a floor guard.
   let ws;
-  try {
-    ws = WaveSurfer.create({
-      container,
-      backend: "MediaElement",
-      waveColor: "#6d6457",
-      progressColor: "#d6a354",
-      cursorColor: "#f5efe3",
-      cursorWidth: 2,
-      height: 180,
-      barWidth: 2,
-      barGap: 2,
-      barRadius: 2,
-      autoScroll: false,
-      autoCenter: false,
-      normalize: true,
-      dragToSeek: true,
-      fillParent: true,
-      pixelRatio: 1,    // fixed 1:1 — never scale up for Retina (OOM guard)
-      minPxPerSec: 1,   // minimum zoom-out floor; prevents giant canvas on long tracks
-    });
-  } catch (e) {
-    // WaveSurfer constructor itself failed — most likely the container's
-    // canvas could not be allocated (extreme low-memory state).
-    console.warn("[MixReview] WaveSurfer.create() failed — canvas unavailable:", e?.message ?? String(e));
-    _handlers.current?.onError?.(new Error("Waveform renderer unavailable"));
-    return null;
+  if (!_reusingInstance) {
+    try {
+      ws = WaveSurfer.create({
+        container,
+        backend: "MediaElement",
+        waveColor: "#6d6457",
+        progressColor: "#d6a354",
+        cursorColor: "#f5efe3",
+        cursorWidth: 2,
+        height: 180,
+        barWidth: 2,
+        barGap: 2,
+        barRadius: 2,
+        autoScroll: false,
+        autoCenter: false,
+        normalize: true,
+        dragToSeek: true,
+        fillParent: true,
+        pixelRatio: 1,
+        minPxPerSec: 1,
+      });
+    } catch (e) {
+      console.warn("[MixReview] WaveSurfer.create() failed — canvas unavailable:", e?.message ?? String(e));
+      _handlers.current?.onError?.(new Error("Waveform renderer unavailable"));
+      return null;
+    }
+
+    _ws = ws;
+
+    const earlyMediaEl = ws.getMediaElement?.();
+    if (earlyMediaEl) {
+      earlyMediaEl.crossOrigin = "anonymous";
+      earlyMediaEl.preload = isWav ? "metadata" : "auto";
+      _detachNativeListeners?.();
+      _detachNativeListeners = null;
+      _detachNativeListeners = attachNativeListeners(earlyMediaEl, ws);
+    }
+
+    _setupMediaSession();
+  } else {
+    // Reuse existing instance — same <audio> element, iOS permission intact.
+    ws = _ws;
+    console.log("[MixReview] MobileEngine reuse — calling ws.load() on existing instance");
   }
-
-  _ws = ws;
-
-  // Attach native audio listeners as early as possible. WaveSurfer creates
-  // the HTMLAudioElement in its constructor, so it is usually available here.
-  // The ready / fallback paths re-check and attach if this missed.
-  //
-  // We also apply streaming configuration here — before the browser's network
-  // stack processes the element, because JS is still on the same call stack as
-  // WaveSurfer.create() and the engine hasn't yielded to the event loop yet:
-  //
-  //  crossOrigin="anonymous"
-  //    Sends an Origin header with every HTTP request the browser makes for
-  //    this element (including byte-range streaming requests to R2). This lets
-  //    Cloudflare R2's CORS policy expose Content-Range / Accept-Ranges response
-  //    headers to JavaScript and keeps the request in the CORS-credentialed
-  //    cache partition, preventing range-request stalls on cross-origin assets.
-  //
-  //  preload="metadata"  (WAV only)
-  //    Instructs the browser to fetch only the file header (enough to determine
-  //    duration and codec) and then stop. Audio data is streamed on-demand via
-  //    HTTP byte-range requests when play() is called. This prevents the browser
-  //    from trying to buffer a 40–100 MB WAV file on page load.
-  //    MP3 files remain at preload="auto" so they buffer freely — they are small
-  //    enough that aggressive pre-buffering is harmless and improves seek latency.
-  const earlyMediaEl = ws.getMediaElement?.();
-  if (earlyMediaEl) {
-    earlyMediaEl.crossOrigin = "anonymous";
-    earlyMediaEl.preload = isWav ? "metadata" : "auto";
-    _detachNativeListeners?.();
-    _detachNativeListeners = attachNativeListeners(earlyMediaEl, ws);
-  }
-
-  // Register lock-screen / notification-shade transport controls. Safe to call
-  // on every track load — setActionHandler() is idempotent and the handlers
-  // always resolve _ws?.getMediaElement() at call time, so they automatically
-  // target the new primary element without needing to be re-created.
-  _setupMediaSession();
 
   // didSettle: true once onReady or onWaveformUnavailable has been called.
   // Prevents duplicate handler calls if both fallback timer and WaveSurfer
