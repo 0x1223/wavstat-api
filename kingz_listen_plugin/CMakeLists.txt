@@ -51,6 +51,32 @@ juce_add_plugin(KingzListenPlugin
     COPY_PLUGIN_AFTER_BUILD FALSE
 )
 
+if(APPLE)
+    foreach(format_target IN ITEMS KingzListenPlugin_AU KingzListenPlugin_VST3)
+        if(TARGET ${format_target})
+            set_target_properties(${format_target}
+                PROPERTIES
+                    MACOSX_BUNDLE TRUE
+                    BUNDLE TRUE
+            )
+        endif()
+    endforeach()
+
+    if(TARGET KingzListenPlugin_AU)
+        set_target_properties(KingzListenPlugin_AU
+            PROPERTIES
+                BUNDLE_EXTENSION "component"
+        )
+    endif()
+
+    if(TARGET KingzListenPlugin_VST3)
+        set_target_properties(KingzListenPlugin_VST3
+            PROPERTIES
+                BUNDLE_EXTENSION "vst3"
+        )
+    endif()
+endif()
+
 target_sources(KingzListenPlugin
     PRIVATE
         Source/AudioFifoWorker.h
