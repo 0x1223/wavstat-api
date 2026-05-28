@@ -16,7 +16,7 @@ import {
   saveSessionToApi,
   uploadSessionAudio
 } from "./api/sessions.js";
-import { startKeepAlive } from "./lib/mobileAudioEngine.js";
+import { startKeepAlive, setMediaSessionMetadata } from "./lib/mobileAudioEngine.js";
 import {
   addDeletedSessionId,
   clearSessionCache,
@@ -1659,6 +1659,17 @@ export default function App({ onFirstRender } = {}) {
       } catch (_) {}
     };
   }, [handlePrevTrack, handleNextTrack]);
+
+  // ── Media Session metadata — lock screen Now Playing card ────────────────
+  // Updates title/artist/album on the iOS/Android lock screen player card
+  // whenever the active track or session context changes.
+  useEffect(() => {
+    setMediaSessionMetadata({
+      title:  activeTrack?.title  || "MixReview",
+      artist: sessionDetails.artistName || "MixReview",
+      album:  projectName         || "Kingz Bread Entertainment",
+    });
+  }, [activeTrack, sessionDetails.artistName, projectName]);
 
   const updateApprovalStatus = useCallback((nextStatus) => {
     if (!permissions.canReview || !approvalStates.includes(nextStatus)) {
