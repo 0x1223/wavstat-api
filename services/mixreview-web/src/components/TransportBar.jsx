@@ -21,6 +21,8 @@ export function TransportBar({
     repeatMode === "one" ? "Repeat one — click to enable Repeat All" :
     "Repeat all — click to disable repeat";
 
+  const isRepeatActive = repeatMode !== "off";
+
   return (
     <footer className="transport" aria-label="Playback controls">
       <div className="transport-time">
@@ -30,15 +32,16 @@ export function TransportBar({
 
       <div className="transport-controls">
         <button
-  type="button"
-  className="text-2xl text-[#D4AF37] hover:text-[#f3cf65] disabled:text-zinc-600 disabled:opacity-40 transition-all active:scale-90 px-3 py-1 flex items-center justify-center font-bold"
-  disabled={isDisabled || !hasPrev}
-  onClick={onPrev}
-  aria-label="Previous track"
-  title="Previous track"
->
-  ⏮
-</button>
+          type="button"
+          className="transport-nav-btn"
+          style={{ color: "#D4AF37", fontSize: "1.4rem" }}
+          disabled={isDisabled || !hasPrev}
+          onClick={onPrev}
+          aria-label="Previous track"
+          title="Previous track"
+        >
+          ⏮
+        </button>
         <button
           type="button"
           className="play-button"
@@ -50,15 +53,16 @@ export function TransportBar({
           <span>{isPlaying ? "Pause" : "Play"}</span>
         </button>
         <button
-  type="button"
-  className="text-2xl text-[#D4AF37] hover:text-[#f3cf65] disabled:text-zinc-600 disabled:opacity-40 transition-all active:scale-90 px-3 py-1 flex items-center justify-center font-bold"
-  disabled={isDisabled || !hasNext}
-  onClick={onNext}
-  aria-label="Next track"
-  title="Next track"
->
-  ⏭
-</button>
+          type="button"
+          className="transport-nav-btn"
+          style={{ color: "#D4AF37", fontSize: "1.4rem" }}
+          disabled={isDisabled || !hasNext}
+          onClick={onNext}
+          aria-label="Next track"
+          title="Next track"
+        >
+          ⏭
+        </button>
       </div>
 
       <div className="transport-nav">
@@ -80,19 +84,23 @@ export function TransportBar({
         >
           +5
         </button>
-            <button
-      type="button"
-      className={`border border-zinc-700/60 p-2 rounded-md transition-all active:scale-95 flex items-center justify-center min-w-[38px] min-h-[38px] ${
-        repeatMode !== "off" 
-          ? "text-[#D4AF37] bg-[#D4AF37]/10 border-[#D4AF37]/40 font-bold" 
-          : "text-zinc-400 bg-[#1e1e1e] hover:text-zinc-200"
-      }`}
-      onClick={onRepeatChange}
-      aria-label={repeatTitle}
-      title={repeatTitle}
-    >
-      {repeatSymbol}
-    </button>
+        <button
+          type="button"
+          className={`skip-button repeat-btn repeat-${repeatMode}`}
+          style={isRepeatActive ? {
+            color: "#f1c15e",
+            borderColor: "rgba(241,193,94,0.48)",
+            background: "linear-gradient(180deg,rgba(255,255,255,0.06),transparent), rgba(215,173,98,0.15)",
+            boxShadow: "0 0 14px rgba(241,193,94,0.22)",
+          } : {
+            color: "#7a6e60",
+          }}
+          onClick={onRepeatChange}
+          aria-label={repeatTitle}
+          title={repeatTitle}
+        >
+          {repeatSymbol}
+        </button>
       </div>
     </footer>
   );
