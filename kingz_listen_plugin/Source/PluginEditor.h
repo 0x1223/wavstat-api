@@ -15,6 +15,7 @@ public:
 
     void resized() override;
     void emitTelemetryToWebView (const juce::String& telemetryJson);
+    void emitConnectionAttemptToWebView (const juce::String& url);
     void onWebSocketMessageReceived (const std::string& message) override;
 
 private:

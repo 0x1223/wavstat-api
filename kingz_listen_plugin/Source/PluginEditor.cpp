@@ -111,13 +111,17 @@ juce::String getPlaceholderHtml()
       const backend = window.__JUCE__ && window.__JUCE__.backend;
       const nativeCall = backend && backend.getNativeFunction && backend.getNativeFunction("juceLink");
       if (nativeCall) {
-        await nativeCall(payload);
+        return await nativeCall(payload);
       }
+      throw new Error("JUCE native bridge unavailable");
     }
 
     if (window.__JUCE__ && window.__JUCE__.backend) {
       window.__JUCE__.backend.addEventListener("kingzConnectionState", applyConnectionState);
       window.__JUCE__.backend.addEventListener("kingzTelemetry", applyTelemetry);
+      window.__JUCE__.backend.addEventListener("kingzConnectionAttempt", (payload) => {
+        document.getElementById("telemetry-status").textContent = "Opening " + (payload && payload.url ? payload.url : "socket");
+      });
     }
 
     document.getElementById("toggle").addEventListener("click", () => {
@@ -128,7 +132,11 @@ juce::String getPlaceholderHtml()
       const host = studioIpInput.value.trim();
       const port = Number.parseInt(studioPortInput.value, 10) || 8081;
       document.getElementById("telemetry-status").textContent = "Connecting";
-      sendToNative({ action: "connectTelemetry", source: "placeholder-ui", host, port });
+      sendToNative({ action: "connectTelemetry", source: "placeholder-ui", host, port })
+        .catch((error) => {
+          document.getElementById("telemetry-status").textContent = "Bridge unavailable";
+          console.error(error);
+        });
     });
   </script>
 </body>
@@ -211,6 +219,15 @@ void KingzListenAudioProcessorEditor::emitTelemetryToWebView (const juce::String
                                          juce::var { telemetryJson });
 }
 
+void KingzListenAudioProcessorEditor::emitConnectionAttemptToWebView (const juce::String& url)
+{
+    auto payload = std::make_unique<juce::DynamicObject>();
+    payload->setProperty ("url", url);
+
+    webView.emitEventIfBrowserIsVisible (juce::Identifier { "kingzConnectionAttempt" },
+                                         juce::var { payload.release() });
+}
+
 void KingzListenAudioProcessorEditor::onWebSocketMessageReceived (const std::string& message)
 {
     juce::Component::SafePointer<KingzListenAudioProcessorEditor> safeThis { this };
@@ -227,6 +244,19 @@ void KingzListenAudioProcessorEditor::handleUiCall (
     const juce::var& object,
     juce::WebBrowserComponent::NativeFunctionCompletion completion)
 {
+    DBG ("KingzListenAudioProcessorEditor::handleUiCall: " << juce::JSON::toString (object));
+
+    if (auto* dynamicObject = object.getDynamicObject())
+    {
+        if (dynamicObject->getProperty ("action").toString() == "connectTelemetry")
+        {
+            const auto host = dynamicObject->getProperty ("host").toString();
+            const auto port = static_cast<int> (dynamicObject->getProperty ("port"));
+            const auto cleanHost = host.isNotEmpty() ? host : juce::String { "127.0.0.1" };
+            emitConnectionAttemptToWebView ("ws://" + cleanHost + ":" + juce::String (port > 0 ? port : 8081));
+        }
+    }
+
     processorRef.handleUiAction (object);
 
     auto response = std::make_unique<juce::DynamicObject>();

@@ -149,6 +149,7 @@ void KingzListenAudioProcessor::startTelemetryConnection (const juce::String& ho
 {
     const auto cleanHost = host.isNotEmpty() ? host : juce::String { "127.0.0.1" };
     const auto url = "ws://" + cleanHost + ":" + juce::String (port);
+    DBG ("KingzListenAudioProcessor::startTelemetryConnection: " << url);
     wsManager.startConnection (url.toStdString());
 }
 
