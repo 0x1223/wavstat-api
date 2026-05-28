@@ -105,6 +105,7 @@ public:
                 msgStr.assign (reinterpret_cast<const char*> (bytes.data()), bytes.size());
             }
 
+            handleIncomingMessage (msgStr);
             DBG ("WebSocketManager::onMessage dispatching to listeners");
 
             {
@@ -139,6 +140,29 @@ public:
             socket->resetCallbacks();
             socket->close();
             socket.reset();
+        }
+    }
+
+    void handleIncomingMessage (const std::string& message)
+    {
+        const auto parsed = juce::JSON::parse (juce::String::fromUTF8 (message.c_str()));
+
+        if (parsed.isVoid())
+        {
+            DBG ("WebSocketManager::handleIncomingMessage JSON parse failed: " << message);
+            return;
+        }
+
+        auto* object = parsed.getDynamicObject();
+        if (object == nullptr)
+            return;
+
+        const auto type = object->getProperty ("type").toString();
+        if (type == "server.confirm")
+        {
+            const auto confirmation = object->getProperty ("message").toString();
+            DBG ("WebSocketManager::handleIncomingMessage confirmation received from server: "
+                 << confirmation);
         }
     }
 
