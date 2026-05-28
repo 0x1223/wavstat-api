@@ -14,6 +14,7 @@ export function TransportBar({
   onPrev,
   onNext,
   onRepeatChange,
+  trackTitle,
 }) {
   const repeatSymbol = repeatMode === "one" ? "↺¹" : "↺";
   const repeatTitle =
@@ -23,6 +24,12 @@ export function TransportBar({
 
   return (
     <footer className="transport" aria-label="Playback controls">
+      {trackTitle && (
+        <div className="transport-track-title">
+          <span>{trackTitle}</span>
+        </div>
+      )}
+
       <div className="transport-time">
         <span>{formatTimecode(currentTime)}</span>
         <span>{formatTimecode(duration)}</span>
@@ -31,12 +38,13 @@ export function TransportBar({
       <div className="transport-controls">
         <button
           type="button"
-          className="skip-button"
-          disabled={isDisabled}
-          onClick={onSkipBackward}
-          aria-label="Back 5 seconds"
+          className="transport-nav-btn"
+          disabled={isDisabled || !hasPrev}
+          onClick={onPrev}
+          aria-label="Previous track"
+          title="Previous track"
         >
-          -5
+          ⏮
         </button>
         <button
           type="button"
@@ -50,28 +58,6 @@ export function TransportBar({
         </button>
         <button
           type="button"
-          className="skip-button"
-          disabled={isDisabled}
-          onClick={onSkipForward}
-          aria-label="Forward 5 seconds"
-        >
-          +5
-        </button>
-      </div>
-
-      <div className="transport-nav">
-        <button
-          type="button"
-          className="transport-nav-btn"
-          disabled={isDisabled || !hasPrev}
-          onClick={onPrev}
-          aria-label="Previous track"
-          title="Previous track"
-        >
-          ⏮
-        </button>
-        <button
-          type="button"
           className="transport-nav-btn"
           disabled={isDisabled || !hasNext}
           onClick={onNext}
@@ -79,6 +65,27 @@ export function TransportBar({
           title="Next track"
         >
           ⏭
+        </button>
+      </div>
+
+      <div className="transport-nav">
+        <button
+          type="button"
+          className="skip-button"
+          disabled={isDisabled}
+          onClick={onSkipBackward}
+          aria-label="Back 5 seconds"
+        >
+          -5
+        </button>
+        <button
+          type="button"
+          className="skip-button"
+          disabled={isDisabled}
+          onClick={onSkipForward}
+          aria-label="Forward 5 seconds"
+        >
+          +5
         </button>
         <button
           type="button"
