@@ -72,6 +72,8 @@ juce::String getPlaceholderHtml()
     const studioIpInput = document.getElementById("studio-ip");
     const studioPortInput = document.getElementById("studio-port");
     let connectionFieldsEdited = false;
+    let nativePromiseId = 1;
+    const nativePromises = new Map();
 
     function markConnectionFieldsEdited() {
       connectionFieldsEdited = true;
@@ -107,25 +109,91 @@ juce::String getPlaceholderHtml()
       preview.textContent = JSON.stringify(parsed, null, 2);
     }
 
-    async function sendToNative(payload) {
-      const backend = window.__JUCE__ && window.__JUCE__.backend;
-      const nativeCall = backend && backend.getNativeFunction && backend.getNativeFunction("juceLink");
-      if (nativeCall) {
-        return await nativeCall(payload);
-      }
-      throw new Error("JUCE native bridge unavailable");
+    function hasNativeBridge() {
+      const juce = window.__JUCE__;
+      const backend = juce && juce.backend;
+      const functions = juce && juce.initialisationData && juce.initialisationData.__juce__functions;
+      return !!(backend && backend.emitEvent && Array.isArray(functions) && functions.includes("juceLink"));
     }
 
-    if (window.__JUCE__ && window.__JUCE__.backend) {
+    function waitForNativeBridge(timeoutMs = 2000) {
+      if (hasNativeBridge()) return Promise.resolve();
+
+      const started = Date.now();
+      return new Promise((resolve, reject) => {
+        const poll = () => {
+          if (hasNativeBridge()) {
+            resolve();
+            return;
+          }
+
+          if (Date.now() - started >= timeoutMs) {
+            reject(new Error("JUCE native bridge unavailable"));
+            return;
+          }
+
+          window.setTimeout(poll, 50);
+        };
+
+        poll();
+      });
+    }
+
+    function invokeNativeFunction(name, payload) {
+      return new Promise((resolve, reject) => {
+        const backend = window.__JUCE__ && window.__JUCE__.backend;
+        if (!backend || !backend.emitEvent) {
+          reject(new Error("JUCE backend unavailable"));
+          return;
+        }
+
+        const resultId = nativePromiseId++;
+        nativePromises.set(resultId, { resolve, reject });
+        backend.emitEvent("__juce__invoke", {
+          name,
+          params: [payload],
+          resultId
+        });
+
+        window.setTimeout(() => {
+          if (nativePromises.has(resultId)) {
+            nativePromises.delete(resultId);
+            reject(new Error("JUCE native bridge timed out"));
+          }
+        }, 3000);
+      });
+    }
+
+    async function sendToNative(payload) {
+      await waitForNativeBridge();
+      return await invokeNativeFunction("juceLink", payload);
+    }
+
+    function registerBackendListeners() {
+      if (!window.__JUCE__ || !window.__JUCE__.backend) {
+        window.setTimeout(registerBackendListeners, 50);
+        return;
+      }
+
       window.__JUCE__.backend.addEventListener("kingzConnectionState", applyConnectionState);
       window.__JUCE__.backend.addEventListener("kingzTelemetry", applyTelemetry);
       window.__JUCE__.backend.addEventListener("kingzConnectionAttempt", (payload) => {
         document.getElementById("telemetry-status").textContent = "Opening " + (payload && payload.url ? payload.url : "socket");
       });
+      window.__JUCE__.backend.addEventListener("__juce__complete", ({ promiseId, result }) => {
+        const completion = nativePromises.get(promiseId);
+        if (!completion) return;
+
+        nativePromises.delete(promiseId);
+        completion.resolve(result);
+      });
     }
 
+    registerBackendListeners();
+
     document.getElementById("toggle").addEventListener("click", () => {
-      sendToNative({ action: "toggleMonitoringMode", source: "placeholder-ui" });
+      sendToNative({ action: "toggleMonitoringMode", source: "placeholder-ui" })
+        .catch((error) => console.error(error));
     });
 
     document.getElementById("connect").addEventListener("click", () => {

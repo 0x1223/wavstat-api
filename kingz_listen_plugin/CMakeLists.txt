@@ -56,8 +56,11 @@ if(APPLE)
         if(TARGET ${format_target})
             set_target_properties(${format_target}
                 PROPERTIES
-                    MACOSX_BUNDLE TRUE
-                    BUNDLE TRUE
+                    MACOSX_BUNDLE ON
+                    BUNDLE ON
+                    MACOSX_BUNDLE_BUNDLE_NAME "Kingz Listen"
+                    MACOSX_BUNDLE_GUI_IDENTIFIER "com.kingzbreadent.kingzlisten"
+                    MACOSX_BUNDLE_PACKAGE_TYPE "BNDL"
             )
         endif()
     endforeach()
