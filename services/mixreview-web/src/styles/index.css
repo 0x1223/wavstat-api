@@ -3028,6 +3028,48 @@ h2 {
   color: #4a4238;
 }
 
+/* Timestamp row inside comment drawer header: time + play-from-here btn */
+.drawer-timestamp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* "▶ Play from here" pill button */
+.drawer-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border: 1px solid rgba(215, 173, 98, 0.42);
+  border-radius: 20px;
+  background: rgba(215, 173, 98, 0.1);
+  color: var(--gold);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.drawer-play-btn:hover {
+  background: rgba(215, 173, 98, 0.2);
+  color: var(--gold-bright);
+  box-shadow: 0 0 10px rgba(215, 173, 98, 0.15);
+}
+
+.drawer-play-btn:active {
+  transform: scale(0.95);
+}
+
+.drawer-play-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .mobile-comment-drawer-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

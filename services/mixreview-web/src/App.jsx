@@ -230,6 +230,10 @@ export default function App({ onFirstRender } = {}) {
   const activeTrackIdRef = useRef(activeTrackId);
   const selectTrackRef = useRef(null);
   const repeatModeRef = useRef("off");
+  // Holds the seekAndPlay fn once its lazy chunk has been loaded.
+  // Pre-warmed when the comment drawer opens so the click handler is
+  // synchronous — required to preserve the iOS audio gesture token.
+  const _seekAndPlayRef = useRef(null);
 
   const activeTrack = useMemo(
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
@@ -1308,6 +1312,30 @@ export default function App({ onFirstRender } = {}) {
     setDeleteConfirmPending(false);
   }, []);
 
+  // Pre-warm the seekAndPlay lazy chunk the moment a comment drawer opens
+  // so the module is in memory before the user taps the button.
+  useEffect(() => {
+    if (mobileCommentDrawerId && !_seekAndPlayRef.current) {
+      import("./lib/seekAndPlay.js").then((mod) => {
+        _seekAndPlayRef.current = mod.seekAndPlay;
+      });
+    }
+  }, [mobileCommentDrawerId]);
+
+  // Seek to a comment's timestamp and begin playback.
+  // Synchronous on first tap (module is pre-warmed above); falls back to
+  // inline seek+play on the extremely unlikely cold path.
+  const handlePlayFromTimestamp = useCallback((time) => {
+    const fn = _seekAndPlayRef.current;
+    if (fn) {
+      fn(playerRef.current, time);
+    } else {
+      // Cold fallback — shouldn't happen after pre-warm, but stays safe.
+      playerRef.current?.seekToTime(time);
+      playerRef.current?.play();
+    }
+  }, []);
+
   const toggleResolved = useCallback((commentId) => {
     if (!permissions.canReview) {
       return;
@@ -1959,7 +1987,19 @@ export default function App({ onFirstRender } = {}) {
             <div className="mobile-comment-drawer-header">
               <div>
                 <p className="eyebrow">Timestamp Comment</p>
-                <h3>{formatTime(activeComment.time)}</h3>
+                <div className="drawer-timestamp-row">
+                  <h3>{formatTime(activeComment.time)}</h3>
+                  <button
+                    type="button"
+                    className="drawer-play-btn"
+                    disabled={!isPlayerReady}
+                    onClick={() => handlePlayFromTimestamp(activeComment.time)}
+                    aria-label={`Play from ${formatTime(activeComment.time)}`}
+                    title={`Play from ${formatTime(activeComment.time)}`}
+                  >
+                    ▶ Play from here
+                  </button>
+                </div>
               </div>
               <button type="button" onClick={closeMobileCommentDrawer}>✕</button>
             </div>
