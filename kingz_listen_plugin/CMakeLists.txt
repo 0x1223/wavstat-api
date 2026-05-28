@@ -52,32 +52,32 @@ juce_add_plugin(KingzListenPlugin
 )
 
 if(APPLE)
-    foreach(format_target IN ITEMS KingzListenPlugin_AU KingzListenPlugin_VST3)
+    function(kingz_configure_macos_plugin_bundle format_target bundle_extension)
         if(TARGET ${format_target})
             set_target_properties(${format_target}
                 PROPERTIES
                     MACOSX_BUNDLE ON
                     BUNDLE ON
+                    BUNDLE_EXTENSION "${bundle_extension}"
                     MACOSX_BUNDLE_BUNDLE_NAME "Kingz Listen"
                     MACOSX_BUNDLE_GUI_IDENTIFIER "com.kingzbreadent.kingzlisten"
                     MACOSX_BUNDLE_PACKAGE_TYPE "BNDL"
             )
+
+            add_custom_command(TARGET ${format_target}
+                POST_BUILD
+                COMMAND ${CMAKE_COMMAND}
+                    -D "BUNDLE_DIR=$<TARGET_BUNDLE_DIR:${format_target}>"
+                    -D "EXECUTABLE_NAME=$<TARGET_FILE_NAME:${format_target}>"
+                    -P "${CMAKE_CURRENT_LIST_DIR}/cmake/VerifyMacBundle.cmake"
+                COMMENT "Verifying ${bundle_extension} bundle structure for ${format_target}"
+                VERBATIM
+            )
         endif()
-    endforeach()
+    endfunction()
 
-    if(TARGET KingzListenPlugin_AU)
-        set_target_properties(KingzListenPlugin_AU
-            PROPERTIES
-                BUNDLE_EXTENSION "component"
-        )
-    endif()
-
-    if(TARGET KingzListenPlugin_VST3)
-        set_target_properties(KingzListenPlugin_VST3
-            PROPERTIES
-                BUNDLE_EXTENSION "vst3"
-        )
-    endif()
+    kingz_configure_macos_plugin_bundle(KingzListenPlugin_AU "component")
+    kingz_configure_macos_plugin_bundle(KingzListenPlugin_VST3 "vst3")
 endif()
 
 target_sources(KingzListenPlugin
