@@ -1877,6 +1877,8 @@ export default function App({ onFirstRender } = {}) {
             onMobileNoteRequest={openMobileNote}
             onMobileTapPlay={handleMobileTapPlay}
             mobilePlayUnlocked={mobileHasPlayed}
+            onPrevTrack={handlePrevTrack}
+            onNextTrack={handleNextTrack}
           />
         </div>
 

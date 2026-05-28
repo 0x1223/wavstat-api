@@ -25,6 +25,8 @@ export function WaveformReview({
   // mobilePlayUnlocked — when true the overlay is hidden (user has already played once).
   onMobileTapPlay = undefined,
   mobilePlayUnlocked = false,
+  onPrevTrack = undefined,
+  onNextTrack = undefined,
 }) {
   const containerRef = useRef(null);
   const wavesurferRef = useRef(null);
@@ -284,6 +286,8 @@ export function WaveformReview({
         },
         onTimeUpdate: (t) => callbacksRef.current.onTimeUpdate(t),
         onPlaybackChange: (p) => callbacksRef.current.onPlaybackChange(p),
+        onPrevTrack,
+        onNextTrack,
       });
       wavesurferRef.current = ws;
       return () => {

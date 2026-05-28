@@ -487,26 +487,12 @@ function _setupMediaSession() {
     try { _ws?.pause(); } catch (_) {}
   });
 
-  ms.setActionHandler("seekbackward", (evt) => {
-    const mediaEl = _ws?.getMediaElement?.();
-    if (!mediaEl) return;
-    const skip = evt?.seekOffset ?? 10;
-    const t = Math.max(0, mediaEl.currentTime - skip);
-    try { mediaEl.currentTime = t; } catch (_) {}
-    try { _ws?.setTime(t); } catch (_) {}
-    _handlers.current?.onTimeUpdate?.(t);
+  ms.setActionHandler("previoustrack", () => {
+    _handlers.current?.onPrevTrack?.();
   });
 
-  ms.setActionHandler("seekforward", (evt) => {
-    const mediaEl = _ws?.getMediaElement?.();
-    if (!mediaEl) return;
-    const skip = evt?.seekOffset ?? 10;
-    const dur = _mediaDuration > 0 ? _mediaDuration
-      : (Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0);
-    const t = Math.min(dur, mediaEl.currentTime + skip);
-    try { mediaEl.currentTime = t; } catch (_) {}
-    try { _ws?.setTime(t); } catch (_) {}
-    _handlers.current?.onTimeUpdate?.(t);
+  ms.setActionHandler("nexttrack", () => {
+    _handlers.current?.onNextTrack?.();
   });
 
   ms.setActionHandler("seekto", (evt) => {
@@ -520,12 +506,6 @@ function _setupMediaSession() {
     try { _ws?.setTime(t); } catch (_) {}
     _handlers.current?.onTimeUpdate?.(t);
   });
-
-  // Remove previous/next track buttons — this is a single-track review app.
-  // Explicitly setting null prevents the OS from showing ghost buttons that do
-  // nothing (some Android OEMs and iOS 16 show them by default).
-  try { ms.setActionHandler("previoustrack", null); } catch (_) {}
-  try { ms.setActionHandler("nexttrack",     null); } catch (_) {}
 }
 
 /**
