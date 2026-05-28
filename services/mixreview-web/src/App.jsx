@@ -462,6 +462,36 @@ export default function App({ onFirstRender } = {}) {
           routeMode === "admin" && isEngineerUnlocked ? "Engineer" : routeMode === "reviewer" ? "Artist" : null,
         );
         saveSessionCache(storedSession);
+
+        // Background probe: verify every track's audio URL is actually
+        // reachable.  Marks broken sources needsRelink=true in React state
+        // and logs a clear diagnostic so the bad reference is visible in
+        // the console without a WaveSurfer error burying the signal.
+        if (!isCancelled) {
+          probeSessionAudioSources(storedSession).then((brokenRefs) => {
+            if (isCancelled || brokenRefs.length === 0) return;
+            console.warn(
+              "[MixReview] Missing audio source(s) detected — marking needsRelink",
+              brokenRefs,
+            );
+            setTracks((prev) =>
+              prev.map((track) => {
+                const broken = brokenRefs.find((r) => r.trackId === track.id);
+                if (!broken) return track;
+                return {
+                  ...track,
+                  versions: track.versions.map((version) => {
+                    if (version.id !== broken.versionId || !version.audioSource) return version;
+                    return {
+                      ...version,
+                      audioSource: { ...version.audioSource, needsRelink: true },
+                    };
+                  }),
+                };
+              }),
+            );
+          });
+        }
       })
       .catch(() => {
         if (!isCancelled) {
@@ -2398,8 +2428,71 @@ function normalizeAudioSource(audioSource) {
     audioUrl: audioSource.audioUrl || url,
     url,
     objectUrl: audioSource.objectUrl || null,
-    needsRelink: Boolean(audioSource.needsRelink && !url)
+    // needsRelink: keep true if caller set it (e.g. probe detected a 404),
+    // OR set true when there is no URL at all.  Do NOT clear it just because
+    // a URL string is present — the URL may be stale/broken.
+    needsRelink: Boolean(audioSource.needsRelink) || !url
   };
+}
+
+/**
+ * probeSessionAudioSources — HEAD-check every stored audio URL in a session
+ * document immediately after hydration, before WaveSurfer tries to load them.
+ *
+ * Returns an array of broken-reference descriptors:
+ *   [{ trackId, trackTitle, versionId, versionLabel, url, status|error }, ...]
+ *
+ * Only checks:
+ *   • versions that have a non-null URL
+ *   • non-blob URLs (blobs are local — they can't be probed)
+ *   • the first version per track that has audio (one probe per track is enough
+ *     to surface the problem without hammering the storage backend)
+ *
+ * Runs all probes in parallel (Promise.allSettled) so it never blocks
+ * the UI — results arrive ~200–600 ms after hydration on a normal connection.
+ */
+async function probeSessionAudioSources(session) {
+  const tracks = Array.isArray(session?.tracks) ? session.tracks : [];
+  const candidates = [];
+
+  for (const track of tracks) {
+    const versions = Array.isArray(track.versions) ? track.versions : [];
+    // Find the active version first; fall back to any version that has a URL.
+    const activeVersion = versions.find((v) => v.id === track.activeVersionId) || versions[0];
+    const versionsToCheck = activeVersion ? [activeVersion] : [];
+
+    for (const version of versionsToCheck) {
+      const meta = version.audioMetadata;
+      const url = meta?.playbackUrl || meta?.url || meta?.audioUrl || null;
+      if (!url || url.startsWith("blob:")) continue;
+      candidates.push({ trackId: track.id, trackTitle: track.title, versionId: version.id, versionLabel: version.label, url });
+    }
+  }
+
+  if (candidates.length === 0) return [];
+
+  const results = await Promise.allSettled(
+    candidates.map(async (candidate) => {
+      try {
+        const response = await fetch(candidate.url, { method: "HEAD", cache: "no-store" });
+        if (!response.ok) {
+          return { ...candidate, status: response.status, broken: true };
+        }
+        console.log("[MixReview] Audio source OK", {
+          track: candidate.trackTitle,
+          version: candidate.versionLabel,
+          status: response.status,
+        });
+        return { ...candidate, status: response.status, broken: false };
+      } catch (error) {
+        return { ...candidate, error: error.message, broken: true };
+      }
+    }),
+  );
+
+  return results
+    .filter((r) => r.status === "fulfilled" && r.value.broken)
+    .map((r) => r.value);
 }
 
 async function findReviewerSession(clientIdOrName) {
@@ -2477,7 +2570,7 @@ function buildInitialVersions(session) {
       audioSource: session?.audioMetadata
         ? normalizeAudioSource({
             ...session.audioMetadata,
-            needsRelink: !normalizeAudioUrl(session.audioMetadata)
+            needsRelink: session.audioMetadata.needsRelink || !normalizeAudioUrl(session.audioMetadata)
           })
         : null,
       approvalStatus: resolveApprovalStatus(
@@ -2545,7 +2638,9 @@ function hydrateStoredVersion(version) {
     audioSource: version.audioMetadata
       ? normalizeAudioSource({
           ...version.audioMetadata,
-          needsRelink: !normalizeAudioUrl(version.audioMetadata)
+          // needsRelink starts true when there is no URL; the post-hydration
+          // probe may also set it true for URLs that exist but return non-2xx.
+          needsRelink: version.audioMetadata.needsRelink || !normalizeAudioUrl(version.audioMetadata)
         })
       : null,
     comments,

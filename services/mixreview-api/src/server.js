@@ -548,8 +548,14 @@ async function saveSession(req, res) {
 
   const now = new Date().toISOString();
   const incomingSession = isPlainObject(req.body?.session) ? req.body.session : req.body;
+
+  // Guard: read the stored document so we can preserve audio metadata
+  // that the client no longer has (cleared blob URL, stale null, etc.)
+  const storedSession = await readSessionDocument(sessionId).catch(() => null);
+  const mergedSession = preserveAudioMetadata(incomingSession, storedSession);
+
   const session = normalizeSessionDocument({
-    ...incomingSession,
+    ...mergedSession,
     id: sessionId,
     updatedAt: now
   });
@@ -561,6 +567,61 @@ async function saveSession(req, res) {
   await writeSessionDocument(sessionId, session);
   await upsertSessionIndex(session);
   return res.json({ session });
+}
+
+/**
+ * preserveAudioMetadata — prevents the client PUT from silently overwriting
+ * valid audio source records with null/empty values.
+ *
+ * When a track version in the stored document has a `key` (R2 object path)
+ * and the incoming payload for that same version has lost the key or URL
+ * (e.g. the client cleared a blob URL and serialised null, or sent an older
+ * cached snapshot before the upload completed), we keep the stored metadata.
+ *
+ * This is the root cause guard for "second track reference pointing to a
+ * file no longer available": the client race-writes a stale snapshot that
+ * overwrites the valid key the server just wrote via POST /audio.
+ */
+function preserveAudioMetadata(incoming, stored) {
+  if (!isPlainObject(stored) || !Array.isArray(incoming?.tracks) || !Array.isArray(stored.tracks)) {
+    return incoming;
+  }
+
+  return {
+    ...incoming,
+    tracks: incoming.tracks.map((incomingTrack) => {
+      const storedTrack = stored.tracks.find((t) => t.id === incomingTrack.id);
+      if (!storedTrack || !Array.isArray(incomingTrack.versions)) {
+        return incomingTrack;
+      }
+
+      return {
+        ...incomingTrack,
+        versions: incomingTrack.versions.map((incomingVersion) => {
+          const storedVersion = (storedTrack.versions || []).find((v) => v.id === incomingVersion.id);
+          const storedMeta  = storedVersion?.audioMetadata;
+          const incomingMeta = incomingVersion?.audioMetadata;
+
+          // Only preserve when the stored record has a concrete storage key
+          // and the incoming record is missing it or has lost its URL.
+          const storedHasKey    = typeof storedMeta?.key === "string" && storedMeta.key;
+          const incomingLostKey = !incomingMeta?.key;
+          const incomingLostUrl = !(incomingMeta?.playbackUrl || incomingMeta?.url || incomingMeta?.audioUrl);
+
+          if (storedHasKey && (incomingLostKey || incomingLostUrl)) {
+            console.log("[MixReview] preserveAudioMetadata: restored stored key for", {
+              trackId: incomingTrack.id,
+              versionId: incomingVersion.id,
+              storedKey: storedMeta.key,
+            });
+            return { ...incomingVersion, audioMetadata: storedMeta };
+          }
+
+          return incomingVersion;
+        }),
+      };
+    }),
+  };
 }
 
 async function deleteSession(req, res) {
