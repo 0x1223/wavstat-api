@@ -137,6 +137,8 @@ void KingzListenAudioProcessor::handleUiAction (const juce::var& object)
         {
             const auto host = dynamicObject->getProperty ("host").toString();
             const auto port = static_cast<int> (dynamicObject->getProperty ("port"));
+            DBG ("KingzListenAudioProcessor::handleUiAction connectTelemetry host="
+                 << host << " port=" << port);
             startTelemetryConnection (host, port > 0 ? port : 8081);
         }
         else if (action == "regenerateLocalIpToken")
@@ -147,6 +149,8 @@ void KingzListenAudioProcessor::handleUiAction (const juce::var& object)
 
 void KingzListenAudioProcessor::startTelemetryConnection (const juce::String& host, int port)
 {
+    DBG ("KingzListenAudioProcessor::startTelemetryConnection ENTER host="
+         << host << " port=" << port);
     const auto cleanHost = host.isNotEmpty() ? host : juce::String { "127.0.0.1" };
     const auto url = "ws://" + cleanHost + ":" + juce::String (port);
     DBG ("KingzListenAudioProcessor::startTelemetryConnection: " << url);

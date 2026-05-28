@@ -321,6 +321,8 @@ void KingzListenAudioProcessorEditor::handleUiCall (
             const auto host = dynamicObject->getProperty ("host").toString();
             const auto port = static_cast<int> (dynamicObject->getProperty ("port"));
             const auto cleanHost = host.isNotEmpty() ? host : juce::String { "127.0.0.1" };
+            DBG ("KingzListenAudioProcessorEditor::handleUiCall connectTelemetry host="
+                 << host << " port=" << port);
             emitConnectionAttemptToWebView ("ws://" + cleanHost + ":" + juce::String (port > 0 ? port : 8081));
         }
     }

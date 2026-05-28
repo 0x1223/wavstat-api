@@ -43,6 +43,7 @@ public:
 
     void startConnection (const std::string& url)
     {
+        DBG ("WebSocketManager::startConnection ENTER rawUrl=" << url);
         const auto normalisedUrl = normaliseWebSocketUrl (url);
         DBG ("WebSocketManager::startConnection requested: " << normalisedUrl);
 
