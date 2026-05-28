@@ -2373,9 +2373,9 @@ h2 {
     bottom: max(8px, env(safe-area-inset-bottom, 8px));
     z-index: 50;
     min-height: 50px;
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    gap: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     padding: 6px 8px;
     border-color: rgba(215, 173, 98, 0.22);
     background:
@@ -2386,10 +2386,13 @@ h2 {
       inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
+  /* Absolutely center ⏮ Play ⏭ so it's always at 50% width,
+     independent of the timestamp and utility group widths */
   .reviewer-mode .transport-controls {
-    order: 0;
-    justify-content: center;
-    gap: 6px;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    gap: 8px;
   }
 
   .reviewer-mode .transport-time {
