@@ -1642,6 +1642,24 @@ export default function App({ onFirstRender } = {}) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // ── Media Session skip handlers (iOS/Android lock screen & Control Center) ──
+  // Registers previoustrack / nexttrack so the lock screen shows ⏮ ⏭ skip
+  // buttons instead of the ⏪10 ⏩10 seek buttons produced by seekbackward /
+  // seekforward.  Cleaned up on unmount so stale handlers don't persist.
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    try {
+      navigator.mediaSession.setActionHandler("previoustrack", handlePrevTrack);
+      navigator.mediaSession.setActionHandler("nexttrack", handleNextTrack);
+    } catch (_) {}
+    return () => {
+      try {
+        navigator.mediaSession.setActionHandler("previoustrack", null);
+        navigator.mediaSession.setActionHandler("nexttrack", null);
+      } catch (_) {}
+    };
+  }, [handlePrevTrack, handleNextTrack]);
+
   const updateApprovalStatus = useCallback((nextStatus) => {
     if (!permissions.canReview || !approvalStates.includes(nextStatus)) {
       return;
