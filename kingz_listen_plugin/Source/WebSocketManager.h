@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <variant>
@@ -42,7 +43,8 @@ public:
 
     void startConnection (const std::string& url)
     {
-        DBG ("WebSocketManager::startConnection requested: " << url);
+        const auto normalisedUrl = normaliseWebSocketUrl (url);
+        DBG ("WebSocketManager::startConnection requested: " << normalisedUrl);
 
         if (socket != nullptr && socket->isOpen())
         {
@@ -57,11 +59,25 @@ public:
         }
 
         shouldRun.store (true, std::memory_order_release);
-        socket = std::make_shared<rtc::WebSocket>();
 
-        socket->onOpen ([]
+        auto config = rtc::WebSocket::Configuration {};
+        config.connectionTimeout = std::chrono::milliseconds { 5000 };
+        config.pingInterval = std::chrono::milliseconds { 10000 };
+        config.maxOutstandingPings = 3;
+
+        socket = std::make_shared<rtc::WebSocket> (config);
+
+        socket->onOpen ([this]
         {
             DBG ("WebSocketManager::onOpen: connected");
+
+            if (socket != nullptr && socket->isOpen())
+            {
+                static constexpr auto hello =
+                    R"json({"type":"plugin.hello","client":"kingz-listen-plugin","transport":"libdatachannel-websocket"})json";
+                socket->send (std::string { hello });
+                DBG ("WebSocketManager::onOpen: sent plugin.hello");
+            }
         });
 
         socket->onClosed ([]
@@ -102,8 +118,11 @@ public:
             }
         });
 
+        DBG ("WebSocketManager::startConnection using libdatachannel WebSocket client");
+        DBG ("WebSocketManager::startConnection expected HTTP upgrade headers: "
+             "Connection: Upgrade, Upgrade: websocket, Sec-WebSocket-Version: 13, Sec-WebSocket-Key");
         DBG ("WebSocketManager::startConnection before socket->open");
-        socket->open (url);
+        socket->open (normalisedUrl);
         DBG ("WebSocketManager::startConnection after socket->open");
 
         if (! isThreadRunning())
@@ -143,6 +162,23 @@ private:
         }
 
         DBG ("WebSocketManager::run exiting");
+    }
+
+    static std::string normaliseWebSocketUrl (const std::string& rawUrl)
+    {
+        auto url = juce::String::fromUTF8 (rawUrl.c_str()).trim();
+
+        if (! url.startsWithIgnoreCase ("ws://") && ! url.startsWithIgnoreCase ("wss://"))
+            url = "ws://" + url;
+
+        const auto schemeSeparator = url.indexOf ("://");
+        const auto authorityStart = schemeSeparator >= 0 ? schemeSeparator + 3 : 0;
+        const auto pathStart = url.indexOfChar (authorityStart, '/');
+
+        if (pathStart < 0)
+            url << "/";
+
+        return url.toStdString();
     }
 
     std::shared_ptr<rtc::WebSocket> socket;
