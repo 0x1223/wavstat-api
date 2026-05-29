@@ -75,7 +75,7 @@ public:
             if (socket != nullptr && socket->isOpen())
             {
                 static constexpr auto hello =
-                    R"json({"type":"plugin.hello","client":"kingz-listen-plugin","transport":"libdatachannel-websocket"})json";
+                    R"json({"type":"plugin.hello","source_id":"kingz-listen-plugin","client":"kingz-listen-plugin","transport":"libdatachannel-websocket"})json";
                 socket->send (std::string { hello });
                 DBG ("WebSocketManager::onOpen: sent plugin.hello");
             }

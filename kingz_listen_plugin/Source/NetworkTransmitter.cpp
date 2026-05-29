@@ -34,6 +34,7 @@ static_assert (AudioFifoWorker::telemetryBitrateBitsPerSecond == 1536000,
 namespace
 {
 constexpr auto websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+constexpr auto kingzListenSourceId = "kingz-listen-plugin";
 
 juce::String base64Encode (const std::array<std::uint8_t, 20>& input)
 {
@@ -208,6 +209,21 @@ std::vector<std::uint8_t> toExactUtf8Bytes (const juce::String& text)
 std::size_t exactUtf8ByteCount (const juce::String& text)
 {
     return std::strlen (text.toRawUTF8());
+}
+
+juce::String withKingzListenSourceId (const juce::String& json)
+{
+    auto parsed = juce::JSON::parse (json);
+    if (auto* object = parsed.getDynamicObject())
+    {
+        object->setProperty ("source_id", kingzListenSourceId);
+        return juce::JSON::toString (parsed, true);
+    }
+
+    auto* wrapper = new juce::DynamicObject();
+    wrapper->setProperty ("source_id", kingzListenSourceId);
+    wrapper->setProperty ("payload", json);
+    return juce::JSON::toString (juce::var (wrapper), true);
 }
 } // namespace
 
@@ -593,6 +609,7 @@ void NetworkTransmitter::handleHttpRequest (ClientConnection& client)
         realtime->setProperty ("webrtcMtuBytes", lanOptimisedWebRtcMtuBytes);
 
         auto* metadata = new juce::DynamicObject();
+        metadata->setProperty ("source_id", kingzListenSourceId);
         metadata->setProperty ("realtime", juce::var (realtime));
         sendHttpResponse (client, "application/json", jsonString (juce::var (metadata)));
         client.closeRequested.store (true, std::memory_order_release);
@@ -1076,7 +1093,7 @@ bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
 
 void NetworkTransmitter::sendJson (ClientConnection& client, const juce::String& json)
 {
-    const auto payload = toExactUtf8Bytes (json);
+    const auto payload = toExactUtf8Bytes (withKingzListenSourceId (json));
     sendWebSocketFrame (client, payload, 0x1);
 }
 

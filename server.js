@@ -101,22 +101,179 @@ if (existsSync(distPath)) {
 
 app.listen(PORT, () => console.log(`Wavstat API on port ${PORT} | digitizer → ${DIGITIZER_URL}`));
 
+const KINGZ_LISTEN_SOURCE_ID = 'kingz-listen-plugin';
+const MIXREVIEW_SOURCE_IDS = new Set(['mixreview', 'mixreview-web', 'mixreview-api']);
+
+const telemetryState = {
+  kingzListen: new Map(),
+  mixReview: new Map(),
+};
+
+function createTelemetrySession(req) {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    sourceId: null,
+    remoteAddress: req.socket.remoteAddress,
+    connectedAt: Date.now(),
+    lastSeenAt: Date.now(),
+  };
+}
+
+function validateKingzListenTelemetry(message) {
+  if (message.source_id !== KINGZ_LISTEN_SOURCE_ID) {
+    return 'Kingz Listen telemetry requires source_id=kingz-listen-plugin';
+  }
+
+  if (typeof message.type !== 'string' || message.type.length === 0) {
+    return 'Kingz Listen telemetry requires a string type';
+  }
+
+  if (message.type === 'plugin.hello') {
+    if (message.client !== KINGZ_LISTEN_SOURCE_ID) {
+      return 'Kingz Listen plugin.hello requires client=kingz-listen-plugin';
+    }
+    return null;
+  }
+
+  if (message.type === 'telemetry.report') {
+    const numericFields = ['activeClientCount', 'bufferHealth', 'latencyMs'];
+    for (const field of numericFields) {
+      if (typeof message[field] !== 'number' || Number.isNaN(message[field])) {
+        return `Kingz Listen telemetry.report requires numeric ${field}`;
+      }
+    }
+    return null;
+  }
+
+  if (message.type.startsWith('webrtc.') || message.type === 'pong') {
+    return null;
+  }
+
+  return `Unsupported Kingz Listen telemetry type: ${message.type}`;
+}
+
+function validateMixReviewTelemetry(message) {
+  if (!MIXREVIEW_SOURCE_IDS.has(message.source_id)) {
+    return 'MixReview telemetry source_id is not recognized';
+  }
+
+  if (typeof message.type !== 'string' || message.type.length === 0) {
+    return 'MixReview telemetry requires a string type';
+  }
+
+  if (!message.type.startsWith('mixreview.')) {
+    return 'MixReview telemetry type must use the mixreview.* namespace';
+  }
+
+  return null;
+}
+
+function routeTelemetryMessage(ws, session, message) {
+  const sourceId = message?.source_id;
+
+  if (sourceId === KINGZ_LISTEN_SOURCE_ID) {
+    const validationError = validateKingzListenTelemetry(message);
+    if (validationError) return { ok: false, error: validationError };
+
+    session.sourceId = KINGZ_LISTEN_SOURCE_ID;
+    session.lastSeenAt = Date.now();
+    telemetryState.kingzListen.set(session.id, {
+      session,
+      ws,
+      lastMessage: message,
+    });
+
+    if (message.type === 'plugin.hello') {
+      ws.send(JSON.stringify({
+        type: 'server.confirm',
+        source_id: KINGZ_LISTEN_SOURCE_ID,
+        status: 'connected',
+        message: 'Kingz Listen telemetry route connected',
+      }));
+    }
+
+    console.log('[Kingz Listen] Telemetry accepted:', {
+      sessionId: session.id,
+      type: message.type,
+      remoteAddress: session.remoteAddress,
+    });
+    return { ok: true, source: 'kingzListen' };
+  }
+
+  if (MIXREVIEW_SOURCE_IDS.has(sourceId)) {
+    const validationError = validateMixReviewTelemetry(message);
+    if (validationError) return { ok: false, error: validationError };
+
+    session.sourceId = sourceId;
+    session.lastSeenAt = Date.now();
+    telemetryState.mixReview.set(session.id, {
+      session,
+      ws,
+      lastMessage: message,
+    });
+
+    console.log('[MixReview] Telemetry accepted:', {
+      sessionId: session.id,
+      sourceId,
+      type: message.type,
+      remoteAddress: session.remoteAddress,
+    });
+    return { ok: true, source: 'mixReview' };
+  }
+
+  return { ok: false, error: 'Missing or unsupported telemetry source_id' };
+}
+
+function removeTelemetrySession(session) {
+  if (session.sourceId === KINGZ_LISTEN_SOURCE_ID) {
+    telemetryState.kingzListen.delete(session.id);
+    return;
+  }
+
+  if (MIXREVIEW_SOURCE_IDS.has(session.sourceId)) {
+    telemetryState.mixReview.delete(session.id);
+  }
+}
+
 // New WebSocket Server for Plugin Telemetry
 const wss = new WebSocket.Server({ port: 8081, host: '0.0.0.0' });
 
 wss.on('connection', (ws, req) => {
+    const session = createTelemetrySession(req);
     console.log('--- Handshake initiated from:', req.socket.remoteAddress, '---');
     
-    ws.on('message', (message) => {
-        console.log('Message received from plugin:', message);
+    ws.on('message', (data) => {
+        try {
+            const messageString = data.toString();
+            const json = JSON.parse(messageString);
+
+            const routeResult = routeTelemetryMessage(ws, session, json);
+            if (!routeResult.ok) {
+                console.warn('[Telemetry] Rejected packet:', routeResult.error);
+                ws.send(JSON.stringify({
+                    type: 'server.error',
+                    source_id: json?.source_id ?? 'unknown',
+                    error: routeResult.error,
+                }));
+                return;
+            }
+        } catch (e) {
+            console.log('Raw data received (non-JSON):', data.toString());
+            ws.send(JSON.stringify({
+                type: 'server.error',
+                source_id: 'unknown',
+                error: 'Telemetry payload must be valid JSON',
+            }));
+        }
     });
 
     ws.on('close', (code, reason) => {
+        removeTelemetrySession(session);
         console.log('Connection closed. Code:', code, 'Reason:', reason);
     });
 
     ws.on('error', (error) => {
-        console.error('WebSocket connection error details:', error);
+        console.error('WebSocket connection error:', error);
     });
 });
 
