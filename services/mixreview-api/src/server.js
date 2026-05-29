@@ -4,7 +4,7 @@ import "dotenv/config";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -96,7 +96,7 @@ const sessionRouter = express.Router();
 sessionRouter.get("/", listSessions);
 sessionRouter.post("/", createSession);
 sessionRouter.get("/:sessionId", getSession);
-sessionRouter.put("/:sessionId", saveSession);
+sessionRouter.put("/:sessionId", requireAdminAuth, saveSession);
 sessionRouter.delete("/:sessionId", deleteSession);
 sessionRouter.post("/:sessionId/audio", upload.single("audio"), handleAudioUpload);
 
@@ -564,6 +564,23 @@ async function saveSession(req, res) {
     return res.status(400).json({ error: "Invalid session payload." });
   }
 
+  // Validation gate — reject before any write if the tracks array contains
+  // duplicate IDs or duplicate active-version audio keys. Either condition
+  // indicates a corrupt or replayed payload that would clobber good data.
+  const duplicateViolation = validateTracksIntegrity(session.tracks);
+  if (duplicateViolation) {
+    console.error("[MixReview] saveSession BLOCKED — duplicate track", duplicateViolation.field, "detected", {
+      sessionId,
+      field: duplicateViolation.field,
+      value: duplicateViolation.value,
+    });
+    return res.status(400).json({
+      error: `Duplicate track ${duplicateViolation.field} detected — write aborted to protect data integrity.`,
+      field: duplicateViolation.field,
+      value: duplicateViolation.value,
+    });
+  }
+
   await writeSessionDocument(sessionId, session);
   await upsertSessionIndex(session);
   return res.json({ session });
@@ -622,6 +639,82 @@ function preserveAudioMetadata(incoming, stored) {
       };
     }),
   };
+}
+
+/**
+ * requireAdminAuth — Express middleware that enforces a shared-secret Bearer
+ * token on admin-sensitive routes (session write, delete, audio upload).
+ *
+ * Set ADMIN_API_KEY in the Railway environment to enable. In development, if
+ * the variable is absent the middleware is a no-op so local work is unblocked.
+ * In production, an absent key causes an immediate 401 on every request to
+ * protected routes — the route is inaccessible until the variable is set.
+ *
+ * The client must send: Authorization: Bearer <ADMIN_API_KEY>
+ */
+function requireAdminAuth(req, res, next) {
+  const adminKey = getEnvValue("ADMIN_API_KEY");
+
+  if (!adminKey) {
+    if (isProduction) {
+      console.error("[MixReview] requireAdminAuth: ADMIN_API_KEY is not set — blocking request in production.");
+      return res.status(401).json({ error: "Admin authentication is required but has not been configured on the server." });
+    }
+    // Dev: no key configured — allow through with a warning so local dev is not blocked.
+    console.warn("[MixReview] requireAdminAuth: ADMIN_API_KEY not set — skipping auth in development.");
+    return next();
+  }
+
+  const authHeader = req.headers["authorization"] || "";
+  const submitted = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : authHeader.trim();
+
+  if (!submitted || submitted !== adminKey) {
+    console.warn("[MixReview] requireAdminAuth: rejected unauthenticated request from", req.ip);
+    return res.status(401).json({ error: "Unauthorized." });
+  }
+
+  next();
+}
+
+/**
+ * validateTracksIntegrity — single-pass O(n) check over the tracks array.
+ *
+ * Two Set accumulators run in parallel:
+ *   seenIds  — track.id strings. A collision means a structurally malformed
+ *              payload (client-side state accidentally cloned a track object).
+ *   seenKeys — audioMetadata.key strings from the ACTIVE version of each track
+ *              only. Non-active (historical) versions sharing a key is expected;
+ *              the active versions sharing one means cross-track metadata
+ *              contamination — the same R2 object would be referenced as if it
+ *              belonged to two different tracks, and a subsequent PUT from either
+ *              track would overwrite the other's audio metadata.
+ *
+ * Returns null if the array is clean.
+ * Returns { field: "id"|"key", value: <duplicate string> } on first collision.
+ */
+function validateTracksIntegrity(tracks) {
+  if (!Array.isArray(tracks) || tracks.length < 2) return null;
+
+  const seenIds  = new Set();
+  const seenKeys = new Set();
+
+  for (const track of tracks) {
+    const trackId = typeof track.id === "string" ? track.id : null;
+    if (trackId) {
+      if (seenIds.has(trackId)) return { field: "id", value: trackId };
+      seenIds.add(trackId);
+    }
+
+    const versions = Array.isArray(track.versions) ? track.versions : [];
+    const activeVersion = versions.find((v) => v.id === track.activeVersionId) || versions[0];
+    const key = activeVersion?.audioMetadata?.key;
+    if (typeof key === "string" && key) {
+      if (seenKeys.has(key)) return { field: "key", value: key };
+      seenKeys.add(key);
+    }
+  }
+
+  return null;
 }
 
 async function deleteSession(req, res) {
@@ -965,7 +1058,19 @@ async function writeSessionDocument(sessionId, session) {
 
   const localPath = buildLocalSessionPath(safeSessionId);
   await mkdir(path.dirname(localPath), { recursive: true });
-  await writeFile(localPath, body);
+
+  // Atomic write: write to a uniquely-named tmp file first, then rename into
+  // place. `rename` is atomic on POSIX (Linux/macOS) when source and destination
+  // share the same filesystem — a mid-write crash leaves the previous session
+  // file intact rather than a partially-written corrupt one.
+  const tmpPath = `${localPath}.tmp.${randomUUID()}`;
+  try {
+    await writeFile(tmpPath, body);
+    await rename(tmpPath, localPath);
+  } catch (err) {
+    await unlink(tmpPath).catch(() => {});
+    throw err;
+  }
 }
 
 async function upsertSessionIndex(session) {
