@@ -34,7 +34,7 @@ static_assert (AudioFifoWorker::telemetryBitrateBitsPerSecond == 1536000,
 namespace
 {
 constexpr auto websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-constexpr auto kingzListenSourceId = "KINGZ_LISTEN_PLUGIN";
+constexpr auto KINGZ_LISTEN_PLUGIN = "KINGZ_LISTEN_PLUGIN";
 
 juce::String base64Encode (const std::array<std::uint8_t, 20>& input)
 {
@@ -216,12 +216,12 @@ juce::String withKingzListenSourceId (const juce::String& json)
     auto parsed = juce::JSON::parse (json);
     if (auto* object = parsed.getDynamicObject())
     {
-        object->setProperty ("source_id", kingzListenSourceId);
+        object->setProperty ("source_id", KINGZ_LISTEN_PLUGIN);
         return juce::JSON::toString (parsed, true);
     }
 
     auto* wrapper = new juce::DynamicObject();
-    wrapper->setProperty ("source_id", kingzListenSourceId);
+    wrapper->setProperty ("source_id", KINGZ_LISTEN_PLUGIN);
     wrapper->setProperty ("payload", json);
     return juce::JSON::toString (juce::var (wrapper), true);
 }
@@ -632,7 +632,7 @@ void NetworkTransmitter::handleHttpRequest (ClientConnection& client)
 
     if (request.startsWithIgnoreCase ("GET /health "))
     {
-        sendHttpResponse (client, "application/json", R"JSON({"ok":true,"service":"kingz-listen-plugin"})JSON");
+        sendHttpResponse (client, "application/json", R"JSON({"ok":true,"service":"KINGZ_LISTEN_PLUGIN"})JSON");
         client.closeRequested.store (true, std::memory_order_release);
         return;
     }
@@ -663,7 +663,7 @@ void NetworkTransmitter::handleHttpRequest (ClientConnection& client)
         realtime->setProperty ("webrtcMtuBytes", lanOptimisedWebRtcMtuBytes);
 
         auto* metadata = new juce::DynamicObject();
-        metadata->setProperty ("source_id", kingzListenSourceId);
+        metadata->setProperty ("source_id", KINGZ_LISTEN_PLUGIN);
         metadata->setProperty ("realtime", juce::var (realtime));
         sendHttpResponse (client, "application/json", jsonString (juce::var (metadata)));
         client.closeRequested.store (true, std::memory_order_release);
