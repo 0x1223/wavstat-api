@@ -134,13 +134,6 @@ function validateKingzListenTelemetry(message) {
     return null;
   }
 
-  if (message.type === 'plugin.hello') {
-    if (message.client !== KINGZ_LISTEN_SOURCE_ID) {
-      return 'Kingz Listen plugin.hello requires client=KINGZ_LISTEN_PLUGIN';
-    }
-    return null;
-  }
-
   if (message.type === 'telemetry.report') {
     const numericFields = ['activeClientCount', 'bufferHealth', 'latencyMs'];
     for (const field of numericFields) {
@@ -244,6 +237,13 @@ function routeTelemetryMessage(ws, session, message) {
     const validationError = validateKingzListenTelemetry(message);
     if (validationError) return { ok: false, error: validationError };
 
+    if (session.sourceId !== KINGZ_LISTEN_SOURCE_ID && message.type !== 'registration') {
+      return {
+        ok: false,
+        error: 'Kingz Listen plugin must send registration before telemetry or signaling',
+      };
+    }
+
     session.sourceId = KINGZ_LISTEN_SOURCE_ID;
     session.lastSeenAt = Date.now();
     telemetryState.kingzListen.set(session.id, {
@@ -262,7 +262,7 @@ function routeTelemetryMessage(ws, session, message) {
       return { ok: true, source: 'kingzListen' };
     }
 
-    if (message.type === 'registration' || message.type === 'plugin.hello') {
+    if (message.type === 'registration') {
       ws.send(JSON.stringify({
         type: 'server.confirm',
         source_id: KINGZ_LISTEN_SOURCE_ID,
