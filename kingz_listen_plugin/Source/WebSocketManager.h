@@ -192,17 +192,14 @@ public:
     }
 
 private:
-    static constexpr auto KINGZ_LISTEN_PLUGIN = "KINGZ_LISTEN_PLUGIN";
-
     void onConnectionOpen()
     {
         if (socket == nullptr || ! socket->isOpen())
             return;
 
-        auto registration = juce::String { R"json({"type":"registration","source_id":")json" }
-            + KINGZ_LISTEN_PLUGIN
-            + R"json("})json";
-        socket->send (registration.toStdString());
+        static constexpr auto registration =
+            R"json({"type":"registration","source_id":"KINGZ_LISTEN_PLUGIN"})json";
+        socket->send (std::string { registration });
         DBG ("WebSocketManager::onConnectionOpen: sent registration");
     }
 
