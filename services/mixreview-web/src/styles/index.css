@@ -1482,6 +1482,86 @@ h2 {
   overflow: hidden;
 }
 
+/* ── Stem Player — overrides the 4-row waveform-panel grid ──────────────── */
+/* header (mix-strip) + scrollable lanes stack; no timeline or review-console */
+.waveform-panel.stem-player {
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
+
+.stem-player-lanes {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  gap: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+}
+
+.stem-player-lanes::-webkit-scrollbar {
+  width: 4px;
+}
+
+.stem-player-lanes::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.stem-player-lane {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: crosshair; /* signals the lane is seekable */
+}
+
+.stem-player-lane:last-child {
+  border-bottom: none;
+}
+
+.stem-player-lane:hover {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.stem-player-lane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 5px;
+  pointer-events: none; /* clicks fall through to the WaveSurfer canvas */
+}
+
+.stem-player-lane-title {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: rgba(215, 173, 98, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stem-player-lane-status {
+  font-size: 0.64rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.3);
+  flex-shrink: 0;
+}
+
+.stem-player-lane-error {
+  font-size: 0.64rem;
+  font-weight: 600;
+  color: rgba(220, 80, 80, 0.7);
+  flex-shrink: 0;
+}
+
+.stem-player-lane-waveform {
+  /* WaveSurfer injects a <div> containing a <canvas> here */
+  width: 100%;
+}
+
 .mix-strip,
 .sidebar-header {
   display: flex;

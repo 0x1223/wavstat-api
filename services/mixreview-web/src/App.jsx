@@ -9,6 +9,7 @@ import { StartScreen } from "./components/StartScreen.jsx";
 import { TrackList } from "./components/TrackList.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
 import { WaveformReview } from "./components/WaveformReview.jsx";
+import { StemPlayer } from "./components/StemPlayer.jsx";
 import {
   deleteSessionFromApi,
   listSessionsFromApi,
@@ -244,6 +245,33 @@ export default function App({ onFirstRender } = {}) {
     () => tracks.find((track) => track.id === activeTrackId) || tracks[0] || null,
     [activeTrackId, tracks],
   );
+
+  // Derive the album that currently owns the active track
+  const activeAlbum = useMemo(
+    () => albums.find((a) => (a.trackIds || []).includes(activeTrackId)) ?? albums[0] ?? null,
+    [activeTrackId, albums],
+  );
+  const isActiveStemProject = activeAlbum?.type === "stem_project";
+
+  // Build the ordered stems array for StemPlayer (admin stem-project view only).
+  // Each entry mirrors the shape StemPlayer expects: { id, title, audioSource }.
+  const stemTracks = useMemo(() => {
+    if (!isActiveStemProject || !activeAlbum) return [];
+    return (activeAlbum.trackIds || [])
+      .map((id) => tracks.find((t) => t.id === id))
+      .filter(Boolean)
+      .map((track) => {
+        const ver =
+          track.versions.find((v) => v.id === track.activeVersionId) ||
+          track.versions[0];
+        return {
+          id: track.id,
+          title: track.title,
+          audioSource: ver?.audioSource ? normalizeAudioSource(ver.audioSource) : null,
+        };
+      });
+  }, [isActiveStemProject, activeAlbum, tracks]);
+
   const activeVersion = useMemo(
     () => versions.find((version) => version.id === activeVersionId) || versions[0],
     [activeVersionId, versions],
@@ -2118,26 +2146,44 @@ export default function App({ onFirstRender } = {}) {
             />
           )}
 
-          <WaveformReview
-            audioSource={audioSource}
-            comments={comments}
-            selectedCommentId={selectedCommentId}
-            selectedTime={selectedTime}
-            previewMarkerTime={isReviewerMode ? mobileNoteDraft?.time : null}
-            trackTitle={activeTrack?.title}
-            onTimestampCreate={handleWaveformTimestamp}
-            onMarkerSelect={activateComment}
-            onReady={handlePlayerReady}
-            onTimeUpdate={handlePlaybackTimeUpdate}
-            onDurationChange={updateDuration}
-            onPlaybackChange={setIsPlaying}
-            isReviewerMode={isReviewerMode}
-            onMobileNoteRequest={openMobileNote}
-            onMobileTapPlay={handleMobileTapPlay}
-            mobilePlayUnlocked={mobileHasPlayed}
-            onPrevTrack={handlePrevTrack}
-            onNextTrack={handleNextTrack}
-          />
+          {/* Admin + stem project → multi-lane StemPlayer.
+              All other contexts → standard single-track WaveformReview.
+              key={activeAlbum?.id} forces a clean remount when the engineer
+              switches to a different stem project so stale WaveSurfer
+              instances from the previous album are fully torn down. */}
+          {isEngineerMode && isActiveStemProject ? (
+            <StemPlayer
+              key={activeAlbum?.id}
+              stems={stemTracks}
+              trackTitle={activeAlbum?.title}
+              selectedTime={selectedTime}
+              onReady={handlePlayerReady}
+              onTimeUpdate={handlePlaybackTimeUpdate}
+              onDurationChange={updateDuration}
+              onPlaybackChange={setIsPlaying}
+            />
+          ) : (
+            <WaveformReview
+              audioSource={audioSource}
+              comments={comments}
+              selectedCommentId={selectedCommentId}
+              selectedTime={selectedTime}
+              previewMarkerTime={isReviewerMode ? mobileNoteDraft?.time : null}
+              trackTitle={activeTrack?.title}
+              onTimestampCreate={handleWaveformTimestamp}
+              onMarkerSelect={activateComment}
+              onReady={handlePlayerReady}
+              onTimeUpdate={handlePlaybackTimeUpdate}
+              onDurationChange={updateDuration}
+              onPlaybackChange={setIsPlaying}
+              isReviewerMode={isReviewerMode}
+              onMobileNoteRequest={openMobileNote}
+              onMobileTapPlay={handleMobileTapPlay}
+              mobilePlayUnlocked={mobileHasPlayed}
+              onPrevTrack={handlePrevTrack}
+              onNextTrack={handleNextTrack}
+            />
+          )}
         </div>
 
         <div className="review-side">
