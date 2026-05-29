@@ -58,8 +58,11 @@ private:
     static constexpr juce::int64 heartbeatMs = 10000;
     static constexpr juce::int64 graceHoldMs = 10 * 60 * 1000;
     static constexpr std::size_t maxTextFrameBytes = 64 * 1024;
+    static constexpr int pcmChunkMs = AudioFifoWorker::chunkDurationMs;
+    static constexpr int pcmFramesPerChunk = AudioFifoWorker::framesPerChunk;
     static constexpr int pcmChunkBytes = AudioFifoWorker::bytesPerChunk;
     static constexpr int pcmTelemetryBitrateBitsPerSecond = AudioFifoWorker::telemetryBitrateBitsPerSecond;
+    static constexpr int lanOptimisedWebRtcMtuBytes = 1200;
 
     void run() override;
 

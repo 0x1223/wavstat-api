@@ -24,8 +24,8 @@ static_assert (AudioFifoWorker::targetSampleRate == 48000,
                "Kingz Listen native transmitter must stream 48 kHz PCM without resampling.");
 static_assert (AudioFifoWorker::inputChannels == 2,
                "Kingz Listen native transmitter must stream stereo PCM.");
-static_assert (AudioFifoWorker::bytesPerChunk == 1920,
-               "Kingz Listen native transmitter must stream 10 ms chunks of 16-bit stereo PCM.");
+static_assert (AudioFifoWorker::bytesPerChunk == 960,
+               "Kingz Listen native transmitter must stream 5 ms chunks of 16-bit stereo PCM.");
 static_assert (AudioFifoWorker::telemetryBitrateBitsPerSecond == 1536000,
                "Kingz Listen native transmitter must preserve the 1536 kbps Linear PCM baseline.");
 
@@ -517,7 +517,7 @@ void NetworkTransmitter::readFromClient (ClientConnection& client)
         }
         else
         {
-            client.textBuffer += juce::String::fromUTF8 (scratch.data(), bytesRead);
+            client.textBuffer += juce::String::fromUTF8 (scratch.data(), static_cast<int> (bytesRead));
             if (client.textBuffer.contains ("\r\n\r\n"))
                 handleHttpRequest (client);
         }
@@ -543,10 +543,25 @@ void NetworkTransmitter::handleHttpRequest (ClientConnection& client)
 
     if (request.startsWithIgnoreCase ("GET /metadata "))
     {
-        sendHttpResponse (
-            client,
-            "application/json",
-            R"JSON({"realtime":{"transport":"native-plugin-libdatachannel-pcm","chunkMs":10,"sampleRate":48000,"channels":2,"bitDepth":16,"bitrate":1536000,"ordered":false,"maxRetransmits":0}})JSON");
+        auto* realtime = new juce::DynamicObject();
+        realtime->setProperty ("transport", "native-plugin-libdatachannel-pcm");
+        realtime->setProperty ("chunkMs", pcmChunkMs);
+        realtime->setProperty ("framesPerChunk", pcmFramesPerChunk);
+        realtime->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
+        realtime->setProperty ("channels", AudioFifoWorker::inputChannels);
+        realtime->setProperty ("bitDepth", 16);
+        realtime->setProperty ("bytesPerChunk", pcmChunkBytes);
+        realtime->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
+        realtime->setProperty ("ordered", false);
+        realtime->setProperty ("maxRetransmits", 0);
+        realtime->setProperty ("udpOnly", true);
+        realtime->setProperty ("jitterBuffer", "bypassed-data-channel");
+        realtime->setProperty ("signalProcessing", "disabled-raw-pcm");
+        realtime->setProperty ("webrtcMtuBytes", lanOptimisedWebRtcMtuBytes);
+
+        auto* metadata = new juce::DynamicObject();
+        metadata->setProperty ("realtime", juce::var (realtime));
+        sendHttpResponse (client, "application/json", jsonString (juce::var (metadata)));
         client.closeRequested.store (true, std::memory_order_release);
         return;
     }
@@ -792,6 +807,11 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
     client->offerGeneration = offerGeneration;
 
     rtc::Configuration configuration;
+    configuration.enableIceTcp = false;
+    configuration.disableAutoNegotiation = false;
+    configuration.disableAutoGathering = false;
+    configuration.mtu = static_cast<std::size_t> (lanOptimisedWebRtcMtuBytes);
+
     auto peer = std::make_shared<rtc::PeerConnection> (configuration);
     const auto weakClient = std::weak_ptr<ClientConnection> (client);
 
@@ -839,14 +859,31 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
     rtc::DataChannelInit pcmChannelConfig;
     pcmChannelConfig.reliability.unordered = true;
     pcmChannelConfig.reliability.maxRetransmits = 0u;
-    pcmChannelConfig.protocol = "audio/L16;rate=48000;channels=2";
+    pcmChannelConfig.protocol = "audio/L16;rate=48000;channels=2;ptime=5;processing=off";
 
     auto dataChannel = peer->createDataChannel ("kingz-pcm", pcmChannelConfig);
     dataChannel->onOpen ([this, weakClient]
     {
         if (auto lockedClient = weakClient.lock())
-            sendJson (lockedClient,
-                      R"JSON({"type":"webrtc.data-channel-open","label":"kingz-pcm","format":"pcm_s16le","sampleRate":48000,"channels":2,"chunkMs":10,"bytesPerChunk":1920,"bitrate":1536000,"ordered":false,"maxRetransmits":0})JSON");
+        {
+            auto* response = new juce::DynamicObject();
+            response->setProperty ("type", "webrtc.data-channel-open");
+            response->setProperty ("label", "kingz-pcm");
+            response->setProperty ("format", "pcm_s16le");
+            response->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
+            response->setProperty ("channels", AudioFifoWorker::inputChannels);
+            response->setProperty ("chunkMs", pcmChunkMs);
+            response->setProperty ("framesPerChunk", pcmFramesPerChunk);
+            response->setProperty ("bytesPerChunk", pcmChunkBytes);
+            response->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
+            response->setProperty ("ordered", false);
+            response->setProperty ("maxRetransmits", 0);
+            response->setProperty ("udpOnly", true);
+            response->setProperty ("jitterBuffer", "bypassed-data-channel");
+            response->setProperty ("signalProcessing", "disabled-raw-pcm");
+            response->setProperty ("webrtcMtuBytes", lanOptimisedWebRtcMtuBytes);
+            sendJson (lockedClient, jsonString (juce::var (response)));
+        }
     });
 
     client->pcmChannel = dataChannel;
@@ -908,12 +945,6 @@ void NetworkTransmitter::streamReadyPcmChunks()
 
 void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chunk)
 {
-    rtc::binary rtcPayload;
-    rtcPayload.resize (chunk.size());
-
-    for (std::size_t i = 0; i < chunk.size(); ++i)
-        rtcPayload[i] = chunk[i];
-
     for (auto& client : clients)
     {
         if (! client->websocket || client->closeRequested.load (std::memory_order_acquire))
@@ -923,7 +954,7 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chu
         {
             try
             {
-                client->pcmChannel->send (rtcPayload);
+                client->pcmChannel->send (reinterpret_cast<const rtc::byte*> (chunk.data()), chunk.size());
             }
             catch (const std::exception&)
             {

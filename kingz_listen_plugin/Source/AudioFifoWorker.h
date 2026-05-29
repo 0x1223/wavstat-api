@@ -13,7 +13,7 @@ class AudioFifoWorker final
 public:
     static constexpr int inputChannels = 2;
     static constexpr int targetSampleRate = 48000;
-    static constexpr int chunkDurationMs = 10;
+    static constexpr int chunkDurationMs = 5;
     static constexpr int framesPerChunk = targetSampleRate * chunkDurationMs / 1000;
     static constexpr int samplesPerChunk = framesPerChunk * inputChannels;
     static constexpr int bytesPerChunk = samplesPerChunk * static_cast<int> (sizeof (std::int16_t));
