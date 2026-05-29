@@ -364,6 +364,7 @@ wss.on('connection', (ws, req) => {
     console.log('--- Handshake initiated from:', req.socket.remoteAddress, '---');
     
     ws.on('message', (data) => {
+        console.log('Server received raw message:', data.toString());
         try {
             const messageString = data.toString();
             const json = JSON.parse(messageString);
