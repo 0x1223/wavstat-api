@@ -89,14 +89,7 @@ public:
         socket->onOpen ([this]
         {
             DBG ("WebSocketManager::onOpen: connected");
-
-            if (socket != nullptr && socket->isOpen())
-            {
-                static constexpr auto hello =
-                    R"json({"type":"plugin.hello","source_id":"kingz-listen-plugin","client":"kingz-listen-plugin","transport":"libdatachannel-websocket"})json";
-                socket->send (std::string { hello });
-                DBG ("WebSocketManager::onOpen: sent plugin.hello");
-            }
+            onConnectionOpen();
         });
 
         socket->onClosed ([]
@@ -199,6 +192,17 @@ public:
     }
 
 private:
+    void onConnectionOpen()
+    {
+        if (socket == nullptr || ! socket->isOpen())
+            return;
+
+        static constexpr auto registration =
+            R"json({"type":"registration","source_id":"kingz-listen-plugin"})json";
+        socket->send (std::string { registration });
+        DBG ("WebSocketManager::onConnectionOpen: sent registration");
+    }
+
     void run() override
     {
         auto lastDebugMs = juce::int64 { 0 };

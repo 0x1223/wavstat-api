@@ -130,6 +130,10 @@ function validateKingzListenTelemetry(message) {
     return 'Kingz Listen telemetry requires a string type';
   }
 
+  if (message.type === 'registration') {
+    return null;
+  }
+
   if (message.type === 'plugin.hello') {
     if (message.client !== KINGZ_LISTEN_SOURCE_ID) {
       return 'Kingz Listen plugin.hello requires client=kingz-listen-plugin';
@@ -258,7 +262,7 @@ function routeTelemetryMessage(ws, session, message) {
       return { ok: true, source: 'kingzListen' };
     }
 
-    if (message.type === 'plugin.hello') {
+    if (message.type === 'registration' || message.type === 'plugin.hello') {
       ws.send(JSON.stringify({
         type: 'server.confirm',
         source_id: KINGZ_LISTEN_SOURCE_ID,
