@@ -549,6 +549,20 @@ export default function App({ onFirstRender } = {}) {
     }
 
     const timeoutId = window.setTimeout(() => {
+      // Payload sanity guard: abort the PUT if two or more tracks share the
+      // same audioMetadata.key.  This is the fingerprint of a state-corruption
+      // event (e.g. Track 1 metadata overwriting Track 2 during an async
+      // upload) — sending it would permanently corrupt the session document.
+      const dupKey = findDuplicateAudioKey(sessionSnapshot.tracks);
+      if (dupKey) {
+        console.error(
+          "[MixReview] AUTO-SAVE BLOCKED — duplicate audioMetadata.key detected across tracks. " +
+          "This indicates a cross-track state contamination event. Payload was NOT sent to the server.",
+          { duplicateKey: dupKey, tracks: sessionSnapshot.tracks.map((t) => ({ id: t.id, title: t.title })) },
+        );
+        return;
+      }
+
       saveSessionToApi(sessionSnapshot)
         .then(() => {
           lastSavedSessionRef.current = serializedSession;
@@ -681,26 +695,47 @@ export default function App({ onFirstRender } = {}) {
         return;
       }
 
+      // Compute the updated versions OUTSIDE the setTracks functional updater.
+      // `versions` is the closure value captured when this handler was last
+      // created — it belongs to `targetTrackId`, not to whatever track may be
+      // active now if the user switched tracks during the async upload.
+      const uploadedVersions = versions.map((version) =>
+        version.id === targetVersionId
+          ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
+          : version,
+      );
+
+      // Write the new versions into the correct track slot.
+      // No side effects (setVersions) inside the functional updater — that
+      // was the bug: calling setVersions here would clobber the versions state
+      // of whichever track the user is now on, not the uploaded track.
       setTracks((currentTracks) =>
         currentTracks.map((track) => {
-          if (track.id !== activeTrackId) {
-            return track;
-          }
-          const nextVersions = versions.map((version) =>
-            version.id === targetVersionId
-              ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
-              : version,
-          );
-          setVersions(nextVersions);
+          if (track.id !== targetTrackId) return track;
           return {
             ...track,
             title,
             activeVersionId: targetVersionId,
-            versions: nextVersions,
+            versions: uploadedVersions,
             updatedAt: new Date().toISOString()
           };
         }),
       );
+
+      // Only sync the standalone `versions` state when the user has NOT
+      // switched to a different track during the async upload.  If they did,
+      // leaving `versions` alone is correct — the new active track's versions
+      // are already loaded and must not be overwritten with the uploaded
+      // track's data (which would cause Track 1 metadata to appear in Track 2).
+      if (activeTrackIdRef.current === targetTrackId) {
+        setVersions(uploadedVersions);
+      } else {
+        console.warn(
+          "[MixReview] handleAudioUpload: active track changed during upload — " +
+          "versions state NOT updated to prevent cross-track metadata contamination",
+          { uploadedTrackId: targetTrackId, currentTrackId: activeTrackIdRef.current },
+        );
+      }
     } catch (error) {
       setUploadError(error.message || "Audio upload failed.");
     }
@@ -2451,6 +2486,31 @@ function normalizeAudioSource(audioSource) {
  * Runs all probes in parallel (Promise.allSettled) so it never blocks
  * the UI — results arrive ~200–600 ms after hydration on a normal connection.
  */
+/**
+ * findDuplicateAudioKey — scans the tracks array of a session snapshot and
+ * returns the first audioMetadata.key value that appears on more than one
+ * distinct track's active version.  Returns null when all keys are unique.
+ *
+ * Used as a payload sanity guard before auto-save: if two tracks share a key
+ * it means Track 1's audioMetadata was stamped into Track 2's slot (or vice
+ * versa) by a cross-track state contamination event and the PUT must be
+ * blocked to prevent permanently corrupting the session document.
+ */
+function findDuplicateAudioKey(tracks) {
+  if (!Array.isArray(tracks) || tracks.length < 2) return null;
+  const seen = new Set();
+  for (const track of tracks) {
+    const versions = Array.isArray(track.versions) ? track.versions : [];
+    const activeVersion =
+      versions.find((v) => v.id === track.activeVersionId) || versions[0];
+    const key = activeVersion?.audioMetadata?.key;
+    if (!key) continue;
+    if (seen.has(key)) return key;
+    seen.add(key);
+  }
+  return null;
+}
+
 async function probeSessionAudioSources(session) {
   const tracks = Array.isArray(session?.tracks) ? session.tracks : [];
   const candidates = [];
