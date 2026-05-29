@@ -41,28 +41,56 @@ function TrackButton({ track, index, isActive, onTrackSelect, activeRef }) {
   );
 }
 
-export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect }) {
-  // Which album is currently displayed in the track list
-  const [selectedAlbumId, setSelectedAlbumId] = useState(null);
-  // Whether the project-switcher dropdown is open
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+// ── Type label helpers ────────────────────────────────────────────────────────
+function albumTypeLabel(type) {
+  return type === "stem_project" ? "Stems" : "Album";
+}
+function albumTypeModifier(type) {
+  return type === "stem_project" ? "stems" : "album";
+}
 
-  const activeRef = useRef(null);
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function MobileTrackNav({
+  tracks,
+  albums,
+  activeTrackId,
+  onTrackSelect,
+  // Called whenever the reviewer changes the selected project via the dropdown
+  // or when the auto-switch fires. App.jsx uses this to conditionally render
+  // MobileStemStack vs WaveformReview.
+  onAlbumChange,
+}) {
+  const [selectedAlbumId, setSelectedAlbumId] = useState(null);
+  const [dropdownOpen,    setDropdownOpen]    = useState(false);
+
+  const activeRef   = useRef(null);
   const selectorRef = useRef(null);
 
   const effectiveAlbums = Array.isArray(albums) && albums.length > 0 ? albums : null;
-  const trackMap = Object.fromEntries(tracks.map((t) => [t.id, t]));
-  const multiAlbum = effectiveAlbums && effectiveAlbums.length > 1;
+  const trackMap        = Object.fromEntries(tracks.map((t) => [t.id, t]));
+  const multiAlbum      = effectiveAlbums && effectiveAlbums.length > 1;
 
   // Resolve selected album, falling back to the first one
   const selectedAlbum =
     (effectiveAlbums || []).find((a) => a.id === selectedAlbumId) ||
     (effectiveAlbums || [])[0];
 
-  // Build the flat track list to display
+  const isStemProject = selectedAlbum?.type === "stem_project";
+
+  // Track list shown only for album-type projects.
+  // Stem projects show MobileStemStack (rendered by App.jsx) instead.
   const displayTracks = multiAlbum
     ? (selectedAlbum?.trackIds || []).map((id) => trackMap[id]).filter(Boolean)
     : tracks;
+
+  // ── Internal helpers ──────────────────────────────────────────────────────
+  // Centralise album selection so both the dropdown click and the auto-switch
+  // effect fire the same update + parent callback in one place.
+  function applyAlbumSelection(albumId) {
+    setSelectedAlbumId(albumId);
+    onAlbumChange?.(albumId);
+  }
 
   // Auto-switch to whichever album owns the newly-active track
   useEffect(() => {
@@ -71,28 +99,28 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
       (a.trackIds || []).includes(activeTrackId)
     );
     if (owner && owner.id !== selectedAlbumId) {
-      setSelectedAlbumId(owner.id);
+      applyAlbumSelection(owner.id);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTrackId]);
 
-  // Scroll the active button into view after the list renders
+  // Scroll the active track button into view (only relevant for album-type lists)
   useEffect(() => {
     if (!activeRef.current) return;
-    const el = activeRef.current;
+    const el  = activeRef.current;
     const raf = requestAnimationFrame(() => {
       el.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
     return () => cancelAnimationFrame(raf);
   }, [activeTrackId, selectedAlbumId]);
 
-  // Current 1-based position within the album list (for the "X / Y" counter)
+  // X / Y counter — counts ALL projects regardless of type
   const currentAlbumIndex = (effectiveAlbums || []).findIndex(
     (a) => a.id === selectedAlbum?.id
   );
   const albumCount = (effectiveAlbums || []).length;
 
-  // Close the dropdown when the user taps outside it
+  // Close dropdown on outside tap
   useEffect(() => {
     if (!dropdownOpen) return;
     const onOutside = (e) => {
@@ -104,9 +132,11 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
     return () => document.removeEventListener("pointerdown", onOutside);
   }, [dropdownOpen]);
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <nav className="mobile-track-nav" aria-label="Track selector">
-      {/* Project switcher — only rendered when there are multiple albums */}
+
+      {/* ── Project switcher ──────────────────────────────────────────────── */}
       {multiAlbum && (
         <div className="mobile-project-selector" ref={selectorRef}>
           <button
@@ -120,8 +150,19 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
             <span className="mobile-project-selector-name">
               {selectedAlbum?.title ?? "Select Project"}
             </span>
+            {/* Type badge inside the selector button */}
+            <span
+              className={`mobile-project-type-tag mobile-project-type-tag--${albumTypeModifier(selectedAlbum?.type)}`}
+              aria-hidden="true"
+            >
+              {albumTypeLabel(selectedAlbum?.type)}
+            </span>
+            {/* X / Y counter — total across all types */}
             {albumCount > 0 && (
-              <span className="mobile-project-counter" aria-label={`${currentAlbumIndex + 1} of ${albumCount}`}>
+              <span
+                className="mobile-project-counter"
+                aria-label={`${currentAlbumIndex + 1} of ${albumCount}`}
+              >
                 {currentAlbumIndex + 1}&thinsp;/&thinsp;{albumCount}
               </span>
             )}
@@ -145,11 +186,19 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
                     aria-selected={isActive}
                     className={`mobile-project-option${isActive ? " active" : ""}`}
                     onClick={() => {
-                      setSelectedAlbumId(album.id);
+                      applyAlbumSelection(album.id);
                       setDropdownOpen(false);
                     }}
                   >
-                    <span>{album.title}</span>
+                    {/* Project title */}
+                    <span className="mobile-project-option-title">{album.title}</span>
+                    {/* Type badge — visually distinguishes Album vs Stems */}
+                    <span
+                      className={`mobile-project-type-tag mobile-project-type-tag--${albumTypeModifier(album.type)}`}
+                    >
+                      {albumTypeLabel(album.type)}
+                    </span>
+                    {/* Active checkmark */}
                     {isActive && (
                       <span className="mobile-project-check" aria-hidden="true">✓</span>
                     )}
@@ -161,23 +210,27 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
         </div>
       )}
 
+      {/* ── Section label ─────────────────────────────────────────────────── */}
       <p className="mobile-track-nav-label">
-        {selectedAlbum?.type === "stem_project" ? "Stems" : "Tracks"}
+        {isStemProject ? "Stems" : "Tracks"}
       </p>
 
-      {/* Single continuous track list — identical to the single-project layout */}
-      <div className="mobile-track-nav-list">
-        {displayTracks.map((track, index) => (
-          <TrackButton
-            key={track.id}
-            track={track}
-            index={index}
-            isActive={track.id === activeTrackId}
-            onTrackSelect={onTrackSelect}
-            activeRef={activeRef}
-          />
-        ))}
-      </div>
+      {/* ── Track list — hidden for stem projects (MobileStemStack takes over) */}
+      {!isStemProject && (
+        <div className="mobile-track-nav-list">
+          {displayTracks.map((track, index) => (
+            <TrackButton
+              key={track.id}
+              track={track}
+              index={index}
+              isActive={track.id === activeTrackId}
+              onTrackSelect={onTrackSelect}
+              activeRef={activeRef}
+            />
+          ))}
+        </div>
+      )}
+
     </nav>
   );
 }

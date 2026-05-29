@@ -3137,6 +3137,118 @@ body:has(.app-shell.reviewer-mode) {
     flex-shrink: 0;
   }
 
+  /* ── Project type tags — shown both in the selector button and the dropdown */
+  .mobile-project-type-tag {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.56rem;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+
+  /* Album type — warm gold */
+  .mobile-project-type-tag--album {
+    background: rgba(215, 173, 98, 0.1);
+    border-color: rgba(215, 173, 98, 0.25);
+    color: rgba(215, 173, 98, 0.7);
+  }
+
+  /* Stems type — cool blue accent, visually distinct from Album */
+  .mobile-project-type-tag--stems {
+    background: rgba(110, 168, 200, 0.1);
+    border-color: rgba(110, 168, 200, 0.25);
+    color: rgba(130, 185, 215, 0.85);
+  }
+
+  /* Dropdown option layout: title grows, type-tag stays fixed, check at end */
+  .mobile-project-option-title {
+    flex: 1;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ── MobileStemStack ───────────────────────────────────────────────────── */
+  /* Shares .waveform-panel so it inherits flex:1 / min-height:0 / overflow:hidden
+     from .reviewer-mode .waveform-panel. The extra class overrides the grid. */
+  .reviewer-mode .mobile-stem-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 4px 6px 0;
+  }
+
+  /* Scrollable lane container — fills remaining space after REVIEW button */
+  .mobile-stem-stack-lanes {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
+    order: 2;
+  }
+
+  .mobile-stem-stack-lanes::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Individual stem row */
+  .mobile-stem-stack-lane {
+    padding: 4px 0 2px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .mobile-stem-stack-lane:last-child {
+    border-bottom: none;
+  }
+
+  /* Crosshair cursor signals the lane is seekable / tappable */
+  .mobile-stem-stack-lane.marker-mode {
+    cursor: crosshair;
+  }
+
+  .mobile-stem-stack-lane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-bottom: 3px;
+    pointer-events: none;
+  }
+
+  .mobile-stem-stack-lane-title {
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: rgba(215, 173, 98, 0.5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobile-stem-stack-lane-status {
+    font-size: 0.6rem;
+    color: rgba(255, 255, 255, 0.28);
+    flex-shrink: 0;
+  }
+
+  .mobile-stem-stack-lane-error {
+    font-size: 0.6rem;
+    color: rgba(220, 80, 80, 0.65);
+    flex-shrink: 0;
+  }
+
+  .mobile-stem-stack-lane-waveform {
+    width: 100%;
+  }
+
   /* Hide the compact TrackList when the premium MobileTrackNav is active */
   .reviewer-mode .review-main:has(.mobile-track-nav) .track-list-panel {
     display: none;

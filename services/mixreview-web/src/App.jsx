@@ -10,6 +10,7 @@ import { TrackList } from "./components/TrackList.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
 import { WaveformReview } from "./components/WaveformReview.jsx";
 import { StemPlayer } from "./components/StemPlayer.jsx";
+import { MobileStemStack } from "./components/MobileStemStack.jsx";
 import {
   deleteSessionFromApi,
   listSessionsFromApi,
@@ -271,6 +272,38 @@ export default function App({ onFirstRender } = {}) {
         };
       });
   }, [isActiveStemProject, activeAlbum, tracks]);
+
+  // ── Mobile reviewer: track which project the reviewer has selected ────────
+  // Separate from the admin activeAlbum so the two modes never interfere.
+  const [reviewerAlbumId, setReviewerAlbumId] = useState(null);
+
+  const reviewerAlbum = useMemo(
+    () => albums.find((a) => a.id === reviewerAlbumId) ?? albums[0] ?? null,
+    [reviewerAlbumId, albums],
+  );
+
+  // True when the mobile reviewer has a stem_project selected and we need to
+  // show MobileStemStack instead of WaveformReview.
+  const isReviewerStemProject =
+    reviewerAlbum?.type === "stem_project";
+
+  // Ordered stems for MobileStemStack — same shape as stemTracks above.
+  const reviewerStemTracks = useMemo(() => {
+    if (!isReviewerStemProject || !reviewerAlbum) return [];
+    return (reviewerAlbum.trackIds || [])
+      .map((id) => tracks.find((t) => t.id === id))
+      .filter(Boolean)
+      .map((track) => {
+        const ver =
+          track.versions.find((v) => v.id === track.activeVersionId) ||
+          track.versions[0];
+        return {
+          id: track.id,
+          title: track.title,
+          audioSource: ver?.audioSource ? normalizeAudioSource(ver.audioSource) : null,
+        };
+      });
+  }, [isReviewerStemProject, reviewerAlbum, tracks]);
 
   const activeVersion = useMemo(
     () => versions.find((version) => version.id === activeVersionId) || versions[0],
@@ -932,6 +965,20 @@ export default function App({ onFirstRender } = {}) {
     );
     setIsDirty(true);
   }, []);
+
+  // Called by MobileTrackNav whenever the reviewer picks a project from the
+  // dropdown (or when the auto-switch fires). Switches both the reviewer album
+  // reference and the active track so WaveformReview / MobileStemStack have
+  // valid audio to load.
+  const handleReviewerAlbumChange = useCallback((albumId) => {
+    setReviewerAlbumId(albumId);
+    const targetAlbum  = albums.find((a) => a.id === albumId);
+    const firstTrackId = targetAlbum?.trackIds?.[0];
+    // selectTrack handles pause + version reset; only call if switching tracks.
+    if (firstTrackId && firstTrackId !== activeTrackId) {
+      selectTrack(firstTrackId);
+    }
+  }, [albums, activeTrackId, selectTrack]);
 
   const handleUpdateAlbumType = useCallback((albumId, newType) => {
     if (!albumId) return;
@@ -2108,13 +2155,9 @@ export default function App({ onFirstRender } = {}) {
               tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
               albums={albums}
               activeTrackId={activeTrackId}
+              onAlbumChange={handleReviewerAlbumChange}
               onTrackSelect={(trackId) => {
-                // This runs synchronously inside the user's tap gesture.
-                // Clear any pending auto-next flag (manual selection takes over).
                 autoPlayNextRef.current = false;
-                // If the user has already pressed Play this session, refresh the
-                // iOS audio session so the programmatic play() called later by
-                // the isPlayerReady effect succeeds without needing its own gesture.
                 if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
                   unlockAudioSession();
                 }
@@ -2146,11 +2189,13 @@ export default function App({ onFirstRender } = {}) {
             />
           )}
 
-          {/* Admin + stem project → multi-lane StemPlayer.
-              All other contexts → standard single-track WaveformReview.
-              key={activeAlbum?.id} forces a clean remount when the engineer
-              switches to a different stem project so stale WaveSurfer
-              instances from the previous album are fully torn down. */}
+          {/* Player selection:
+              1. Admin + stem project           → StemPlayer (desktop multi-lane)
+              2. Reviewer + stem project selected
+                 + mobile viewport              → MobileStemStack
+              3. Everything else                → WaveformReview (single track)
+              key={…?.id} forces a clean remount on project switch so stale
+              WaveSurfer instances are fully torn down before new ones start. */}
           {isEngineerMode && isActiveStemProject ? (
             <StemPlayer
               key={activeAlbum?.id}
@@ -2161,6 +2206,16 @@ export default function App({ onFirstRender } = {}) {
               onTimeUpdate={handlePlaybackTimeUpdate}
               onDurationChange={updateDuration}
               onPlaybackChange={setIsPlaying}
+            />
+          ) : isReviewerMode && isReviewerStemProject && isMobileViewport() ? (
+            <MobileStemStack
+              key={reviewerAlbum?.id}
+              stems={reviewerStemTracks}
+              onReady={handlePlayerReady}
+              onTimeUpdate={handlePlaybackTimeUpdate}
+              onDurationChange={updateDuration}
+              onPlaybackChange={setIsPlaying}
+              onMobileNoteRequest={openMobileNote}
             />
           ) : (
             <WaveformReview
