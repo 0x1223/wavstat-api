@@ -86,6 +86,12 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
     return () => cancelAnimationFrame(raf);
   }, [activeTrackId, selectedAlbumId]);
 
+  // Current 1-based position within the album list (for the "X / Y" counter)
+  const currentAlbumIndex = (effectiveAlbums || []).findIndex(
+    (a) => a.id === selectedAlbum?.id
+  );
+  const albumCount = (effectiveAlbums || []).length;
+
   // Close the dropdown when the user taps outside it
   useEffect(() => {
     if (!dropdownOpen) return;
@@ -114,6 +120,11 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
             <span className="mobile-project-selector-name">
               {selectedAlbum?.title ?? "Select Project"}
             </span>
+            {albumCount > 0 && (
+              <span className="mobile-project-counter" aria-label={`${currentAlbumIndex + 1} of ${albumCount}`}>
+                {currentAlbumIndex + 1}&thinsp;/&thinsp;{albumCount}
+              </span>
+            )}
             <span
               className={`mobile-project-chevron${dropdownOpen ? " open" : ""}`}
               aria-hidden="true"

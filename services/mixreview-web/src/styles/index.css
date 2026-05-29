@@ -2900,6 +2900,16 @@ h2 {
     text-overflow: ellipsis;
   }
 
+  .mobile-project-counter {
+    flex-shrink: 0;
+    font-size: 0.66rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: rgba(215, 173, 98, 0.45);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+
   .mobile-project-chevron {
     flex-shrink: 0;
     font-size: 0.88rem;
