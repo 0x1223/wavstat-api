@@ -84,6 +84,7 @@ const restoredSession = (() => {
 })();
 const legacyInitialVersions = buildInitialVersions(restoredSession);
 const initialTracks = buildInitialTracks(restoredSession, legacyInitialVersions);
+const initialAlbums = buildInitialAlbums(restoredSession);
 // If a specific ?track= param is present and valid, honour it; otherwise always
 // default to the absolute first track (index 0) so a clean reviewer share link
 // never silently lands on an arbitrary mid-session track.
@@ -154,6 +155,7 @@ export default function App({ onFirstRender } = {}) {
   const [sessionDetails, setSessionDetails] = useState(buildSessionDetails(restoredSession));
   const [versions, setVersions] = useState(initialVersions);
   const [tracks, setTracks] = useState(initialTracks);
+  const [albums, setAlbums] = useState(initialAlbums);
   const [activeTrackId, setActiveTrackId] = useState(initialActiveTrackId);
   const [currentReviewer, setCurrentReviewer] = useState(
     initialReviewer,
@@ -356,6 +358,7 @@ export default function App({ onFirstRender } = {}) {
     setProjectTitle(session.projectName || emptyProjectName);
     setSessionDetails(buildSessionDetails(session));
     setTracks(nextTracks);
+    setAlbums(buildInitialAlbums(session));
     setActiveTrackId(nextActiveTrackId);
     setVersions(nextVersions);
     setActiveVersionId(
@@ -395,11 +398,12 @@ export default function App({ onFirstRender } = {}) {
         hasStarted,
         currentReviewer,
         tracks: nextTracks.map(toStoredTrack),
+        albums,
         versions: activeStoredTrack?.versions.map(toStoredVersion) || [],
         updatedAt: new Date().toISOString()
       };
     },
-    [activeTrackId, activeVersionId, currentReviewer, hasStarted, projectName, sessionDetails, sessionId, shareId, tracks, versions],
+    [activeTrackId, activeVersionId, albums, currentReviewer, hasStarted, projectName, sessionDetails, sessionId, shareId, tracks, versions],
   );
 
   useEffect(() => {
@@ -689,6 +693,9 @@ export default function App({ onFirstRender } = {}) {
         );
         const nextTrack = createTrack(title, nextVersions, targetTrackId);
         setTracks([nextTrack]);
+        setAlbums((prevAlbums) => prevAlbums.map((album, idx) =>
+          idx === 0 ? { ...album, trackIds: [...album.trackIds, targetTrackId] } : album
+        ));
         setActiveTrackId(targetTrackId);
         setVersions(nextVersions);
         setActiveVersionId(targetVersionId);
@@ -814,6 +821,9 @@ export default function App({ onFirstRender } = {}) {
 
         // Add to state immediately so the track list updates as each file lands.
         setTracks((currentTracks) => [...currentTracks, nextTrack]);
+        setAlbums((prevAlbums) => prevAlbums.map((album, idx) =>
+          idx === 0 ? { ...album, trackIds: [...album.trackIds, nextTrack.id] } : album
+        ));
       } catch (error) {
         lastError = error;
         // Continue to the next file — don't abort the whole batch.
@@ -844,14 +854,63 @@ export default function App({ onFirstRender } = {}) {
     // Eagerly persist all new tracks at once. sessionSnapshot is captured at
     // call-entry (before any setTracks calls in this loop), so we append all
     // newTracks explicitly rather than relying on the debounced auto-save.
+    // albums is also captured at call-entry; add new track IDs to the first album.
+    const newTrackIds = newTracks.map((t) => t.id);
+    const updatedAlbums = albums.map((album, idx) =>
+      idx === 0 ? { ...album, trackIds: [...album.trackIds, ...newTrackIds] } : album
+    );
     const savedSnapshot = {
       ...sessionSnapshot,
       activeTrackId: lastTrack.id,
       activeVersionId: "version-v1",
       tracks: [...sessionSnapshot.tracks, ...newTracks.map(toStoredTrack)],
+      albums: updatedAlbums,
     };
     await saveSessionToApi(savedSnapshot).catch(() => {});
-  }, [currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, sessionSnapshot]);
+  }, [albums, currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, sessionSnapshot]);
+
+  // ── Album management ─────────────────────────────────────────────────────
+  // Albums are a parallel index over the flat tracks array. All three handlers
+  // only mutate the albums state; tracks remain flat and unchanged so every
+  // existing selectTrack / WaveSurfer / transport path is unaffected.
+
+  const handleCreateAlbum = useCallback((title = "New Album") => {
+    const newAlbum = {
+      id: `album-${Date.now()}`,
+      title: typeof title === "string" && title.trim() ? title.trim() : "New Album",
+      trackIds: [],
+      createdAt: new Date().toISOString()
+    };
+    setAlbums((prev) => [...prev, newAlbum]);
+    setIsDirty(true);
+  }, []);
+
+  const handleRenameAlbum = useCallback((albumId, newTitle) => {
+    if (!albumId || !newTitle?.trim()) return;
+    setAlbums((prev) =>
+      prev.map((a) => (a.id === albumId ? { ...a, title: newTitle.trim() } : a))
+    );
+    setIsDirty(true);
+  }, []);
+
+  // Move a track from whichever album currently owns it to targetAlbumId.
+  // The track is removed from ALL albums first (guard against duplicates),
+  // then appended to the target album. Works with functional updater so it
+  // never captures a stale albums snapshot from the closure.
+  const handleMoveTrack = useCallback((trackId, targetAlbumId) => {
+    if (!trackId || !targetAlbumId) return;
+    setAlbums((prev) =>
+      prev.map((album) => {
+        const without = album.trackIds.filter((id) => id !== trackId);
+        if (album.id === targetAlbumId) {
+          return { ...album, trackIds: [...without, trackId] };
+        }
+        return { ...album, trackIds: without };
+      })
+    );
+    setIsDirty(true);
+  }, []);
+  // ─────────────────────────────────────────────────────────────────────────
 
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
@@ -860,6 +919,7 @@ export default function App({ onFirstRender } = {}) {
     setProjectTitle(emptyProjectName);
     setSessionDetails(emptySessionDetails);
     setTracks([]);
+    setAlbums([{ id: "album-default", title: emptyProjectName, trackIds: [], createdAt: new Date().toISOString() }]);
     setActiveTrackId(null);
     setVersions(createEmptyVersions());
     setCurrentReviewer("Engineer");
@@ -1293,6 +1353,7 @@ export default function App({ onFirstRender } = {}) {
     setSessionId(createSessionId());
     setProjectTitle(emptyProjectName);
     setTracks([]);
+    setAlbums([{ id: "album-default", title: emptyProjectName, trackIds: [], createdAt: new Date().toISOString() }]);
     setActiveTrackId(null);
     setVersions(createEmptyVersions());
     setActiveVersionId("version-v1");
@@ -1985,6 +2046,7 @@ export default function App({ onFirstRender } = {}) {
           {isReviewerMode && tracks.length > 1 && (
             <MobileTrackNav
               tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
+              albums={albums}
               activeTrackId={activeTrackId}
               onTrackSelect={(trackId) => {
                 // This runs synchronously inside the user's tap gesture.
@@ -2003,10 +2065,14 @@ export default function App({ onFirstRender } = {}) {
 
           <TrackList
             tracks={syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)}
+            albums={albums}
             activeTrackId={activeTrackId}
             canEdit={canUploadAudio}
             onTrackSelect={selectTrack}
             onTrackUpload={handleTrackUpload}
+            onCreateAlbum={handleCreateAlbum}
+            onRenameAlbum={handleRenameAlbum}
+            onMoveTrack={handleMoveTrack}
           />
 
           {(permissions.canEdit || !hasPlayableAudio) && (
@@ -2681,6 +2747,36 @@ function buildInitialVersions(session) {
       duration: session?.duration || 0
     }
   ]);
+}
+
+// buildInitialAlbums — hydrates the albums array from a stored session document
+// (or returns a sensible default when no session is available).
+//
+// Mirror the server-side normalizeAlbums logic: if the session has no albums,
+// create a single default album whose trackIds match the flat tracks array.
+// This keeps the client and server consistent without a separate migration step.
+function buildInitialAlbums(session) {
+  const rawAlbums = Array.isArray(session?.albums) ? session.albums : [];
+  const rawTracks = Array.isArray(session?.tracks) ? session.tracks : [];
+
+  if (rawAlbums.length > 0) {
+    // Validate: strip any trackId that no longer exists in tracks.
+    const trackIdSet = new Set(rawTracks.map((t) => t.id).filter(Boolean));
+    return rawAlbums.map((album) => ({
+      id: album.id || `album-${Date.now()}`,
+      title: album.title || "Untitled Album",
+      trackIds: (Array.isArray(album.trackIds) ? album.trackIds : []).filter((id) => trackIdSet.has(id)),
+      createdAt: album.createdAt || new Date().toISOString()
+    }));
+  }
+
+  // No albums in the document → create one default album from all tracks.
+  return [{
+    id: "album-default",
+    title: session?.projectName || emptyProjectName,
+    trackIds: rawTracks.map((t) => t.id).filter(Boolean),
+    createdAt: session?.createdAt || new Date().toISOString()
+  }];
 }
 
 function buildInitialTracks(session, fallbackVersions = createEmptyVersions()) {

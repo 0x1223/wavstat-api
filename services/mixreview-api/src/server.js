@@ -1308,13 +1308,16 @@ function normalizeSessionDocument(session) {
     return null;
   }
 
+  const normalizedTracks = Array.isArray(session.tracks) ? session.tracks : [];
+  const projectNameStr =
+    typeof session.projectName === "string" && session.projectName.trim()
+      ? session.projectName.trim()
+      : "Untitled MixReview Session";
+
   return {
     ...session,
     id,
-    projectName:
-      typeof session.projectName === "string" && session.projectName.trim()
-        ? session.projectName.trim()
-        : "Untitled MixReview Session",
+    projectName: projectNameStr,
     sessionName: typeof session.sessionName === "string" ? session.sessionName.trim() : "",
     artistName: typeof session.artistName === "string" ? session.artistName.trim() : "",
     reviewerName: typeof session.reviewerName === "string" ? session.reviewerName.trim() : "",
@@ -1326,10 +1329,67 @@ function normalizeSessionDocument(session) {
     shareId: typeof session.shareId === "string" && session.shareId.trim() ? session.shareId.trim() : id,
     activeTrackId: typeof session.activeTrackId === "string" ? sanitizePathSegment(session.activeTrackId) : null,
     versions: Array.isArray(session.versions) ? session.versions : [],
-    tracks: Array.isArray(session.tracks) ? session.tracks : [],
+    tracks: normalizedTracks,
+    albums: normalizeAlbums(
+      Array.isArray(session.albums) ? session.albums : [],
+      normalizedTracks,
+      projectNameStr,
+      session.createdAt
+    ),
     createdAt: session.createdAt || new Date().toISOString(),
     updatedAt: session.updatedAt || new Date().toISOString()
   };
+}
+
+// normalizeAlbums — ensures the session always has a valid albums array that
+// is consistent with the tracks array.
+//
+// Rules applied on every read/write:
+//   1. If no albums exist, auto-create a single default album whose trackIds
+//      mirror the flat tracks array. This is the backward-compat migration path:
+//      every existing session gets a default album on its next read without any
+//      explicit data migration step.
+//   2. If albums exist, strip any trackId references that no longer have a
+//      corresponding entry in tracks (e.g. after a track is deleted).
+//   3. Any track that is not yet assigned to any album is appended to the first
+//      album. This handles tracks added via the direct-upload flow before the
+//      frontend album-assignment UI has saved album state.
+//
+// Pure and idempotent — no side effects, safe to call on every read/write.
+function normalizeAlbums(rawAlbums, tracks, defaultTitle, createdAt) {
+  const trackIdSet = new Set(
+    tracks.map((t) => (typeof t.id === "string" ? t.id : null)).filter(Boolean)
+  );
+
+  // No albums yet → auto-migrate: create one default album from all tracks.
+  if (rawAlbums.length === 0) {
+    return [{
+      id: "album-default",
+      title: defaultTitle || "Main Album",
+      trackIds: [...trackIdSet],
+      createdAt: createdAt || new Date().toISOString()
+    }];
+  }
+
+  // Strip dangling references (tracks that have been removed from the session).
+  let cleaned = rawAlbums.map((album) => ({
+    id: typeof album.id === "string" && album.id.trim() ? album.id.trim() : `album-${randomUUID()}`,
+    title: typeof album.title === "string" && album.title.trim() ? album.title.trim() : "Untitled Album",
+    trackIds: (Array.isArray(album.trackIds) ? album.trackIds : []).filter((id) => trackIdSet.has(id)),
+    createdAt: typeof album.createdAt === "string" ? album.createdAt : new Date().toISOString()
+  }));
+
+  // Assign any unallocated tracks to the first album (handles upload-before-save races).
+  const assignedSet = new Set(cleaned.flatMap((a) => a.trackIds));
+  const unassigned = [...trackIdSet].filter((id) => !assignedSet.has(id));
+  if (unassigned.length > 0 && cleaned.length > 0) {
+    cleaned = [
+      { ...cleaned[0], trackIds: [...cleaned[0].trackIds, ...unassigned] },
+      ...cleaned.slice(1)
+    ];
+  }
+
+  return cleaned;
 }
 
 function getSessionStatus(session) {
