@@ -83,9 +83,14 @@ juce::String getPlaceholderHtml()
   <script>
     const studioIpInput = document.getElementById("studio-ip");
     const studioPortInput = document.getElementById("studio-port");
-    let connectionFieldsEdited = false;
-    let nativePromiseId = 1;
-    const nativePromises = new Map();
+	    let connectionFieldsEdited = false;
+	    let nativePromiseId = 1;
+	    const nativePromises = new Map();
+	    let telemetrySocket = null;
+	    let peerConnection = null;
+	    let pcmDataChannel = null;
+	    let pendingRemoteCandidates = [];
+	    let signalId = "kingz-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
 
     function markConnectionFieldsEdited() {
       connectionFieldsEdited = true;
@@ -106,11 +111,163 @@ juce::String getPlaceholderHtml()
       }
     }
 
-    function applyTelemetry(payload) {
+	    function applyTelemetry(payload) {
       let parsed = payload;
       if (typeof payload === "string") {
         try { parsed = JSON.parse(payload); } catch (_) { parsed = { raw: payload }; }
-      }
+	    }
+
+	    function sendTelemetrySignal(payload) {
+	      if (!telemetrySocket || telemetrySocket.readyState !== WebSocket.OPEN) {
+	        console.warn("Telemetry WebSocket is not open", payload);
+	        return;
+	      }
+
+	      telemetrySocket.send(JSON.stringify({
+	        source_id: "kingz-listen-web",
+	        signal_id: signalId,
+	        ...payload
+	      }));
+	    }
+
+	    function bindPcmDataChannel(channel) {
+	      if (!channel || channel.label !== "kingz-pcm") return;
+
+	      pcmDataChannel = channel;
+	      pcmDataChannel.binaryType = "arraybuffer";
+	      pcmDataChannel.onopen = () => {
+	        document.getElementById("telemetry-status").textContent = "PCM DataChannel live";
+	      };
+	      pcmDataChannel.onclose = () => {
+	        document.getElementById("telemetry-status").textContent = "PCM DataChannel closed";
+	      };
+	      pcmDataChannel.onmessage = (event) => {
+	        const byteLength = event.data instanceof ArrayBuffer
+	          ? event.data.byteLength
+	          : (event.data && event.data.size) || 0;
+	        window.__KINGZ_LISTEN_LAST_PCM_PACKET__ = {
+	          byteLength,
+	          receivedAt: Date.now()
+	        };
+	      };
+	    }
+
+	    async function flushPendingRemoteCandidates() {
+	      if (!peerConnection || !peerConnection.remoteDescription) return;
+
+	      const candidates = pendingRemoteCandidates;
+	      pendingRemoteCandidates = [];
+	      for (const candidate of candidates) {
+	        try { await peerConnection.addIceCandidate(candidate); }
+	        catch (error) { console.warn("Remote ICE candidate rejected", error); }
+	      }
+	    }
+
+	    async function handleTelemetrySignal(message) {
+	      if (!message || message.signal_id && message.signal_id !== signalId) return;
+
+	      if (message.type === "webrtc-answer") {
+	        if (!peerConnection) return;
+	        await peerConnection.setRemoteDescription({
+	          type: message.descriptionType || "answer",
+	          sdp: message.sdp
+	        });
+	        await flushPendingRemoteCandidates();
+	        return;
+	      }
+
+	      if (message.type === "webrtc-candidate") {
+	        const candidatePayload = message.candidate && message.candidate.candidate
+	          ? message.candidate
+	          : {
+	              candidate: message.candidate,
+	              sdpMid: message.sdpMid,
+	              sdpMLineIndex: message.sdpMLineIndex
+	            };
+	        if (!candidatePayload.candidate) return;
+
+	        const candidate = new RTCIceCandidate(candidatePayload);
+	        if (!peerConnection || !peerConnection.remoteDescription) {
+	          pendingRemoteCandidates.push(candidate);
+	          return;
+	        }
+	        await peerConnection.addIceCandidate(candidate);
+	      }
+	    }
+
+	    async function startWebRtcReceiver(host, port) {
+	      if (peerConnection) {
+	        try { peerConnection.close(); } catch (_) {}
+	      }
+
+	      pendingRemoteCandidates = [];
+	      signalId = "kingz-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+	      peerConnection = new RTCPeerConnection({
+	        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+	      });
+
+	      peerConnection.onicecandidate = (event) => {
+	        if (!event.candidate) return;
+	        sendTelemetrySignal({
+	          type: "webrtc-candidate",
+	          candidate: event.candidate.toJSON()
+	        });
+	      };
+	      peerConnection.ondatachannel = (event) => bindPcmDataChannel(event.channel);
+	      peerConnection.onconnectionstatechange = () => {
+	        document.getElementById("telemetry-status").textContent =
+	          "WebRTC " + peerConnection.connectionState;
+	      };
+
+	      bindPcmDataChannel(peerConnection.createDataChannel("kingz-pcm", {
+	        ordered: false,
+	        maxRetransmits: 0
+	      }));
+
+	      const offer = await peerConnection.createOffer();
+	      await peerConnection.setLocalDescription(offer);
+
+	      sendTelemetrySignal({
+	        type: "webrtc-offer",
+	        sdp: offer.sdp,
+	        descriptionType: offer.type,
+	        offerGeneration: Date.now()
+	      });
+	    }
+
+	    function openTelemetrySocket(host, port) {
+	      const url = "ws://" + host + ":" + port + "/";
+	      if (telemetrySocket && telemetrySocket.readyState === WebSocket.OPEN) {
+	        startWebRtcReceiver(host, port).catch(console.error);
+	        return;
+	      }
+
+	      if (telemetrySocket) {
+	        try { telemetrySocket.close(); } catch (_) {}
+	      }
+
+	      telemetrySocket = new WebSocket(url);
+	      telemetrySocket.onopen = () => {
+	        sendTelemetrySignal({ type: "receiver.hello" });
+	        startWebRtcReceiver(host, port).catch((error) => {
+	          document.getElementById("telemetry-status").textContent = "WebRTC offer failed";
+	          console.error(error);
+	        });
+	      };
+	      telemetrySocket.onmessage = (event) => {
+	        let message = null;
+	        try { message = JSON.parse(event.data); } catch (_) { return; }
+	        handleTelemetrySignal(message).catch(console.error);
+	        applyTelemetry(message);
+	      };
+	      telemetrySocket.onclose = () => {
+	        document.getElementById("telemetry-status").textContent = "Telemetry socket closed";
+	      };
+	      telemetrySocket.onerror = (error) => {
+	        document.getElementById("telemetry-status").textContent = "Telemetry socket error";
+	        console.error(error);
+	      };
+	    }
 
       window.__KINGZ_LISTEN_TELEMETRY__ = parsed;
       document.getElementById("mount-status").textContent = "Telemetry interface mounted.";
@@ -241,14 +398,15 @@ juce::String getPlaceholderHtml()
         .catch((error) => console.error(error));
     });
 
-    document.getElementById("connect").addEventListener("click", () => {
-      const host = studioIpInput.value.trim();
-      const port = Number.parseInt(studioPortInput.value, 10) || 8081;
-      document.getElementById("telemetry-status").textContent = "Connecting";
-      sendToNative({ action: "connectTelemetry", source: "placeholder-ui", host, port })
-        .catch((error) => {
-          document.getElementById("telemetry-status").textContent = "Bridge unavailable";
-          console.error(error);
+	    document.getElementById("connect").addEventListener("click", () => {
+	      const host = studioIpInput.value.trim();
+	      const port = Number.parseInt(studioPortInput.value, 10) || 8081;
+	      document.getElementById("telemetry-status").textContent = "Connecting";
+	      sendToNative({ action: "connectTelemetry", source: "placeholder-ui", host, port })
+	        .then(() => openTelemetrySocket(host || "127.0.0.1", port))
+	        .catch((error) => {
+	          document.getElementById("telemetry-status").textContent = "Bridge unavailable";
+	          console.error(error);
         });
     });
   </script>

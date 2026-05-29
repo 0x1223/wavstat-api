@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -33,6 +34,8 @@ public:
     int getPort() const noexcept;
     int getConnectedClientCount() const noexcept;
     juce::String getLocalLanIpAddress() const;
+    void setExternalSignalingSender (std::function<void (const juce::String&)> sender);
+    void handleExternalSignalingMessage (const juce::var& message);
 
     std::atomic<bool> isConnected { false };
     std::atomic<int> activeClientCount { 0 };
@@ -116,6 +119,10 @@ private:
 
     AudioFifoWorker& fifo;
     std::vector<std::shared_ptr<ClientConnection>> clients;
+    std::shared_ptr<ClientConnection> externalSignalingClient;
+    juce::CriticalSection clientLock;
+    juce::CriticalSection externalSignalingLock;
+    std::function<void (const juce::String&)> externalSignalingSender;
     NativeSocket listener = invalidSocket;
     std::atomic<bool> shouldListen { false };
     std::atomic<int> connectedClients { 0 };

@@ -102,10 +102,12 @@ if (existsSync(distPath)) {
 app.listen(PORT, () => console.log(`Wavstat API on port ${PORT} | digitizer → ${DIGITIZER_URL}`));
 
 const KINGZ_LISTEN_SOURCE_ID = 'kingz-listen-plugin';
+const KINGZ_LISTEN_WEB_SOURCE_ID = 'kingz-listen-web';
 const MIXREVIEW_SOURCE_IDS = new Set(['mixreview', 'mixreview-web', 'mixreview-api']);
 
 const telemetryState = {
   kingzListen: new Map(),
+  kingzListenReceivers: new Map(),
   mixReview: new Map(),
 };
 
@@ -145,6 +147,16 @@ function validateKingzListenTelemetry(message) {
     return null;
   }
 
+  if (message.type === 'webrtc-answer' || message.type === 'webrtc-candidate') {
+    if (typeof message.sdp !== 'string' && message.type === 'webrtc-answer') {
+      return 'Kingz Listen webrtc-answer requires string sdp';
+    }
+    if (message.type === 'webrtc-candidate' && message.candidate == null) {
+      return 'Kingz Listen webrtc-candidate requires candidate';
+    }
+    return null;
+  }
+
   if (message.type.startsWith('webrtc.') || message.type === 'pong') {
     return null;
   }
@@ -168,6 +180,59 @@ function validateMixReviewTelemetry(message) {
   return null;
 }
 
+function validateKingzListenReceiverSignal(message) {
+  if (message.source_id !== KINGZ_LISTEN_WEB_SOURCE_ID) {
+    return 'Kingz Listen receiver signaling requires source_id=kingz-listen-web';
+  }
+
+  if (message.type === 'receiver.hello') {
+    return null;
+  }
+
+  if (message.type === 'webrtc-offer') {
+    if (typeof message.sdp !== 'string' || message.sdp.length === 0) {
+      return 'Kingz Listen webrtc-offer requires string sdp';
+    }
+    return null;
+  }
+
+  if (message.type === 'webrtc-candidate') {
+    if (message.candidate == null) {
+      return 'Kingz Listen webrtc-candidate requires candidate';
+    }
+    return null;
+  }
+
+  return `Unsupported Kingz Listen receiver signal type: ${message.type}`;
+}
+
+function sendJsonIfOpen(ws, payload) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(payload));
+    return true;
+  }
+  return false;
+}
+
+function forwardToKingzListenPlugin(payload) {
+  for (const entry of telemetryState.kingzListen.values()) {
+    if (sendJsonIfOpen(entry.ws, payload)) return true;
+  }
+  return false;
+}
+
+function forwardToKingzListenReceivers(payload) {
+  let delivered = 0;
+  const signalId = payload.signal_id;
+
+  for (const entry of telemetryState.kingzListenReceivers.values()) {
+    if (signalId && entry.signalId && signalId !== entry.signalId) continue;
+    if (sendJsonIfOpen(entry.ws, payload)) delivered += 1;
+  }
+
+  return delivered;
+}
+
 function routeTelemetryMessage(ws, session, message) {
   const sourceId = message?.source_id;
 
@@ -182,6 +247,16 @@ function routeTelemetryMessage(ws, session, message) {
       ws,
       lastMessage: message,
     });
+
+    if (message.type === 'webrtc-answer' || message.type === 'webrtc-candidate') {
+      const delivered = forwardToKingzListenReceivers(message);
+      console.log('[Kingz Listen] Forwarded plugin signal to receiver(s):', {
+        type: message.type,
+        delivered,
+        signalId: message.signal_id,
+      });
+      return { ok: true, source: 'kingzListen' };
+    }
 
     if (message.type === 'plugin.hello') {
       ws.send(JSON.stringify({
@@ -198,6 +273,43 @@ function routeTelemetryMessage(ws, session, message) {
       remoteAddress: session.remoteAddress,
     });
     return { ok: true, source: 'kingzListen' };
+  }
+
+  if (sourceId === KINGZ_LISTEN_WEB_SOURCE_ID) {
+    const validationError = validateKingzListenReceiverSignal(message);
+    if (validationError) return { ok: false, error: validationError };
+
+    session.sourceId = KINGZ_LISTEN_WEB_SOURCE_ID;
+    session.lastSeenAt = Date.now();
+    telemetryState.kingzListenReceivers.set(session.id, {
+      session,
+      ws,
+      signalId: message.signal_id,
+      lastMessage: message,
+    });
+
+    if (message.type === 'receiver.hello') {
+      ws.send(JSON.stringify({
+        type: 'server.confirm',
+        source_id: KINGZ_LISTEN_WEB_SOURCE_ID,
+        status: 'connected',
+        message: 'Kingz Listen receiver route connected',
+      }));
+      return { ok: true, source: 'kingzListenReceiver' };
+    }
+
+    const delivered = forwardToKingzListenPlugin(message);
+    if (!delivered) {
+      return { ok: false, error: 'No Kingz Listen plugin sender is connected' };
+    }
+
+    console.log('[Kingz Listen] Forwarded receiver signal to plugin:', {
+      sessionId: session.id,
+      type: message.type,
+      signalId: message.signal_id,
+      remoteAddress: session.remoteAddress,
+    });
+    return { ok: true, source: 'kingzListenReceiver' };
   }
 
   if (MIXREVIEW_SOURCE_IDS.has(sourceId)) {
@@ -227,6 +339,11 @@ function routeTelemetryMessage(ws, session, message) {
 function removeTelemetrySession(session) {
   if (session.sourceId === KINGZ_LISTEN_SOURCE_ID) {
     telemetryState.kingzListen.delete(session.id);
+    return;
+  }
+
+  if (session.sourceId === KINGZ_LISTEN_WEB_SOURCE_ID) {
+    telemetryState.kingzListenReceivers.delete(session.id);
     return;
   }
 

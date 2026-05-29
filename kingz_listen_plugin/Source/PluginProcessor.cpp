@@ -8,13 +8,22 @@ KingzListenAudioProcessor::KingzListenAudioProcessor()
             .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       networkTransmitter (fifoWorker)
 {
+    wsManager.setSignalingHandler ([this] (const juce::var& message)
+    {
+        networkTransmitter.handleExternalSignalingMessage (message);
+    });
+
+    networkTransmitter.setExternalSignalingSender ([this] (const juce::String& json)
+    {
+        wsManager.sendJson (json);
+    });
 }
 
 void KingzListenAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     juce::ignoreUnused (sampleRate, samplesPerBlock);
     fifoWorker.reset();
-    networkTransmitter.start (8082);
+    networkTransmitter.start (0);
 }
 
 void KingzListenAudioProcessor::releaseResources()

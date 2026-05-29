@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <variant>
@@ -39,6 +40,23 @@ public:
     {
         const juce::ScopedLock lock { listenerLock };
         listeners.removeFirstMatchingValue (listener);
+    }
+
+    void setSignalingHandler (std::function<void (const juce::var&)> handler)
+    {
+        const juce::ScopedLock lock { signalingLock };
+        signalingHandler = std::move (handler);
+    }
+
+    void sendJson (const juce::String& json)
+    {
+        if (socket == nullptr || ! socket->isOpen())
+        {
+            DBG ("WebSocketManager::sendJson ignored: socket not open");
+            return;
+        }
+
+        socket->send (json.toStdString());
     }
 
     void startConnection (const std::string& url)
@@ -165,6 +183,19 @@ public:
             DBG ("WebSocketManager::handleIncomingMessage confirmation received from server: "
                  << confirmation);
         }
+        else if (type == "webrtc-offer" || type == "webrtc-candidate")
+        {
+            std::function<void (const juce::var&)> handler;
+            {
+                const juce::ScopedLock lock { signalingLock };
+                handler = signalingHandler;
+            }
+
+            if (handler != nullptr)
+                handler (parsed);
+            else
+                DBG ("WebSocketManager::handleIncomingMessage no signaling handler for " << type);
+        }
     }
 
 private:
@@ -209,5 +240,7 @@ private:
     std::shared_ptr<rtc::WebSocket> socket;
     juce::CriticalSection listenerLock;
     juce::Array<Listener*> listeners;
+    juce::CriticalSection signalingLock;
+    std::function<void (const juce::var&)> signalingHandler;
     std::atomic<bool> shouldRun { false };
 };

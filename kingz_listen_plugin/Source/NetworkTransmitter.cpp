@@ -236,6 +236,7 @@ struct NetworkTransmitter::ClientConnection final
 
     NativeSocket socket = invalidSocket;
     bool websocket = false;
+    bool externalSignaling = false;
     std::atomic<bool> closeRequested { false };
     juce::String textBuffer;
     std::vector<std::uint8_t> binaryBuffer;
@@ -243,6 +244,7 @@ struct NetworkTransmitter::ClientConnection final
     juce::int64 lastPingSentMs = 0;
     juce::int64 graceStartedMs = 0;
     int offerGeneration = 0;
+    juce::String signalId;
     std::mutex sendMutex;
     std::shared_ptr<rtc::PeerConnection> peerConnection;
     std::shared_ptr<rtc::DataChannel> pcmChannel;
@@ -311,6 +313,48 @@ int NetworkTransmitter::getPort() const noexcept
 int NetworkTransmitter::getConnectedClientCount() const noexcept
 {
     return connectedClients.load (std::memory_order_acquire);
+}
+
+void NetworkTransmitter::setExternalSignalingSender (std::function<void (const juce::String&)> sender)
+{
+    const juce::ScopedLock lock { externalSignalingLock };
+    externalSignalingSender = std::move (sender);
+}
+
+void NetworkTransmitter::handleExternalSignalingMessage (const juce::var& message)
+{
+    const auto* object = message.getDynamicObject();
+    if (object == nullptr)
+        return;
+
+    const auto type = object->getProperty ("type").toString();
+
+    std::shared_ptr<ClientConnection> client;
+    {
+        const juce::ScopedLock lock { clientLock };
+
+        if (externalSignalingClient == nullptr
+            || externalSignalingClient->closeRequested.load (std::memory_order_acquire))
+        {
+            externalSignalingClient = std::make_shared<ClientConnection> (invalidSocket);
+            externalSignalingClient->websocket = true;
+            externalSignalingClient->externalSignaling = true;
+            clients.push_back (externalSignalingClient);
+        }
+
+        client = externalSignalingClient;
+        client->lastSeenMs = juce::Time::currentTimeMillis();
+        client->graceStartedMs = 0;
+    }
+
+    if (type == "webrtc-offer")
+    {
+        handleWebRtcOffer (client, *object);
+        return;
+    }
+
+    if (type == "webrtc-candidate")
+        handleRemoteIceCandidate (client, *object);
 }
 
 juce::String NetworkTransmitter::getLocalLanIpAddress() const
@@ -407,9 +451,11 @@ void NetworkTransmitter::run()
         return;
    #endif
 
-    listener = createListenerSocket (port);
-    if (listener == invalidSocket)
-        return;
+    listener = port > 0 ? createListenerSocket (port) : invalidSocket;
+    if (port > 0 && listener == invalidSocket)
+        DBG ("NetworkTransmitter::run continuing without local signaling listener");
+    else if (port <= 0)
+        DBG ("NetworkTransmitter::run using external WebSocket signaling only");
 
     while (! threadShouldExit() && shouldListen.load (std::memory_order_acquire))
     {
@@ -473,6 +519,7 @@ void NetworkTransmitter::acceptPendingClient()
             return;
 
         setNonBlocking (socketHandle);
+        const juce::ScopedLock lock { clientLock };
         clients.push_back (std::make_shared<ClientConnection> (socketHandle));
         connectedClients.store (static_cast<int> (clients.size()), std::memory_order_release);
         activeClientCount.store (static_cast<int> (clients.size()), std::memory_order_release);
@@ -483,18 +530,23 @@ void NetworkTransmitter::acceptPendingClient()
 void NetworkTransmitter::pumpClients()
 {
     const auto now = juce::Time::currentTimeMillis();
+    const juce::ScopedLock lock { clientLock };
 
     for (auto& client : clients)
     {
-        readFromClient (*client);
+        if (! client->externalSignaling)
+            readFromClient (*client);
 
-        if (client->websocket && now - client->lastPingSentMs >= heartbeatMs)
+        if (client->websocket && ! client->externalSignaling && now - client->lastPingSentMs >= heartbeatMs)
         {
             sendWebSocketFrame (*client, {}, 0x9);
             client->lastPingSentMs = now;
         }
 
-        if (client->websocket && now - client->lastSeenMs > heartbeatMs && client->graceStartedMs == 0)
+        if (client->websocket
+            && ! client->externalSignaling
+            && now - client->lastSeenMs > heartbeatMs
+            && client->graceStartedMs == 0)
             client->graceStartedMs = now;
 
         if (client->graceStartedMs > 0 && now - client->graceStartedMs > graceHoldMs)
@@ -510,6 +562,8 @@ void NetworkTransmitter::pumpClients()
 
                                        closePeerConnection (*client);
                                        closeSocket (client->socket);
+                                       if (client == externalSignalingClient)
+                                           externalSignalingClient.reset();
                                        return true;
                                    }),
                    clients.end());
@@ -764,6 +818,7 @@ void NetworkTransmitter::handleTextFrame (ClientConnection& client, const juce::
 
 std::shared_ptr<NetworkTransmitter::ClientConnection> NetworkTransmitter::findClient (ClientConnection& client)
 {
+    const juce::ScopedLock lock { clientLock };
     const auto iter = std::find_if (clients.begin(),
                                     clients.end(),
                                     [&client] (const std::shared_ptr<ClientConnection>& candidate)
@@ -778,6 +833,7 @@ void NetworkTransmitter::handleWebRtcOffer (const std::shared_ptr<ClientConnecti
                                             const juce::DynamicObject& object)
 {
     const auto offerGeneration = static_cast<int> (object.getProperty ("offerGeneration"));
+    client->signalId = object.getProperty ("signal_id").toString();
     auto sdp = object.getProperty ("sdp").toString();
 
     if (sdp.isEmpty())
@@ -812,6 +868,10 @@ void NetworkTransmitter::handleRemoteIceCandidate (const std::shared_ptr<ClientC
         if (generation != client->offerGeneration)
             return;
     }
+
+    const auto signalId = object.getProperty ("signal_id").toString();
+    if (signalId.isNotEmpty())
+        client->signalId = signalId;
 
     auto candidateValue = object.getProperty ("candidate");
     juce::String candidate;
@@ -870,10 +930,12 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
         if (auto lockedClient = weakClient.lock())
         {
             auto* response = new juce::DynamicObject();
-            response->setProperty ("type", "webrtc.answer");
+            response->setProperty ("type", lockedClient->externalSignaling ? "webrtc-answer" : "webrtc.answer");
             response->setProperty ("sdp", juce::String (std::string (description)));
             response->setProperty ("descriptionType", juce::String (description.typeString()));
             response->setProperty ("offerGeneration", offerGeneration);
+            if (lockedClient->signalId.isNotEmpty())
+                response->setProperty ("signal_id", lockedClient->signalId);
             sendJson (lockedClient, jsonString (juce::var (response)));
         }
     });
@@ -887,9 +949,11 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
             candidateObject->setProperty ("sdpMid", juce::String (candidate.mid()));
 
             auto* response = new juce::DynamicObject();
-            response->setProperty ("type", "webrtc.ice-candidate");
+            response->setProperty ("type", lockedClient->externalSignaling ? "webrtc-candidate" : "webrtc.ice-candidate");
             response->setProperty ("candidate", juce::var (candidateObject));
             response->setProperty ("offerGeneration", offerGeneration);
+            if (lockedClient->signalId.isNotEmpty())
+                response->setProperty ("signal_id", lockedClient->signalId);
             sendJson (lockedClient, jsonString (juce::var (response)));
         }
     });
@@ -1038,6 +1102,8 @@ void NetworkTransmitter::streamReadyPcmChunks()
 
 void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChunk& chunk)
 {
+    const juce::ScopedLock lock { clientLock };
+
     auto openPcmClientCount = 0;
     auto worstBufferedBytes = std::size_t { 0 };
 
@@ -1094,6 +1160,21 @@ bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
 void NetworkTransmitter::sendJson (ClientConnection& client, const juce::String& json)
 {
     const auto payload = toExactUtf8Bytes (withKingzListenSourceId (json));
+
+    if (client.externalSignaling)
+    {
+        std::function<void (const juce::String&)> sender;
+        {
+            const juce::ScopedLock lock { externalSignalingLock };
+            sender = externalSignalingSender;
+        }
+
+        if (sender != nullptr)
+            sender (juce::String::fromUTF8 (reinterpret_cast<const char*> (payload.data()),
+                                            static_cast<int> (payload.size())));
+        return;
+    }
+
     sendWebSocketFrame (client, payload, 0x1);
 }
 
@@ -1202,6 +1283,8 @@ juce::String NetworkTransmitter::jsonString (const juce::var& value)
 
 void NetworkTransmitter::closeAllClients()
 {
+    const juce::ScopedLock lock { clientLock };
+
     for (auto& client : clients)
     {
         closePeerConnection (*client);
@@ -1209,6 +1292,7 @@ void NetworkTransmitter::closeAllClients()
     }
 
     clients.clear();
+    externalSignalingClient.reset();
     connectedClients.store (0, std::memory_order_release);
     activeClientCount.store (0, std::memory_order_release);
     isConnected.store (false, std::memory_order_release);
