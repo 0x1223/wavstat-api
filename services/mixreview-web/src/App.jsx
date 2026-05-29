@@ -205,6 +205,9 @@ export default function App({ onFirstRender } = {}) {
   const [mobileCommentDrawerId, setMobileCommentDrawerId] = useState(null);
   const [mobileCommentDraft, setMobileCommentDraft] = useState("");
   const [deleteConfirmPending, setDeleteConfirmPending] = useState(false);
+  // Review-side panel toggle — admin only. Starts open; collapsing gives the
+  // full workspace width to the track list and waveform.
+  const [isSidePanelOpen, setIsSidePanelOpen] = useState(true);
   const [repeatMode, setRepeatMode] = useState("off");
   // True once the user has tapped the "Tap to Listen" overlay on mobile.
   // Passed to WaveformReview so the overlay is hidden after first play.
@@ -753,7 +756,7 @@ export default function App({ onFirstRender } = {}) {
   // to preserve selection order; each becomes its own track. Per-file errors are
   // collected and reported at the end rather than aborting the whole batch, so a
   // bad file doesn't prevent valid files in the same selection from uploading.
-  const handleTrackUpload = useCallback(async (fileOrFiles) => {
+  const handleTrackUpload = useCallback(async (fileOrFiles, targetAlbumId = null) => {
     if (!permissions.canEdit) return;
 
     // Normalise to array regardless of how the caller passes the files.
@@ -821,9 +824,15 @@ export default function App({ onFirstRender } = {}) {
 
         // Add to state immediately so the track list updates as each file lands.
         setTracks((currentTracks) => [...currentTracks, nextTrack]);
-        setAlbums((prevAlbums) => prevAlbums.map((album, idx) =>
-          idx === 0 ? { ...album, trackIds: [...album.trackIds, nextTrack.id] } : album
-        ));
+        setAlbums((prevAlbums) => {
+          const albumIdx = targetAlbumId
+            ? prevAlbums.findIndex((a) => a.id === targetAlbumId)
+            : 0;
+          const destIdx = albumIdx >= 0 ? albumIdx : 0;
+          return prevAlbums.map((album, i) =>
+            i === destIdx ? { ...album, trackIds: [...album.trackIds, nextTrack.id] } : album
+          );
+        });
       } catch (error) {
         lastError = error;
         // Continue to the next file — don't abort the whole batch.
@@ -854,10 +863,12 @@ export default function App({ onFirstRender } = {}) {
     // Eagerly persist all new tracks at once. sessionSnapshot is captured at
     // call-entry (before any setTracks calls in this loop), so we append all
     // newTracks explicitly rather than relying on the debounced auto-save.
-    // albums is also captured at call-entry; add new track IDs to the first album.
+    // albums is also captured at call-entry; add new track IDs to the target album.
     const newTrackIds = newTracks.map((t) => t.id);
+    const albumIdx = targetAlbumId ? albums.findIndex((a) => a.id === targetAlbumId) : 0;
+    const destAlbumIdx = albumIdx >= 0 ? albumIdx : 0;
     const updatedAlbums = albums.map((album, idx) =>
-      idx === 0 ? { ...album, trackIds: [...album.trackIds, ...newTrackIds] } : album
+      idx === destAlbumIdx ? { ...album, trackIds: [...album.trackIds, ...newTrackIds] } : album
     );
     const savedSnapshot = {
       ...sessionSnapshot,
@@ -2036,12 +2047,23 @@ export default function App({ onFirstRender } = {}) {
               <button type="button" onClick={handleForceSave} disabled={isSessionSaving || !isDirty}>
                 Save Changes
               </button>
+              <button
+                type="button"
+                className="panel-toggle-btn"
+                onClick={() => setIsSidePanelOpen((v) => !v)}
+                title={isSidePanelOpen ? "Hide review panel" : "Show review panel"}
+              >
+                {isSidePanelOpen ? "◀ Hide Panel" : "▶ Show Panel"}
+              </button>
             </div>
           </div>
         )}
       </div>
 
-      <section className="review-layout" aria-label="Mix review workspace">
+      <section
+        className={`review-layout${isEngineerMode && !isSidePanelOpen ? " side-collapsed" : ""}`}
+        aria-label="Mix review workspace"
+      >
         <div className="review-main">
           {isReviewerMode && tracks.length > 1 && (
             <MobileTrackNav

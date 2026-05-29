@@ -772,6 +772,28 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(310px, 380px);
   gap: 18px;
+  /* Smooth column-width transition when the side panel collapses */
+  transition: grid-template-columns 220ms ease;
+}
+
+/* Side panel hidden — reclaim the full width for the main workspace */
+.review-layout.side-collapsed {
+  grid-template-columns: 1fr;
+}
+
+.review-layout.side-collapsed .review-side {
+  display: none;
+}
+
+/* Toggle button — lives in the session-actions bar so it's always reachable */
+.panel-toggle-btn {
+  font-size: 0.78rem;
+  opacity: 0.75;
+  transition: opacity 140ms ease;
+}
+
+.panel-toggle-btn:hover {
+  opacity: 1;
 }
 
 .review-side {
@@ -895,6 +917,22 @@ h2 {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* Scroll independently when there are many albums so the track panel never
+     pushes the waveform or review dashboard off-screen. */
+  overflow-y: auto;
+  max-height: 280px;
+  /* Subtle inset scrollbar so it doesn't widen the panel */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(215, 173, 98, 0.25) transparent;
+}
+
+.track-list-albums::-webkit-scrollbar {
+  width: 4px;
+}
+
+.track-list-albums::-webkit-scrollbar-thumb {
+  background: rgba(215, 173, 98, 0.22);
+  border-radius: 4px;
 }
 
 .track-list-album {

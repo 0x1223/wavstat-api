@@ -159,7 +159,9 @@ export function TrackList({
                           multiple
                           onChange={(event) => {
                             const files = Array.from(event.target.files || []);
-                            if (files.length > 0) onTrackUpload(files);
+                            // Pass album.id so handleTrackUpload assigns the new
+                            // track to THIS album, not always to albums[0].
+                            if (files.length > 0) onTrackUpload(files, album.id);
                             event.target.value = "";
                           }}
                         />
