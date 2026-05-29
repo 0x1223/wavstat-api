@@ -72,23 +72,80 @@ export async function deleteSessionFromApi(sessionId) {
   }
 }
 
+// uploadSessionAudio — direct-to-R2 upload in three steps:
+//
+//   1. Request a presigned PUT URL from the API (admin-gated).
+//      The server builds the R2 object key and embeds it in the URL signature.
+//
+//   2. PUT the file straight to R2 from the browser — the Node.js server never
+//      sees the audio bytes, eliminating the double-pass memory bottleneck.
+//
+//   3. Confirm with the API so it can attach the audio metadata to the session
+//      document and return a playback URL.  The response shape is identical to
+//      the old multipart handler so App.jsx needs no changes.
+//
+// The function signature is unchanged: callers in App.jsx are unaffected.
 export async function uploadSessionAudio(sessionId, versionId, file, trackId = null) {
-  const formData = new FormData();
-  formData.append("audio", file);
-  formData.append("versionId", versionId);
-  if (trackId) {
-    formData.append("trackId", trackId);
-  }
+  const adminKey = import.meta.env.VITE_ADMIN_API_KEY;
+  const authHeader = adminKey ? { "Authorization": `Bearer ${adminKey}` } : {};
 
-  const response = await fetch(apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/audio`), {
+  // ── Step 1: obtain a presigned PUT URL ──────────────────────────────────────
+  const presignResponse = await fetch(apiUrl("/api/get-presigned-url"), {
     method: "POST",
-    body: formData
+    headers: { "Content-Type": "application/json", ...authHeader },
+    body: JSON.stringify({
+      fileName:  file.name,
+      fileType:  file.type || "audio/mpeg",
+      sessionId,
+      trackId:   trackId || "track-1",
+      versionId
+    })
   });
 
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(payload.error || "Audio upload failed.");
+  const presignPayload = await presignResponse.json().catch(() => ({}));
+  if (!presignResponse.ok) {
+    throw new Error(presignPayload.error || "Could not obtain an upload URL.");
   }
 
-  return payload;
+  const { url: presignedUrl, key } = presignPayload;
+  if (!presignedUrl || !key) {
+    throw new Error("Server returned an invalid upload URL.");
+  }
+
+  // ── Step 2: PUT directly to R2 — bypasses the Node.js server entirely ───────
+  // Content-Type MUST match the value used when requesting the URL; it is baked
+  // into the presigned signature and R2 validates it on every PUT request.
+  const r2Response = await fetch(presignedUrl, {
+    method:  "PUT",
+    headers: { "Content-Type": file.type || "audio/mpeg" },
+    body:    file
+  });
+
+  if (!r2Response.ok) {
+    throw new Error(`Direct upload to storage failed (HTTP ${r2Response.status}).`);
+  }
+
+  // ── Step 3: confirm with the API so it attaches the key to the session ───────
+  const confirmResponse = await fetch(
+    apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/confirm-audio`),
+    {
+      method:  "POST",
+      headers: { "Content-Type": "application/json", ...authHeader },
+      body: JSON.stringify({
+        key,
+        fileName: file.name,
+        fileType: file.type || "audio/mpeg",
+        size:     file.size,
+        trackId:  trackId || "track-1",
+        versionId
+      })
+    }
+  );
+
+  const confirmPayload = await confirmResponse.json().catch(() => ({}));
+  if (!confirmResponse.ok) {
+    throw new Error(confirmPayload.error || "Audio upload could not be confirmed.");
+  }
+
+  return confirmPayload;
 }

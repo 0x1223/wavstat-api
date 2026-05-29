@@ -106,6 +106,7 @@ sessionRouter.get("/:sessionId", getSession);
 sessionRouter.put("/:sessionId", requireAdminAuth, saveSession);
 sessionRouter.delete("/:sessionId", deleteSession);
 sessionRouter.post("/:sessionId/audio", upload.single("audio"), handleAudioUpload);
+sessionRouter.post("/:sessionId/confirm-audio", requireAdminAuth, confirmAudioUpload);
 
 app.use("/api/sessions", sessionRouter);
 app.post("/api/audio/upload", upload.single("audio"), handleAudioUpload);
@@ -249,7 +250,7 @@ async function getPresignedUploadUrl(req, res, next) {
       return res.status(503).json({ error: "Cloud storage is not configured on this server." });
     }
 
-    const { fileName, fileType } = req.body || {};
+    const { fileName, fileType, sessionId: rawSessionId, trackId, versionId } = req.body || {};
 
     if (!fileName || typeof fileName !== "string" || !fileName.trim()) {
       return res.status(400).json({ error: "fileName is required." });
@@ -258,14 +259,21 @@ async function getPresignedUploadUrl(req, res, next) {
       return res.status(400).json({ error: "fileType is required." });
     }
 
-    // Build a sanitised object key that cannot escape the uploads/ prefix.
-    const extension   = path.extname(fileName).toLowerCase();
-    const safeBase    = path
-      .basename(fileName, path.extname(fileName))
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") || "upload";
-    const objectKey   = `uploads/${new Date().toISOString().slice(0, 10)}/${randomUUID()}-${safeBase}${extension}`;
+    // Only the two formats the rest of the pipeline supports.
+    const extension = path.extname(fileName).toLowerCase();
+    if (![".mp3", ".wav"].includes(extension)) {
+      return res.status(400).json({ error: "Only .mp3 and .wav files are supported." });
+    }
+
+    // When session context is supplied use the same session-scoped key structure
+    // as server-side uploads so all audio objects live under sessions/<id>/…
+    // Without context fall back to the date-prefixed uploads/ path.
+    const resolvedSessionId = sanitizeSessionId(rawSessionId);
+    const objectKey = buildAudioObjectKey(fileName.trim(), extension, resolvedSessionId ? {
+      sessionId: resolvedSessionId,
+      trackId:   trackId   || "track-1",
+      versionId: versionId || "version-v1"
+    } : {});
 
     // ContentType is embedded in the presigned URL signature — the browser MUST
     // send the exact same value as the Content-Type request header when it PUTs
@@ -289,6 +297,91 @@ async function getPresignedUploadUrl(req, res, next) {
     // Return the key alongside the URL so the client can pass it back to the
     // session save route once the direct upload completes.
     return res.json({ url, key: objectKey });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// confirmAudioUpload — step 3 of the direct-to-R2 upload flow.
+//
+// After the browser has PUT the file straight to R2 using the presigned URL,
+// it calls this endpoint with the object key and file metadata.  The handler
+// builds the playback URL from the key, creates the audioPayload, and calls
+// attachAudioToSession — exactly what handleAudioUpload does after its R2
+// upload, but without touching the file bytes.
+//
+// The response shape matches handleAudioUpload so the existing App.jsx upload
+// handlers need no changes.
+async function confirmAudioUpload(req, res, next) {
+  try {
+    if (!hasR2Config) {
+      return res.status(503).json({ error: "Cloud storage is not configured on this server." });
+    }
+
+    const sessionId = sanitizeSessionId(req.params.sessionId);
+    if (!sessionId) {
+      return res.status(400).json({ error: "Valid session ID is required." });
+    }
+
+    const { key, fileName, fileType, size, trackId, versionId } = req.body || {};
+
+    if (!key || typeof key !== "string" || !key.trim()) {
+      return res.status(400).json({ error: "key is required." });
+    }
+    if (!fileName || typeof fileName !== "string" || !fileName.trim()) {
+      return res.status(400).json({ error: "fileName is required." });
+    }
+    if (!fileType || typeof fileType !== "string" || !fileType.trim()) {
+      return res.status(400).json({ error: "fileType is required." });
+    }
+
+    // Guard: only accept keys that belong to this session or the generic
+    // uploads/ prefix.  Rejects attempts to register a foreign session's
+    // object as belonging to this one.
+    const safeKey = key.trim();
+    const sessionPrefix = `sessions/${sessionId}/`;
+    if (!safeKey.startsWith(sessionPrefix) && !safeKey.startsWith("uploads/")) {
+      console.warn("[MixReview] confirmAudioUpload: key does not match session", { sessionId, key: safeKey });
+      return res.status(400).json({ error: "Audio key does not belong to this session." });
+    }
+
+    const safeTrackId   = sanitizePathSegment(trackId   || "track-1");
+    const safeVersionId = sanitizePathSegment(versionId || "version-v1");
+    const playbackUrl   = buildApiPlaybackUrl(req, safeKey);
+
+    const audioPayload = {
+      key:         safeKey,
+      playbackUrl,
+      peaksUrl:    null,  // peaks not available for direct uploads
+      fileName:    fileName.trim(),
+      contentType: fileType.trim(),
+      size:        typeof size === "number" && size > 0 ? size : 0,
+      storage:     "r2",
+      uploadedAt:  new Date().toISOString()
+    };
+
+    await attachAudioToSession(sessionId, audioPayload, safeVersionId, safeTrackId);
+
+    console.log("[MixReview] Direct upload confirmed and attached to session", {
+      sessionId,
+      trackId: safeTrackId,
+      versionId: safeVersionId,
+      key: safeKey,
+    });
+
+    return res.status(201).json({
+      ok:          true,
+      storage:     "r2",
+      key:         safeKey,
+      playbackUrl,
+      peaksUrl:    null,
+      fileName:    fileName.trim(),
+      sessionId,
+      trackId:     safeTrackId,
+      versionId:   safeVersionId,
+      contentType: fileType.trim(),
+      size:        audioPayload.size
+    });
   } catch (error) {
     next(error);
   }
