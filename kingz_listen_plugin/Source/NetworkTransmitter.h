@@ -63,6 +63,8 @@ private:
     static constexpr int pcmChunkBytes = AudioFifoWorker::bytesPerChunk;
     static constexpr int pcmTelemetryBitrateBitsPerSecond = AudioFifoWorker::telemetryBitrateBitsPerSecond;
     static constexpr int lanOptimisedWebRtcMtuBytes = 1200;
+    static constexpr int pcmMaxPacketLifetimeMs = AudioFifoWorker::chunkDurationMs;
+    static constexpr std::size_t maxBufferedPcmBytesPerClient = AudioFifoWorker::bytesPerChunk * 2;
 
     void run() override;
 
@@ -85,6 +87,7 @@ private:
 
     void streamReadyPcmChunks();
     void broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chunk);
+    bool trySendPcmChunk (ClientConnection& client, const AudioFifoWorker::PcmChunk& chunk) noexcept;
     void sendJson (ClientConnection& client, const juce::String& json);
     void sendJson (const std::shared_ptr<ClientConnection>& client, const juce::String& json);
     void sendHttpResponse (ClientConnection& client,

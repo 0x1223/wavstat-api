@@ -553,7 +553,9 @@ void NetworkTransmitter::handleHttpRequest (ClientConnection& client)
         realtime->setProperty ("bytesPerChunk", pcmChunkBytes);
         realtime->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
         realtime->setProperty ("ordered", false);
-        realtime->setProperty ("maxRetransmits", 0);
+        realtime->setProperty ("maxRetransmits", juce::var());
+        realtime->setProperty ("maxPacketLifeTimeMs", pcmMaxPacketLifetimeMs);
+        realtime->setProperty ("dropWhenBufferedBytesExceed", static_cast<int> (maxBufferedPcmBytesPerClient));
         realtime->setProperty ("udpOnly", true);
         realtime->setProperty ("jitterBuffer", "bypassed-data-channel");
         realtime->setProperty ("signalProcessing", "disabled-raw-pcm");
@@ -858,10 +860,11 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
 
     rtc::DataChannelInit pcmChannelConfig;
     pcmChannelConfig.reliability.unordered = true;
-    pcmChannelConfig.reliability.maxRetransmits = 0u;
+    pcmChannelConfig.reliability.maxPacketLifeTime = std::chrono::milliseconds { pcmMaxPacketLifetimeMs };
     pcmChannelConfig.protocol = "audio/L16;rate=48000;channels=2;ptime=5;processing=off";
 
     auto dataChannel = peer->createDataChannel ("kingz-pcm", pcmChannelConfig);
+    dataChannel->setBufferedAmountLowThreshold (pcmChunkBytes);
     dataChannel->onOpen ([this, weakClient]
     {
         if (auto lockedClient = weakClient.lock())
@@ -877,7 +880,9 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
             response->setProperty ("bytesPerChunk", pcmChunkBytes);
             response->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
             response->setProperty ("ordered", false);
-            response->setProperty ("maxRetransmits", 0);
+            response->setProperty ("maxRetransmits", juce::var());
+            response->setProperty ("maxPacketLifeTimeMs", pcmMaxPacketLifetimeMs);
+            response->setProperty ("dropWhenBufferedBytesExceed", static_cast<int> (maxBufferedPcmBytesPerClient));
             response->setProperty ("udpOnly", true);
             response->setProperty ("jitterBuffer", "bypassed-data-channel");
             response->setProperty ("signalProcessing", "disabled-raw-pcm");
@@ -939,6 +944,7 @@ void NetworkTransmitter::closePeerConnection (ClientConnection& client)
 void NetworkTransmitter::streamReadyPcmChunks()
 {
     AudioFifoWorker::PcmChunk chunk {};
+
     while (fifo.readPcmChunk (chunk))
         broadcastPcmChunk (chunk);
 }
@@ -947,19 +953,31 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chu
 {
     for (auto& client : clients)
     {
-        if (! client->websocket || client->closeRequested.load (std::memory_order_acquire))
-            continue;
+        if (client != nullptr)
+            trySendPcmChunk (*client, chunk);
+    }
+}
 
-        if (client->pcmChannel != nullptr && client->pcmChannel->isOpen())
-        {
-            try
-            {
-                client->pcmChannel->send (reinterpret_cast<const rtc::byte*> (chunk.data()), chunk.size());
-            }
-            catch (const std::exception&)
-            {
-            }
-        }
+bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
+                                          const AudioFifoWorker::PcmChunk& chunk) noexcept
+{
+    if (! client.websocket || client.closeRequested.load (std::memory_order_acquire))
+        return false;
+
+    auto channel = client.pcmChannel;
+    if (channel == nullptr || ! channel->isOpen())
+        return false;
+
+    if (channel->bufferedAmount() > maxBufferedPcmBytesPerClient)
+        return false;
+
+    try
+    {
+        return channel->send (reinterpret_cast<const rtc::byte*> (chunk.data()), chunk.size());
+    }
+    catch (const std::exception&)
+    {
+        return false;
     }
 }
 
