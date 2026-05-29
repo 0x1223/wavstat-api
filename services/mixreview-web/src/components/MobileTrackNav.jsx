@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const BAR_HEIGHTS = [4, 7, 11, 16, 19, 13, 17, 10, 8, 14, 18, 12, 6, 15, 5, 9, 20, 3, 16, 11, 7, 14, 18, 4, 10, 16, 6, 13, 19, 8, 11, 15, 5, 17, 9, 12, 7, 20, 4, 14];
 
@@ -20,14 +20,14 @@ function StemLane({ seed, label }) {
   );
 }
 
-function TrackButton({ track, index, isActive, onTrackSelect }) {
+function TrackButton({ track, index, isActive, onTrackSelect, activeRef }) {
   const title = abbrev(track.title || "Untitled Track");
   const activeVersion =
     track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
   const commentCount = activeVersion?.comments?.length ?? 0;
   return (
     <button
-      key={track.id}
+      ref={isActive ? activeRef : null}
       type="button"
       className={`mobile-track-nav-item${isActive ? " active" : ""}`}
       onClick={() => onTrackSelect(track.id)}
@@ -43,14 +43,42 @@ function TrackButton({ track, index, isActive, onTrackSelect }) {
 
 export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect }) {
   const [collapsed, setCollapsed] = useState({});
+  // Ref to the currently active track button — used for scrollIntoView.
+  const activeRef = useRef(null);
+  // Ref to the scrollable album container — needed to host sticky headers.
+  const scrollerRef = useRef(null);
+
+  const effectiveAlbums = Array.isArray(albums) && albums.length > 0 ? albums : null;
+  const trackMap = Object.fromEntries(tracks.map((t) => [t.id, t]));
+  const multiAlbum = effectiveAlbums && effectiveAlbums.length > 1;
 
   const toggleCollapse = (albumId) => {
     setCollapsed((prev) => ({ ...prev, [albumId]: !prev[albumId] }));
   };
 
-  const effectiveAlbums = Array.isArray(albums) && albums.length > 0 ? albums : null;
-  const trackMap = Object.fromEntries(tracks.map((t) => [t.id, t]));
-  const multiAlbum = effectiveAlbums && effectiveAlbums.length > 1;
+  // Auto-expand whichever album contains the active track.
+  // If the active track's album is currently collapsed, open it.
+  useEffect(() => {
+    if (!multiAlbum || !effectiveAlbums || !activeTrackId) return;
+    const ownerAlbum = effectiveAlbums.find((a) =>
+      (a.trackIds || []).includes(activeTrackId)
+    );
+    if (ownerAlbum && collapsed[ownerAlbum.id]) {
+      setCollapsed((prev) => ({ ...prev, [ownerAlbum.id]: false }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTrackId]);
+
+  // Scroll the active track button into view whenever it changes.
+  // Uses a short rAF delay so the DOM has time to expand a newly-opened album.
+  useEffect(() => {
+    if (!activeRef.current) return;
+    const el = activeRef.current;
+    const raf = requestAnimationFrame(() => {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activeTrackId]);
 
   // Flat display: single album or no album data — matches the original reviewer UX.
   if (!multiAlbum) {
@@ -65,6 +93,7 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
               index={index}
               isActive={track.id === activeTrackId}
               onTrackSelect={onTrackSelect}
+              activeRef={activeRef}
             />
           ))}
         </div>
@@ -73,12 +102,17 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
   }
 
   // Multi-album display: grouped with collapsible album headers.
-  // Each album shows a collapsible row of track cards; the header is always visible.
+  // The outer nav IS the single scroll container; each album header sticks
+  // to the top of that scroller as the user scrolls through a long track list.
   // A running global index is maintained so StemLane seeds remain unique.
   let globalIndex = 0;
 
   return (
-    <nav className="mobile-track-nav mobile-track-nav--albums" aria-label="Track selector">
+    <nav
+      ref={scrollerRef}
+      className="mobile-track-nav mobile-track-nav--albums"
+      aria-label="Track selector"
+    >
       {effectiveAlbums.map((album) => {
         const albumTracks = (album.trackIds || [])
           .map((id) => trackMap[id])
@@ -114,6 +148,7 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
                       index={idx}
                       isActive={track.id === activeTrackId}
                       onTrackSelect={onTrackSelect}
+                      activeRef={activeRef}
                     />
                   );
                 })}
