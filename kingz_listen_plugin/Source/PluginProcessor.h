@@ -42,6 +42,7 @@ public:
     void startTelemetryConnection (const juce::String& host, int port);
     WebSocketManager& getWebSocketManager() noexcept;
     const NetworkTransmitter& getNetworkTransmitter() const noexcept;
+    int getTargetChunkMs() const noexcept;
     juce::String getTelemetryReport() const;
     juce::String getLocalLanIpAddress() const;
     int getNetworkPort() const noexcept;
@@ -53,6 +54,7 @@ private:
     juce::CriticalSection uiStateLock;
     juce::String lastUiAction;
     std::atomic<bool> monitoringRequested { false };
+    std::atomic<int> currentAudioThreadTargetChunkMs { AudioFifoWorker::chunkDurationMs };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KingzListenAudioProcessor)
 };

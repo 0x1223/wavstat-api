@@ -38,6 +38,8 @@ void KingzListenAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                               juce::MidiBuffer& midiMessages)
 {
     juce::ignoreUnused (midiMessages);
+    currentAudioThreadTargetChunkMs.store (networkTransmitter.targetChunkMs.load (std::memory_order_acquire),
+                                           std::memory_order_relaxed);
 
     for (auto channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
         buffer.clear (channel, 0, buffer.getNumSamples());
@@ -167,15 +169,22 @@ const NetworkTransmitter& KingzListenAudioProcessor::getNetworkTransmitter() con
     return networkTransmitter;
 }
 
+int KingzListenAudioProcessor::getTargetChunkMs() const noexcept
+{
+    return networkTransmitter.targetChunkMs.load (std::memory_order_acquire);
+}
+
 juce::String KingzListenAudioProcessor::getTelemetryReport() const
 {
     const auto activeClients = networkTransmitter.activeClientCount.load (std::memory_order_acquire);
     const auto health = networkTransmitter.bufferHealth.load (std::memory_order_acquire);
     const auto connected = networkTransmitter.isConnected.load (std::memory_order_acquire);
+    const auto currentTargetChunkMs = getTargetChunkMs();
+    const auto isTransitioning = networkTransmitter.chunkSizeTransitionPending.load (std::memory_order_acquire);
 
     const auto bufferedRatio = juce::jlimit (0.0f, 1.0f, 1.0f - health);
-    const auto estimatedLatencyMs = static_cast<float> (AudioFifoWorker::chunkDurationMs)
-        + bufferedRatio * static_cast<float> (AudioFifoWorker::chunkDurationMs * 2);
+    const auto estimatedLatencyMs = static_cast<float> (currentTargetChunkMs)
+        + bufferedRatio * static_cast<float> (currentTargetChunkMs * 2);
 
     auto* report = new juce::DynamicObject();
     report->setProperty ("type", "telemetry.report");
@@ -184,10 +193,14 @@ juce::String KingzListenAudioProcessor::getTelemetryReport() const
     report->setProperty ("bufferHealth", health);
     report->setProperty ("latencyMs", estimatedLatencyMs);
     report->setProperty ("latencySource", "estimated-buffered-datachannel");
+    report->setProperty ("targetChunkMs", currentTargetChunkMs);
+    report->setProperty ("audioThreadTargetChunkMs",
+                         currentAudioThreadTargetChunkMs.load (std::memory_order_relaxed));
+    report->setProperty ("chunkSizeTransitionPending", isTransitioning);
     report->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
     report->setProperty ("channels", AudioFifoWorker::inputChannels);
-    report->setProperty ("chunkMs", AudioFifoWorker::chunkDurationMs);
-    report->setProperty ("chunkBytes", AudioFifoWorker::bytesPerChunk);
+    report->setProperty ("chunkMs", currentTargetChunkMs);
+    report->setProperty ("chunkBytes", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentTargetChunkMs)));
 
     return juce::JSON::toString (juce::var (report), true);
 }

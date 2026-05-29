@@ -37,6 +37,8 @@ public:
     std::atomic<bool> isConnected { false };
     std::atomic<int> activeClientCount { 0 };
     std::atomic<float> bufferHealth { 1.0f };
+    std::atomic<int> targetChunkMs { AudioFifoWorker::chunkDurationMs };
+    std::atomic<bool> chunkSizeTransitionPending { false };
 
 private:
    #if JUCE_WINDOWS
@@ -88,10 +90,11 @@ private:
                                const juce::String& sdp,
                                int offerGeneration);
     void closePeerConnection (ClientConnection& client);
+    void adaptPacketSize();
 
     void streamReadyPcmChunks();
-    void broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chunk);
-    bool trySendPcmChunk (ClientConnection& client, const AudioFifoWorker::PcmChunk& chunk) noexcept;
+    void broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChunk& chunk);
+    bool trySendPcmChunk (ClientConnection& client, const AudioFifoWorker::DynamicPcmChunk& chunk) noexcept;
     void sendJson (ClientConnection& client, const juce::String& json);
     void sendJson (const std::shared_ptr<ClientConnection>& client, const juce::String& json);
     void sendHttpResponse (ClientConnection& client,
@@ -116,5 +119,6 @@ private:
     NativeSocket listener = invalidSocket;
     std::atomic<bool> shouldListen { false };
     std::atomic<int> connectedClients { 0 };
+    juce::int64 lastPacketAdaptationMs = 0;
     int port = 8082;
 };

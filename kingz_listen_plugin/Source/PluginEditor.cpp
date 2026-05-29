@@ -407,7 +407,11 @@ void KingzListenAudioProcessorEditor::emitConnectionStateToWebView()
     state->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
     state->setProperty ("channels", AudioFifoWorker::inputChannels);
     state->setProperty ("bitDepth", 16);
-    state->setProperty ("chunkBytes", AudioFifoWorker::bytesPerChunk);
+    state->setProperty ("targetChunkMs", processorRef.getTargetChunkMs());
+    state->setProperty ("chunkBytes", static_cast<int> (AudioFifoWorker::bytesForChunkMs (processorRef.getTargetChunkMs())));
+    state->setProperty ("adaptiveChunkSizing", true);
+    state->setProperty ("minChunkMs", AudioFifoWorker::minChunkDurationMs);
+    state->setProperty ("maxChunkMs", AudioFifoWorker::maxChunkDurationMs);
     state->setProperty ("bitrate", AudioFifoWorker::telemetryBitrateBitsPerSecond);
 
     auto payload = juce::var { state.release() };

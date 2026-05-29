@@ -13,13 +13,26 @@ class AudioFifoWorker final
 public:
     static constexpr int inputChannels = 2;
     static constexpr int targetSampleRate = 48000;
-    static constexpr int chunkDurationMs = 5;
+    static constexpr int minChunkDurationMs = 5;
+    static constexpr int maxChunkDurationMs = 20;
+    static constexpr int chunkDurationStepMs = 5;
+    static constexpr int chunkDurationMs = minChunkDurationMs;
     static constexpr int framesPerChunk = targetSampleRate * chunkDurationMs / 1000;
+    static constexpr int maxFramesPerChunk = targetSampleRate * maxChunkDurationMs / 1000;
     static constexpr int samplesPerChunk = framesPerChunk * inputChannels;
+    static constexpr int maxSamplesPerChunk = maxFramesPerChunk * inputChannels;
     static constexpr int bytesPerChunk = samplesPerChunk * static_cast<int> (sizeof (std::int16_t));
+    static constexpr int maxBytesPerChunk = maxSamplesPerChunk * static_cast<int> (sizeof (std::int16_t));
     static constexpr int telemetryBitrateBitsPerSecond =
         targetSampleRate * inputChannels * static_cast<int> (sizeof (std::int16_t)) * 8;
     using PcmChunk = std::array<std::byte, bytesPerChunk>;
+
+    struct DynamicPcmChunk final
+    {
+        std::array<std::byte, maxBytesPerChunk> bytes {};
+        std::size_t byteCount = 0;
+        int chunkMs = chunkDurationMs;
+    };
 
     AudioFifoWorker() = default;
 
@@ -69,16 +82,18 @@ public:
         return getReadySampleCount() / samplesPerChunk;
     }
 
-    bool readPcmChunk (PcmChunk& destination) noexcept
+    bool readPcmChunk (DynamicPcmChunk& destination, int requestedChunkMs) noexcept
     {
+        const auto chunkMs = normaliseChunkMs (requestedChunkMs);
+        const auto requestedSamples = samplesForChunkMs (chunkMs);
         int start1 = 0;
         int size1 = 0;
         int start2 = 0;
         int size2 = 0;
 
-        fifo.prepareToRead (samplesPerChunk, start1, size1, start2, size2);
+        fifo.prepareToRead (requestedSamples, start1, size1, start2, size2);
 
-        if (size1 + size2 < samplesPerChunk)
+        if (size1 + size2 < requestedSamples)
         {
             fifo.finishedRead (0);
             return false;
@@ -86,8 +101,38 @@ public:
 
         copyPcmSamplesToBytes (destination, start1, size1, 0);
         copyPcmSamplesToBytes (destination, start2, size2, size1);
-        fifo.finishedRead (samplesPerChunk);
+        fifo.finishedRead (requestedSamples);
+        destination.byteCount = bytesForChunkMs (chunkMs);
+        destination.chunkMs = chunkMs;
         return true;
+    }
+
+    bool readPcmChunk (DynamicPcmChunk& destination,
+                       const std::atomic<int>& requestedChunkMs) noexcept
+    {
+        return readPcmChunk (destination, requestedChunkMs.load (std::memory_order_acquire));
+    }
+
+    static int normaliseChunkMs (int requestedChunkMs) noexcept
+    {
+        const auto clamped = juce::jlimit (minChunkDurationMs, maxChunkDurationMs, requestedChunkMs);
+        return ((clamped + chunkDurationStepMs - 1) / chunkDurationStepMs) * chunkDurationStepMs;
+    }
+
+    static int framesForChunkMs (int chunkMs) noexcept
+    {
+        return targetSampleRate * normaliseChunkMs (chunkMs) / 1000;
+    }
+
+    static int samplesForChunkMs (int chunkMs) noexcept
+    {
+        return framesForChunkMs (chunkMs) * inputChannels;
+    }
+
+    static std::size_t bytesForChunkMs (int chunkMs) noexcept
+    {
+        return static_cast<std::size_t> (samplesForChunkMs (chunkMs))
+            * sizeof (std::int16_t);
     }
 
     std::uint64_t getDroppedSampleCount() const noexcept
@@ -131,7 +176,7 @@ private:
         }
     }
 
-    void copyPcmSamplesToBytes (PcmChunk& destination,
+    void copyPcmSamplesToBytes (DynamicPcmChunk& destination,
                                 int ringStart,
                                 int sampleCount,
                                 int destinationSampleOffset) const noexcept
@@ -141,8 +186,8 @@ private:
             const auto sample = ringBuffer[static_cast<std::size_t> (ringStart + i)];
             const auto byteOffset = static_cast<std::size_t> ((destinationSampleOffset + i) * 2);
             const auto unsignedSample = static_cast<std::uint16_t> (sample);
-            destination[byteOffset] = static_cast<std::byte> (unsignedSample & 0xffu);
-            destination[byteOffset + 1] = static_cast<std::byte> ((unsignedSample >> 8u) & 0xffu);
+            destination.bytes[byteOffset] = static_cast<std::byte> (unsignedSample & 0xffu);
+            destination.bytes[byteOffset + 1] = static_cast<std::byte> ((unsignedSample >> 8u) & 0xffu);
         }
     }
 

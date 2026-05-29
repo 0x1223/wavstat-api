@@ -26,6 +26,8 @@ static_assert (AudioFifoWorker::inputChannels == 2,
                "Kingz Listen native transmitter must stream stereo PCM.");
 static_assert (AudioFifoWorker::bytesPerChunk == 960,
                "Kingz Listen native transmitter must stream 5 ms chunks of 16-bit stereo PCM.");
+static_assert (AudioFifoWorker::maxBytesPerChunk == 3840,
+               "Kingz Listen adaptive transmitter supports up to 20 ms PCM chunks.");
 static_assert (AudioFifoWorker::telemetryBitrateBitsPerSecond == 1536000,
                "Kingz Listen native transmitter must preserve the 1536 kbps Linear PCM baseline.");
 
@@ -262,6 +264,9 @@ bool NetworkTransmitter::start (int portToUse)
     isConnected.store (false, std::memory_order_release);
     activeClientCount.store (0, std::memory_order_release);
     bufferHealth.store (1.0f, std::memory_order_release);
+    targetChunkMs.store (AudioFifoWorker::chunkDurationMs, std::memory_order_release);
+    chunkSizeTransitionPending.store (false, std::memory_order_release);
+    lastPacketAdaptationMs = 0;
     shouldListen.store (true, std::memory_order_release);
     startThread();
     return true;
@@ -273,6 +278,9 @@ void NetworkTransmitter::stop()
     isConnected.store (false, std::memory_order_release);
     activeClientCount.store (0, std::memory_order_release);
     bufferHealth.store (1.0f, std::memory_order_release);
+    targetChunkMs.store (AudioFifoWorker::chunkDurationMs, std::memory_order_release);
+    chunkSizeTransitionPending.store (false, std::memory_order_release);
+    lastPacketAdaptationMs = 0;
     signalThreadShouldExit();
     closeSocket (listener);
     stopThread (2000);
@@ -499,6 +507,7 @@ void NetworkTransmitter::pumpClients()
                                                              }));
     activeClientCount.store (activeCount, std::memory_order_release);
     isConnected.store (activeCount > 0, std::memory_order_release);
+    adaptPacketSize();
 }
 
 void NetworkTransmitter::readFromClient (ClientConnection& client)
@@ -560,19 +569,24 @@ void NetworkTransmitter::handleHttpRequest (ClientConnection& client)
 
     if (request.startsWithIgnoreCase ("GET /metadata "))
     {
+        const auto currentChunkMs = targetChunkMs.load (std::memory_order_acquire);
         auto* realtime = new juce::DynamicObject();
         realtime->setProperty ("transport", "native-plugin-libdatachannel-pcm");
-        realtime->setProperty ("chunkMs", pcmChunkMs);
-        realtime->setProperty ("framesPerChunk", pcmFramesPerChunk);
+        realtime->setProperty ("chunkMs", currentChunkMs);
+        realtime->setProperty ("framesPerChunk", AudioFifoWorker::framesForChunkMs (currentChunkMs));
         realtime->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
         realtime->setProperty ("channels", AudioFifoWorker::inputChannels);
         realtime->setProperty ("bitDepth", 16);
-        realtime->setProperty ("bytesPerChunk", pcmChunkBytes);
+        realtime->setProperty ("bytesPerChunk", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs)));
         realtime->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
         realtime->setProperty ("ordered", false);
         realtime->setProperty ("maxRetransmits", juce::var());
         realtime->setProperty ("maxPacketLifeTimeMs", pcmMaxPacketLifetimeMs);
-        realtime->setProperty ("dropWhenBufferedBytesExceed", static_cast<int> (maxBufferedPcmBytesPerClient));
+        realtime->setProperty ("dropWhenBufferedBytesExceed",
+                               static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs) * 2));
+        realtime->setProperty ("adaptiveChunkSizing", true);
+        realtime->setProperty ("minChunkMs", AudioFifoWorker::minChunkDurationMs);
+        realtime->setProperty ("maxChunkMs", AudioFifoWorker::maxChunkDurationMs);
         realtime->setProperty ("udpOnly", true);
         realtime->setProperty ("jitterBuffer", "bypassed-data-channel");
         realtime->setProperty ("signalProcessing", "disabled-raw-pcm");
@@ -878,7 +892,7 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
     rtc::DataChannelInit pcmChannelConfig;
     pcmChannelConfig.reliability.unordered = true;
     pcmChannelConfig.reliability.maxPacketLifeTime = std::chrono::milliseconds { pcmMaxPacketLifetimeMs };
-    pcmChannelConfig.protocol = "audio/L16;rate=48000;channels=2;ptime=5;processing=off";
+    pcmChannelConfig.protocol = "audio/L16;rate=48000;channels=2;ptime=5-20;processing=off;adaptive=true";
 
     auto dataChannel = peer->createDataChannel ("kingz-pcm", pcmChannelConfig);
     dataChannel->setBufferedAmountLowThreshold (pcmChunkBytes);
@@ -886,20 +900,25 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
     {
         if (auto lockedClient = weakClient.lock())
         {
+            const auto currentChunkMs = targetChunkMs.load (std::memory_order_acquire);
             auto* response = new juce::DynamicObject();
             response->setProperty ("type", "webrtc.data-channel-open");
             response->setProperty ("label", "kingz-pcm");
             response->setProperty ("format", "pcm_s16le");
             response->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
             response->setProperty ("channels", AudioFifoWorker::inputChannels);
-            response->setProperty ("chunkMs", pcmChunkMs);
-            response->setProperty ("framesPerChunk", pcmFramesPerChunk);
-            response->setProperty ("bytesPerChunk", pcmChunkBytes);
+            response->setProperty ("chunkMs", currentChunkMs);
+            response->setProperty ("framesPerChunk", AudioFifoWorker::framesForChunkMs (currentChunkMs));
+            response->setProperty ("bytesPerChunk", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs)));
             response->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
             response->setProperty ("ordered", false);
             response->setProperty ("maxRetransmits", juce::var());
             response->setProperty ("maxPacketLifeTimeMs", pcmMaxPacketLifetimeMs);
-            response->setProperty ("dropWhenBufferedBytesExceed", static_cast<int> (maxBufferedPcmBytesPerClient));
+            response->setProperty ("dropWhenBufferedBytesExceed",
+                                  static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs) * 2));
+            response->setProperty ("adaptiveChunkSizing", true);
+            response->setProperty ("minChunkMs", AudioFifoWorker::minChunkDurationMs);
+            response->setProperty ("maxChunkMs", AudioFifoWorker::maxChunkDurationMs);
             response->setProperty ("udpOnly", true);
             response->setProperty ("jitterBuffer", "bypassed-data-channel");
             response->setProperty ("signalProcessing", "disabled-raw-pcm");
@@ -958,15 +977,49 @@ void NetworkTransmitter::closePeerConnection (ClientConnection& client)
     }
 }
 
+void NetworkTransmitter::adaptPacketSize()
+{
+    const auto nowMs = juce::Time::currentTimeMillis();
+    if (nowMs - lastPacketAdaptationMs < 500)
+        return;
+
+    lastPacketAdaptationMs = nowMs;
+
+    if (! isConnected.load (std::memory_order_acquire))
+        return;
+
+    const auto health = bufferHealth.load (std::memory_order_acquire);
+    const auto currentChunkMs = AudioFifoWorker::normaliseChunkMs (
+        targetChunkMs.load (std::memory_order_acquire));
+
+    const auto bufferedRatio = juce::jlimit (0.0f, 1.0f, 1.0f - health);
+    const auto estimatedLatencyMs = static_cast<float> (currentChunkMs)
+        + bufferedRatio * static_cast<float> (currentChunkMs * 2);
+
+    auto nextChunkMs = currentChunkMs;
+
+    if (estimatedLatencyMs > 15.0f || health < 0.7f)
+        nextChunkMs = juce::jmin (AudioFifoWorker::maxChunkDurationMs,
+                                  currentChunkMs + AudioFifoWorker::chunkDurationStepMs);
+    else if (estimatedLatencyMs < 10.0f && health > 0.9f)
+        nextChunkMs = juce::jmax (AudioFifoWorker::minChunkDurationMs,
+                                  currentChunkMs - AudioFifoWorker::chunkDurationStepMs);
+
+    if (nextChunkMs != currentChunkMs)
+    {
+        targetChunkMs.store (nextChunkMs, std::memory_order_release);
+        chunkSizeTransitionPending.store (true, std::memory_order_release);
+    }
+}
+
 void NetworkTransmitter::streamReadyPcmChunks()
 {
-    AudioFifoWorker::PcmChunk chunk {};
-
-    while (fifo.readPcmChunk (chunk))
+    AudioFifoWorker::DynamicPcmChunk chunk {};
+    while (fifo.readPcmChunk (chunk, targetChunkMs))
         broadcastPcmChunk (chunk);
 }
 
-void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chunk)
+void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChunk& chunk)
 {
     auto openPcmClientCount = 0;
     auto worstBufferedBytes = std::size_t { 0 };
@@ -991,13 +1044,15 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chu
         return;
     }
 
+    const auto maxBufferedBytes = chunk.byteCount * 2;
     const auto ratio = static_cast<float> (worstBufferedBytes)
-        / static_cast<float> (maxBufferedPcmBytesPerClient);
+        / static_cast<float> (maxBufferedBytes);
     bufferHealth.store (juce::jlimit (0.0f, 1.0f, 1.0f - ratio), std::memory_order_release);
+    chunkSizeTransitionPending.store (false, std::memory_order_release);
 }
 
 bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
-                                          const AudioFifoWorker::PcmChunk& chunk) noexcept
+                                          const AudioFifoWorker::DynamicPcmChunk& chunk) noexcept
 {
     if (! client.websocket || client.closeRequested.load (std::memory_order_acquire))
         return false;
@@ -1006,12 +1061,12 @@ bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
     if (channel == nullptr || ! channel->isOpen())
         return false;
 
-    if (channel->bufferedAmount() > maxBufferedPcmBytesPerClient)
+    if (channel->bufferedAmount() > chunk.byteCount * 2)
         return false;
 
     try
     {
-        return channel->send (reinterpret_cast<const rtc::byte*> (chunk.data()), chunk.size());
+        return channel->send (reinterpret_cast<const rtc::byte*> (chunk.bytes.data()), chunk.byteCount);
     }
     catch (const std::exception&)
     {
@@ -1141,4 +1196,6 @@ void NetworkTransmitter::closeAllClients()
     activeClientCount.store (0, std::memory_order_release);
     isConnected.store (false, std::memory_order_release);
     bufferHealth.store (1.0f, std::memory_order_release);
+    targetChunkMs.store (AudioFifoWorker::chunkDurationMs, std::memory_order_release);
+    chunkSizeTransitionPending.store (false, std::memory_order_release);
 }
