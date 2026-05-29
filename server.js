@@ -101,7 +101,7 @@ if (existsSync(distPath)) {
 
 app.listen(PORT, () => console.log(`Wavstat API on port ${PORT} | digitizer → ${DIGITIZER_URL}`));
 
-const KINGZ_LISTEN_SOURCE_ID = 'kingz-listen-plugin';
+const KINGZ_LISTEN_SOURCE_ID = 'KINGZ_LISTEN_PLUGIN';
 const KINGZ_LISTEN_WEB_SOURCE_ID = 'kingz-listen-web';
 const MIXREVIEW_SOURCE_IDS = new Set(['mixreview', 'mixreview-web', 'mixreview-api']);
 
@@ -123,7 +123,7 @@ function createTelemetrySession(req) {
 
 function validateKingzListenTelemetry(message) {
   if (message.source_id !== KINGZ_LISTEN_SOURCE_ID) {
-    return 'Kingz Listen telemetry requires source_id=kingz-listen-plugin';
+    return 'Kingz Listen telemetry requires source_id=KINGZ_LISTEN_PLUGIN';
   }
 
   if (typeof message.type !== 'string' || message.type.length === 0) {
@@ -136,7 +136,7 @@ function validateKingzListenTelemetry(message) {
 
   if (message.type === 'plugin.hello') {
     if (message.client !== KINGZ_LISTEN_SOURCE_ID) {
-      return 'Kingz Listen plugin.hello requires client=kingz-listen-plugin';
+      return 'Kingz Listen plugin.hello requires client=KINGZ_LISTEN_PLUGIN';
     }
     return null;
   }

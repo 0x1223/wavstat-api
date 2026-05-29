@@ -198,7 +198,7 @@ private:
             return;
 
         static constexpr auto registration =
-            R"json({"type":"registration","source_id":"kingz-listen-plugin"})json";
+            R"json({"type":"registration","source_id":"KINGZ_LISTEN_PLUGIN"})json";
         socket->send (std::string { registration });
         DBG ("WebSocketManager::onConnectionOpen: sent registration");
     }

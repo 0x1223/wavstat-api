@@ -34,7 +34,7 @@ static_assert (AudioFifoWorker::telemetryBitrateBitsPerSecond == 1536000,
 namespace
 {
 constexpr auto websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-constexpr auto kingzListenSourceId = "kingz-listen-plugin";
+constexpr auto kingzListenSourceId = "KINGZ_LISTEN_PLUGIN";
 
 juce::String base64Encode (const std::array<std::uint8_t, 20>& input)
 {
