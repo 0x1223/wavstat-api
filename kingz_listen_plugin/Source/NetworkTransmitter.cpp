@@ -259,6 +259,9 @@ bool NetworkTransmitter::start (int portToUse)
 {
     stop();
     port = portToUse;
+    isConnected.store (false, std::memory_order_release);
+    activeClientCount.store (0, std::memory_order_release);
+    bufferHealth.store (1.0f, std::memory_order_release);
     shouldListen.store (true, std::memory_order_release);
     startThread();
     return true;
@@ -267,6 +270,9 @@ bool NetworkTransmitter::start (int portToUse)
 void NetworkTransmitter::stop()
 {
     shouldListen.store (false, std::memory_order_release);
+    isConnected.store (false, std::memory_order_release);
+    activeClientCount.store (0, std::memory_order_release);
+    bufferHealth.store (1.0f, std::memory_order_release);
     signalThreadShouldExit();
     closeSocket (listener);
     stopThread (2000);
@@ -445,6 +451,8 @@ void NetworkTransmitter::acceptPendingClient()
         setNonBlocking (socketHandle);
         clients.push_back (std::make_shared<ClientConnection> (socketHandle));
         connectedClients.store (static_cast<int> (clients.size()), std::memory_order_release);
+        activeClientCount.store (static_cast<int> (clients.size()), std::memory_order_release);
+        isConnected.store (! clients.empty(), std::memory_order_release);
     }
 }
 
@@ -482,6 +490,15 @@ void NetworkTransmitter::pumpClients()
                                    }),
                    clients.end());
     connectedClients.store (static_cast<int> (clients.size()), std::memory_order_release);
+    const auto activeCount = static_cast<int> (std::count_if (clients.begin(),
+                                                             clients.end(),
+                                                             [] (const std::shared_ptr<ClientConnection>& client)
+                                                             {
+                                                                 return client != nullptr
+                                                                     && ! client->closeRequested.load (std::memory_order_acquire);
+                                                             }));
+    activeClientCount.store (activeCount, std::memory_order_release);
+    isConnected.store (activeCount > 0, std::memory_order_release);
 }
 
 void NetworkTransmitter::readFromClient (ClientConnection& client)
@@ -951,11 +968,32 @@ void NetworkTransmitter::streamReadyPcmChunks()
 
 void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chunk)
 {
+    auto openPcmClientCount = 0;
+    auto worstBufferedBytes = std::size_t { 0 };
+
     for (auto& client : clients)
     {
-        if (client != nullptr)
-            trySendPcmChunk (*client, chunk);
+        if (client == nullptr)
+            continue;
+
+        if (auto channel = client->pcmChannel; channel != nullptr && channel->isOpen())
+        {
+            ++openPcmClientCount;
+            worstBufferedBytes = std::max (worstBufferedBytes, channel->bufferedAmount());
+        }
+
+        trySendPcmChunk (*client, chunk);
     }
+
+    if (openPcmClientCount == 0)
+    {
+        bufferHealth.store (1.0f, std::memory_order_release);
+        return;
+    }
+
+    const auto ratio = static_cast<float> (worstBufferedBytes)
+        / static_cast<float> (maxBufferedPcmBytesPerClient);
+    bufferHealth.store (juce::jlimit (0.0f, 1.0f, 1.0f - ratio), std::memory_order_release);
 }
 
 bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
@@ -1100,4 +1138,7 @@ void NetworkTransmitter::closeAllClients()
 
     clients.clear();
     connectedClients.store (0, std::memory_order_release);
+    activeClientCount.store (0, std::memory_order_release);
+    isConnected.store (false, std::memory_order_release);
+    bufferHealth.store (1.0f, std::memory_order_release);
 }

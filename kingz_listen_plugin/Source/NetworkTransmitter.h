@@ -34,6 +34,10 @@ public:
     int getConnectedClientCount() const noexcept;
     juce::String getLocalLanIpAddress() const;
 
+    std::atomic<bool> isConnected { false };
+    std::atomic<int> activeClientCount { 0 };
+    std::atomic<float> bufferHealth { 1.0f };
+
 private:
    #if JUCE_WINDOWS
     using NativeSocket = SOCKET;

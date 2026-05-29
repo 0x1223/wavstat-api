@@ -7,6 +7,7 @@
 #include "PluginProcessor.h"
 
 class KingzListenAudioProcessorEditor final : public juce::AudioProcessorEditor,
+                                             private juce::Timer,
                                              public WebSocketManager::Listener
 {
 public:
@@ -14,6 +15,7 @@ public:
     ~KingzListenAudioProcessorEditor() override;
 
     void resized() override;
+    void timerCallback() override;
     void emitTelemetryToWebView (const juce::String& telemetryJson);
     void emitConnectionAttemptToWebView (const juce::String& url);
     void onWebSocketMessageReceived (const std::string& message) override;

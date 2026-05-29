@@ -180,6 +180,13 @@ juce::String getPlaceholderHtml()
       window.__JUCE__.backend.addEventListener("kingzConnectionAttempt", (payload) => {
         document.getElementById("telemetry-status").textContent = "Opening " + (payload && payload.url ? payload.url : "socket");
       });
+      window.__JUCE__.backend.addEventListener("kingzNetworkState", (payload) => {
+        if (!payload) return;
+        const status = payload.isConnected
+          ? "Live (" + payload.activeClientCount + " client" + (payload.activeClientCount === 1 ? "" : "s") + ", buffer " + Math.round(payload.bufferHealth * 100) + "%)"
+          : "Waiting";
+        document.getElementById("telemetry-status").textContent = status;
+      });
       window.__JUCE__.backend.addEventListener("__juce__complete", ({ promiseId, result }) => {
         const completion = nativePromises.get(promiseId);
         if (!completion) return;
@@ -224,6 +231,7 @@ KingzListenAudioProcessorEditor::KingzListenAudioProcessorEditor (KingzListenAud
 
     juce::Component::SafePointer<KingzListenAudioProcessorEditor> safeThis { this };
     processorRef.getWebSocketManager().addListener (this);
+    startTimerHz (30);
 
     juce::Timer::callAfterDelay (500, [safeThis]
     {
@@ -239,6 +247,7 @@ KingzListenAudioProcessorEditor::KingzListenAudioProcessorEditor (KingzListenAud
 
 KingzListenAudioProcessorEditor::~KingzListenAudioProcessorEditor()
 {
+    stopTimer();
     processorRef.getWebSocketManager().removeListener (this);
 }
 
@@ -279,6 +288,19 @@ juce::WebBrowserComponent::Options KingzListenAudioProcessorEditor::createWebVie
 void KingzListenAudioProcessorEditor::resized()
 {
     webView.setBounds (getLocalBounds());
+}
+
+void KingzListenAudioProcessorEditor::timerCallback()
+{
+    const auto& transmitter = processorRef.getNetworkTransmitter();
+
+    auto state = std::make_unique<juce::DynamicObject>();
+    state->setProperty ("isConnected", transmitter.isConnected.load (std::memory_order_acquire));
+    state->setProperty ("activeClientCount", transmitter.activeClientCount.load (std::memory_order_acquire));
+    state->setProperty ("bufferHealth", transmitter.bufferHealth.load (std::memory_order_acquire));
+
+    webView.emitEventIfBrowserIsVisible (juce::Identifier { "kingzNetworkState" },
+                                         juce::var { state.release() });
 }
 
 void KingzListenAudioProcessorEditor::emitTelemetryToWebView (const juce::String& telemetryJson)

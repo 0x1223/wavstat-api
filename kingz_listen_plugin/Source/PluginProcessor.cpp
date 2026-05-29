@@ -162,6 +162,11 @@ WebSocketManager& KingzListenAudioProcessor::getWebSocketManager() noexcept
     return wsManager;
 }
 
+const NetworkTransmitter& KingzListenAudioProcessor::getNetworkTransmitter() const noexcept
+{
+    return networkTransmitter;
+}
+
 juce::String KingzListenAudioProcessor::getLocalLanIpAddress() const
 {
     return networkTransmitter.getLocalLanIpAddress();
