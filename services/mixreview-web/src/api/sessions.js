@@ -32,16 +32,26 @@ export async function saveSessionToApi(session) {
     return null;
   }
 
+  // VITE_ADMIN_API_KEY is set in Railway environment variables for the frontend.
+  // This project uses Vite — env vars must use the VITE_ prefix and are accessed
+  // via import.meta.env (not process.env.REACT_APP_*).
+  // The header is only added when the key is present so local dev without the
+  // variable configured does not send a broken "Bearer undefined" value.
+  const adminKey = import.meta.env.VITE_ADMIN_API_KEY;
+  const headers = {
+    "Content-Type": "application/json",
+    ...(adminKey ? { "Authorization": `Bearer ${adminKey}` } : {})
+  };
+
   const response = await fetch(apiUrl(`/api/sessions/${encodeURIComponent(session.id)}`), {
     method: "PUT",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers,
     body: JSON.stringify({ session })
   });
 
   if (!response.ok) {
-    throw new Error("Session could not be saved.");
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || "Session could not be saved.");
   }
 
   const payload = await response.json();
