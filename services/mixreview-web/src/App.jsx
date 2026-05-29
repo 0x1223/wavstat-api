@@ -16,7 +16,7 @@ import {
   saveSessionToApi,
   uploadSessionAudio
 } from "./api/sessions.js";
-import { startKeepAlive, setMediaSessionMetadata } from "./lib/mobileAudioEngine.js";
+import { startKeepAlive, setMediaSessionMetadata, getSharedAudioContext } from "./lib/mobileAudioEngine.js";
 import {
   addDeletedSessionId,
   clearSessionCache,
@@ -1764,6 +1764,42 @@ export default function App({ onFirstRender } = {}) {
       album:  projectName         || "Kingz Bread Entertainment",
     });
   }, [activeTrack, sessionDetails.artistName, projectName]);
+
+  // ── AudioContext visibility-restore belt-and-suspenders ──────────────────
+  // The engine (mobileAudioEngine.js) already owns the full restore sequence:
+  // suspend on hide → resume on show → play if _wasPlayingOnHide.
+  // This effect is a lightweight React-layer complement for the narrow case
+  // where the engine's WaveSurfer instance was not yet mounted when the page
+  // came back into view (e.g. the user backgrounded before pressing Play).
+  // It ONLY resumes the AudioContext — it never calls play() — so it cannot
+  // race with the engine's own _onRestoreVisible() → mediaEl.play() chain.
+  //
+  // Critical fix vs the naive pattern:
+  //   WRONG:  const ctx = window.AudioContext || window.webkitAudioContext
+  //           → that is the CONSTRUCTOR.  ctx.state is always undefined.
+  //           ctx.resume() throws "not a function".  The block silently
+  //           never runs regardless of the if-guard.
+  //   RIGHT:  getSharedAudioContext() returns the live _sharedCtx instance
+  //           created by startKeepAlive() — the only object that has .state.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+
+      const ctx = getSharedAudioContext();
+      // Nothing to resume: keep-alive context hasn't been created yet
+      // (user hasn't tapped Play) or is already running.
+      if (!ctx || ctx.state === "running") return;
+
+      ctx.resume().catch((err) => {
+        console.warn("[MixReview] AudioContext resume on visibility restore failed:", err.message);
+      });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []); // no deps — getSharedAudioContext reads the module-level singleton
 
   const updateApprovalStatus = useCallback((nextStatus) => {
     if (!permissions.canReview || !approvalStates.includes(nextStatus)) {
