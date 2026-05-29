@@ -2850,90 +2850,121 @@ h2 {
     color: rgba(215, 173, 98, 0.7);
   }
 
-  /* ── Multi-album mobile nav ──────────────────────────────────────────── */
-  .mobile-track-nav--albums {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    padding: 0;
-    /* This container is the single scroll surface for all albums.
-       Clamp keeps it between 160 px (small phone) and 320 px (large phone),
-       centred around 44% of the live viewport height. */
-    max-height: clamp(160px, 44dvh, 320px);
-    overflow-y: auto;
-    overflow-x: hidden;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
+  /* ── Project selector (multi-album switcher) ────────────────────────── */
+  /* Sits above the track list when there are multiple albums.
+     Tapping it opens a compact dropdown; selecting an album swaps
+     the entire track list below — no stacking, no accordion headers. */
+  .mobile-project-selector {
+    position: relative;
+    margin-bottom: 4px;
   }
 
-  .mobile-track-nav--albums::-webkit-scrollbar {
-    display: none;
-  }
-
-  .mobile-track-nav-album {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  }
-
-  /* Album header sticks to the top of the scroll container as the user
-     scrolls through a long album's track list. */
-  .mobile-track-nav-album-header {
-    position: sticky;
-    top: 0;
-    z-index: 10;
+  .mobile-project-selector-btn {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 14px;
-    cursor: pointer;
-    /* Solid base so content scrolls cleanly underneath. */
-    background: rgba(11, 11, 11, 0.96);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    border: none;
+    gap: 7px;
     width: 100%;
+    min-height: 40px;
+    padding: 6px 10px;
+    border: 1px solid rgba(215, 173, 98, 0.28);
+    border-radius: 8px;
+    background: rgba(215, 173, 98, 0.06);
+    cursor: pointer;
     text-align: left;
     color: #e7dcc8;
     -webkit-tap-highlight-color: transparent;
-    transition: background 120ms ease;
+    transition: background 120ms ease, border-color 120ms ease;
   }
 
-  /* Active-album header gets a warm gold tint on top of the solid base. */
-  .mobile-track-nav-album.has-active .mobile-track-nav-album-header {
-    background: linear-gradient(
-      90deg,
-      rgba(215, 173, 98, 0.12) 0%,
-      rgba(11, 11, 11, 0.96) 100%
-    );
+  .mobile-project-selector-btn:active {
+    background: rgba(215, 173, 98, 0.12);
+    border-color: rgba(215, 173, 98, 0.45);
   }
 
-  .mobile-track-nav-album-header:active {
-    background: rgba(255, 255, 255, 0.04);
+  .mobile-project-selector-eyebrow {
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(215, 173, 98, 0.5);
+    flex-shrink: 0;
   }
 
-  .mobile-track-nav-album-title {
+  .mobile-project-selector-name {
     flex: 1;
     font-size: 0.78rem;
     font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: #c4ae80;
+    color: #d7ad62;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .mobile-track-nav-album-meta {
-    font-size: 0.7rem;
-    color: var(--muted);
+  .mobile-project-chevron {
     flex-shrink: 0;
+    font-size: 0.88rem;
+    color: rgba(215, 173, 98, 0.55);
+    display: inline-block;
+    transition: transform 180ms ease;
   }
 
-  /* Per-album track lists have NO height cap of their own — all scrolling
-     happens in the parent .mobile-track-nav--albums container. */
-  .mobile-track-nav--albums .mobile-track-nav-list {
-    padding: 6px 8px 10px;
-    max-height: none;
-    overflow-y: visible;
+  .mobile-project-chevron.open {
+    transform: rotate(180deg);
+  }
+
+  /* Dropdown list */
+  .mobile-project-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid rgba(215, 173, 98, 0.22);
+    border-radius: 8px;
+    background: rgba(13, 11, 8, 0.98);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.65);
+    overflow: hidden;
+  }
+
+  .mobile-project-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 13px 14px;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    background: none;
+    color: #bfab80;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 100ms ease;
+  }
+
+  .mobile-project-option:last-child {
+    border-bottom: none;
+  }
+
+  .mobile-project-option:active {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .mobile-project-option.active {
+    color: #ffd889;
+    background: rgba(215, 173, 98, 0.07);
+  }
+
+  .mobile-project-check {
+    font-size: 0.8rem;
+    color: rgba(215, 173, 98, 0.75);
+    flex-shrink: 0;
   }
 
   /* Hide the compact TrackList when the premium MobileTrackNav is active */
