@@ -1366,6 +1366,7 @@ function normalizeAlbums(rawAlbums, tracks, defaultTitle, createdAt) {
     return [{
       id: "album-default",
       title: defaultTitle || "Main Album",
+      type: "album",
       trackIds: [...trackIdSet],
       createdAt: createdAt || new Date().toISOString()
     }];
@@ -1375,6 +1376,7 @@ function normalizeAlbums(rawAlbums, tracks, defaultTitle, createdAt) {
   let cleaned = rawAlbums.map((album) => ({
     id: typeof album.id === "string" && album.id.trim() ? album.id.trim() : `album-${randomUUID()}`,
     title: typeof album.title === "string" && album.title.trim() ? album.title.trim() : "Untitled Album",
+    type: album.type === "stem_project" ? "stem_project" : "album",
     trackIds: (Array.isArray(album.trackIds) ? album.trackIds : []).filter((id) => trackIdSet.has(id)),
     createdAt: typeof album.createdAt === "string" ? album.createdAt : new Date().toISOString()
   }));

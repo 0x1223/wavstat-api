@@ -885,10 +885,11 @@ export default function App({ onFirstRender } = {}) {
   // only mutate the albums state; tracks remain flat and unchanged so every
   // existing selectTrack / WaveSurfer / transport path is unaffected.
 
-  const handleCreateAlbum = useCallback((title = "New Album") => {
+  const handleCreateAlbum = useCallback((title = "New Album", type = "album") => {
     const newAlbum = {
       id: `album-${Date.now()}`,
       title: typeof title === "string" && title.trim() ? title.trim() : "New Album",
+      type: type === "stem_project" ? "stem_project" : "album",
       trackIds: [],
       createdAt: new Date().toISOString()
     };
@@ -900,6 +901,15 @@ export default function App({ onFirstRender } = {}) {
     if (!albumId || !newTitle?.trim()) return;
     setAlbums((prev) =>
       prev.map((a) => (a.id === albumId ? { ...a, title: newTitle.trim() } : a))
+    );
+    setIsDirty(true);
+  }, []);
+
+  const handleUpdateAlbumType = useCallback((albumId, newType) => {
+    if (!albumId) return;
+    const validType = newType === "stem_project" ? "stem_project" : "album";
+    setAlbums((prev) =>
+      prev.map((a) => (a.id === albumId ? { ...a, type: validType } : a))
     );
     setIsDirty(true);
   }, []);
@@ -930,7 +940,7 @@ export default function App({ onFirstRender } = {}) {
     setProjectTitle(emptyProjectName);
     setSessionDetails(emptySessionDetails);
     setTracks([]);
-    setAlbums([{ id: "album-default", title: emptyProjectName, trackIds: [], createdAt: new Date().toISOString() }]);
+    setAlbums([{ id: "album-default", title: emptyProjectName, type: "album", trackIds: [], createdAt: new Date().toISOString() }]);
     setActiveTrackId(null);
     setVersions(createEmptyVersions());
     setCurrentReviewer("Engineer");
@@ -1364,7 +1374,7 @@ export default function App({ onFirstRender } = {}) {
     setSessionId(createSessionId());
     setProjectTitle(emptyProjectName);
     setTracks([]);
-    setAlbums([{ id: "album-default", title: emptyProjectName, trackIds: [], createdAt: new Date().toISOString() }]);
+    setAlbums([{ id: "album-default", title: emptyProjectName, type: "album", trackIds: [], createdAt: new Date().toISOString() }]);
     setActiveTrackId(null);
     setVersions(createEmptyVersions());
     setActiveVersionId("version-v1");
@@ -2094,6 +2104,7 @@ export default function App({ onFirstRender } = {}) {
             onTrackUpload={handleTrackUpload}
             onCreateAlbum={handleCreateAlbum}
             onRenameAlbum={handleRenameAlbum}
+            onUpdateAlbumType={handleUpdateAlbumType}
             onMoveTrack={handleMoveTrack}
           />
 
@@ -2787,6 +2798,7 @@ function buildInitialAlbums(session) {
     return rawAlbums.map((album) => ({
       id: album.id || `album-${Date.now()}`,
       title: album.title || "Untitled Album",
+      type: album.type === "stem_project" ? "stem_project" : "album",
       trackIds: (Array.isArray(album.trackIds) ? album.trackIds : []).filter((id) => trackIdSet.has(id)),
       createdAt: album.createdAt || new Date().toISOString()
     }));
@@ -2796,6 +2808,7 @@ function buildInitialAlbums(session) {
   return [{
     id: "album-default",
     title: session?.projectName || emptyProjectName,
+    type: "album",
     trackIds: rawTracks.map((t) => t.id).filter(Boolean),
     createdAt: session?.createdAt || new Date().toISOString()
   }];

@@ -161,7 +161,9 @@ export function MobileTrackNav({ tracks, albums, activeTrackId, onTrackSelect })
         </div>
       )}
 
-      <p className="mobile-track-nav-label">Stems</p>
+      <p className="mobile-track-nav-label">
+        {selectedAlbum?.type === "stem_project" ? "Stems" : "Tracks"}
+      </p>
 
       {/* Single continuous track list — identical to the single-project layout */}
       <div className="mobile-track-nav-list">

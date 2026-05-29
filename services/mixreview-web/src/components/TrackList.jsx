@@ -9,6 +9,7 @@ export function TrackList({
   onTrackUpload,
   onCreateAlbum,
   onRenameAlbum,
+  onUpdateAlbumType,
   onMoveTrack
 }) {
   const [collapsed, setCollapsed] = useState({});
@@ -149,6 +150,20 @@ export function TrackList({
                       </span>
                     )}
 
+                    {canEdit && (
+                      <button
+                        type="button"
+                        className={`album-type-badge album-type-badge--${album.type === "stem_project" ? "stems" : "album"}`}
+                        title="Click to toggle container type"
+                        onClick={() => onUpdateAlbumType?.(
+                          album.id,
+                          album.type === "stem_project" ? "album" : "stem_project"
+                        )}
+                      >
+                        {album.type === "stem_project" ? "Stems" : "Album"}
+                      </button>
+                    )}
+
                     <span className="album-track-count">{albumTracks.length}</span>
 
                     {canEdit && (
@@ -245,13 +260,22 @@ export function TrackList({
       )}
 
       {canEdit && effectiveAlbums.length > 0 && (
-        <button
-          type="button"
-          className="add-album-btn"
-          onClick={() => onCreateAlbum?.()}
-        >
-          + Add Album
-        </button>
+        <div className="add-album-actions">
+          <button
+            type="button"
+            className="add-album-btn"
+            onClick={() => onCreateAlbum?.("New Album", "album")}
+          >
+            + Add Album
+          </button>
+          <button
+            type="button"
+            className="add-album-btn add-album-btn--stems"
+            onClick={() => onCreateAlbum?.("New Stem Project", "stem_project")}
+          >
+            + Add Stems
+          </button>
+        </div>
       )}
     </section>
   );

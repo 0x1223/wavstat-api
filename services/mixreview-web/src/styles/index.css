@@ -1037,6 +1037,51 @@ h2 {
   min-width: 120px;
 }
 
+/* ── Album type toggle badge ──────────────────────────────────────────── */
+.album-type-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+  border: 1px solid transparent;
+}
+
+.album-type-badge:hover {
+  opacity: 0.75;
+}
+
+/* "Album" badge — warm gold tint */
+.album-type-badge--album {
+  background: rgba(215, 173, 98, 0.1);
+  border-color: rgba(215, 173, 98, 0.28);
+  color: rgba(215, 173, 98, 0.75);
+}
+
+/* "Stems" badge — cool blue tint, visually distinct from Album */
+.album-type-badge--stems {
+  background: rgba(120, 180, 220, 0.1);
+  border-color: rgba(120, 180, 220, 0.28);
+  color: rgba(140, 195, 230, 0.85);
+}
+
+/* ── Add-album footer: two side-by-side buttons ──────────────────────── */
+.add-album-actions {
+  display: flex;
+  gap: 6px;
+  padding: 4px 0 0;
+}
+
+.add-album-actions .add-album-btn {
+  flex: 1;
+}
+
 .add-album-btn {
   background: none;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1053,6 +1098,17 @@ h2 {
 .add-album-btn:hover {
   border-color: rgba(215, 173, 98, 0.4);
   color: #c4ae80;
+}
+
+/* "Add Stems" button gets the blue accent to match its badge */
+.add-album-btn--stems {
+  border-color: rgba(120, 180, 220, 0.18);
+  color: rgba(140, 195, 230, 0.7);
+}
+
+.add-album-btn--stems:hover {
+  border-color: rgba(120, 180, 220, 0.45);
+  color: rgba(160, 210, 240, 0.9);
 }
 
 .upload-panel h2 {
