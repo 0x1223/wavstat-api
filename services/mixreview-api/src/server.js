@@ -40,7 +40,11 @@ const r2Config = {
   secretAccessKey:
     getEnvValue("CLOUDFLARE_R2_SECRET_ACCESS_KEY") || getEnvValue("R2_SECRET_ACCESS_KEY"),
   bucketName: getEnvValue("CLOUDFLARE_R2_BUCKET") || getEnvValue("R2_BUCKET_NAME"),
-  publicBaseUrl: getEnvValue("R2_PUBLIC_BASE_URL")
+  publicBaseUrl: getEnvValue("R2_PUBLIC_BASE_URL"),
+  // Optional explicit endpoint override (ENDPOINT env var).  When set it takes
+  // precedence over the account-ID-derived URL.  Required for presigned PUT URLs
+  // that the browser will hit directly — the endpoint must be publicly reachable.
+  endpoint: getEnvValue("ENDPOINT")
 };
 
 const hasR2Config = Boolean(
@@ -56,7 +60,10 @@ const hasRequestedCloudflareEnv = Boolean(
 const r2Client = hasR2Config
   ? new S3Client({
       region: "auto",
-      endpoint: `https://${r2Config.accountId}.r2.cloudflarestorage.com`,
+      // Prefer an explicit ENDPOINT env var; fall back to the standard R2 URL
+      // derived from the account ID.  Both are publicly reachable so presigned
+      // URLs generated here are valid for direct browser PUT requests.
+      endpoint: r2Config.endpoint || `https://${r2Config.accountId}.r2.cloudflarestorage.com`,
       credentials: {
         accessKeyId: r2Config.accessKeyId,
         secretAccessKey: r2Config.secretAccessKey
@@ -102,6 +109,7 @@ sessionRouter.post("/:sessionId/audio", upload.single("audio"), handleAudioUploa
 
 app.use("/api/sessions", sessionRouter);
 app.post("/api/audio/upload", upload.single("audio"), handleAudioUpload);
+app.post("/api/get-presigned-url", requireAdminAuth, getPresignedUploadUrl);
 
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError) {
@@ -221,6 +229,69 @@ async function uploadAudioToR2(objectKey, audioFile, contentType, req) {
     playbackUrl: buildApiPlaybackUrl(req, objectKey),
     peaksUrl
   };
+}
+
+// getPresignedUploadUrl — issues a short-lived presigned PUT URL so the browser
+// can upload audio directly to R2 without routing the file bytes through this
+// server.  The client must:
+//   1. PUT the file to the returned URL with the exact Content-Type header that
+//      was submitted here — R2 validates it as part of the signature.
+//   2. Return the `key` to this API (e.g. via the session save route) so the
+//      session document can reference the uploaded object.
+//
+// R2 CORS prerequisite: the bucket must have a CORS rule that allows PUT from
+// your frontend origin (https://mixreview.kingzbreadent.com) with the
+// Content-Type and Content-Length headers permitted.  Without this the browser's
+// preflight OPTIONS will be rejected before the upload even starts.
+async function getPresignedUploadUrl(req, res, next) {
+  try {
+    if (!hasR2Config) {
+      return res.status(503).json({ error: "Cloud storage is not configured on this server." });
+    }
+
+    const { fileName, fileType } = req.body || {};
+
+    if (!fileName || typeof fileName !== "string" || !fileName.trim()) {
+      return res.status(400).json({ error: "fileName is required." });
+    }
+    if (!fileType || typeof fileType !== "string" || !fileType.trim()) {
+      return res.status(400).json({ error: "fileType is required." });
+    }
+
+    // Build a sanitised object key that cannot escape the uploads/ prefix.
+    const extension   = path.extname(fileName).toLowerCase();
+    const safeBase    = path
+      .basename(fileName, path.extname(fileName))
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "upload";
+    const objectKey   = `uploads/${new Date().toISOString().slice(0, 10)}/${randomUUID()}-${safeBase}${extension}`;
+
+    // ContentType is embedded in the presigned URL signature — the browser MUST
+    // send the exact same value as the Content-Type request header when it PUTs
+    // the file, otherwise R2 returns 403 SignatureDoesNotMatch.
+    const command = new PutObjectCommand({
+      Bucket:      r2Config.bucketName,
+      Key:         objectKey,
+      ContentType: fileType.trim(),
+    });
+
+    // 15-minute window — long enough for a large file on a slow connection
+    // without leaving a stale URL live for hours.
+    const url = await getSignedUrl(r2Client, command, { expiresIn: 900 });
+
+    console.log("[MixReview] Pre-signed upload URL issued", {
+      objectKey,
+      fileType: fileType.trim(),
+      expiresIn: 900,
+    });
+
+    // Return the key alongside the URL so the client can pass it back to the
+    // session save route once the direct upload completes.
+    return res.json({ url, key: objectKey });
+  } catch (error) {
+    next(error);
+  }
 }
 
 // generateAndUploadPeaks — runs FFmpeg on the in-memory audio buffer, computes
