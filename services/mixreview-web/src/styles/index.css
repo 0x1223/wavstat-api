@@ -57,7 +57,8 @@ button {
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  /* dvh tracks the real available height after browser chrome shows/hides */
+  min-height: 100dvh;
   background:
     linear-gradient(135deg, rgba(218, 171, 88, 0.1), transparent 32%),
     linear-gradient(180deg, #101010 0%, #080808 42%, #15110d 100%);
@@ -87,7 +88,7 @@ body {
 }
 
 .start-screen {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 32px;
@@ -339,7 +340,7 @@ body {
 }
 
 .app-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 18px;
@@ -1188,7 +1189,7 @@ h2 {
 }
 
 .admin-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .admin-dashboard {
@@ -1266,7 +1267,7 @@ h2 {
 }
 
 .setup-shell {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .session-setup-form {
@@ -2373,6 +2374,17 @@ h2 {
   }
 }
 
+/* Suppress document-level scroll and iOS rubber-band bounce when the
+   mobile reviewer is active. Without this, a hard finger press on any
+   edge of the screen can still bounce the whole page even though the
+   app-shell container clips its own overflow. */
+html:has(.app-shell.reviewer-mode),
+body:has(.app-shell.reviewer-mode) {
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* Compact mobile reviewer layout applies to:
    – portrait phones:  width ≤ 768 px  (the common case)
    – landscape phones: height ≤ 500 px in landscape orientation
@@ -2393,8 +2405,9 @@ h2 {
     overflow: hidden;
     overscroll-behavior: none;
     padding: 8px 8px 0;
-    /* Reserve space for the fixed transport bar + iOS home indicator */
-    padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+    /* Transport is anchored at bottom:0 (50px tall + safe-area padding inside).
+       Reserve exactly that height so content never slides under the bar. */
+    padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px));
   }
 
   .reviewer-mode .top-stack {
@@ -2667,23 +2680,33 @@ h2 {
   }
 
   .reviewer-mode .transport {
+    /* Fixed to the bottom edge of the viewport — full-bleed, flush against
+       the screen. Internal padding-bottom pushes button content above the
+       iOS home indicator so nothing is clipped on notched devices. */
     position: fixed;
-    left: 8px;
-    right: 8px;
-    /* sit above the iOS home-indicator on notched phones */
-    bottom: max(8px, env(safe-area-inset-bottom, 8px));
+    left: 0;
+    right: 0;
+    bottom: 0;
     z-index: 50;
+    /* flex: 0 0 auto keeps the bar from growing/shrinking in any parent flex
+       context (e.g. when the shell is refactored to in-flow in the future) */
+    flex: 0 0 auto;
     min-height: 50px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 6px 8px;
+    /* Safe-area padding: bar background fills the home-indicator zone;
+       buttons are pushed above it by the padding value.
+       max(8px, …) ensures at least 8px gap even on notchless devices. */
+    padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    border-radius: 14px 14px 0 0;
     border-color: rgba(215, 173, 98, 0.22);
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 48%),
       rgba(11, 11, 11, 0.96);
     box-shadow:
-      0 18px 60px rgba(0, 0, 0, 0.58),
+      0 -4px 32px rgba(0, 0, 0, 0.45),
       inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
@@ -2723,7 +2746,8 @@ h2 {
   }
 
   .mobile-note-popover {
-    inset: auto 0 58px;
+    /* Clear the edge-to-edge transport: 50px bar + safe-area + 8px gap */
+    inset: auto 0 calc(58px + env(safe-area-inset-bottom, 0px));
     align-items: end;
     padding: 0 6px;
   }
@@ -2801,11 +2825,11 @@ h2 {
     background: linear-gradient(180deg, #ffd889, #d6a354);
   }
 
-  /* Comment drawer must always clear the fixed transport.
-     transport bottom = max(8px, safe-area); transport height ≈ 50–66px.
-     Adding 70px offset guarantees ≥7px gap even on notched phones. */
+  /* Comment drawer must always clear the full-bleed transport.
+     Transport is at bottom:0, internal height = 50px + safe-area.
+     Adding 20px gap gives comfortable clearance on all devices. */
   .reviewer-mode .mobile-comment-drawer {
-    bottom: calc(max(8px, env(safe-area-inset-bottom, 0px)) + 70px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 70px);
     max-height: 50vh;
   }
 
@@ -3128,7 +3152,8 @@ h2 {
     height: 100dvh;
     max-height: 100dvh;
     overflow: hidden;
-    padding-bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+    /* Matches the transport's new height: 50px bar + safe-area padding */
+    padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px));
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-layout {
@@ -3210,8 +3235,8 @@ h2 {
     height: 100dvh;
     max-height: 100dvh;
     overflow: hidden;
-    /* Transport bar is shorter in landscape — 56px is enough */
-    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+    /* Transport (50px) + safe-area padding — same formula as portrait */
+    padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px));
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-layout {
