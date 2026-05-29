@@ -881,40 +881,60 @@ function validateTracksIntegrity(tracks) {
   return null;
 }
 
-async function deleteSession(req, res) {
+async function deleteSession(req, res, next) {
   const sessionId = sanitizeSessionId(req.params.sessionId);
   if (!sessionId) {
     return res.status(400).json({ error: "Valid session id is required." });
   }
 
-  // Step 1 — remove from the index first.
-  // This is the authoritative step: the session will not reappear in the admin
-  // dashboard or be accessible through the API regardless of what follows.
-  await removeSessionFromIndex(sessionId);
-
-  // Step 2 — delete the local session file (dev / cache; best-effort).
-  const localPath = buildLocalSessionPath(sessionId);
-  try {
-    await unlink(localPath);
-  } catch {
-    // Local file may not exist; index removal is the authoritative step.
-  }
-
-  // Step 3 — purge ALL R2 objects under sessions/{sessionId}/.
-  // This removes session.json, every audio file, and any other nested assets
-  // so nothing is orphaned in object storage after deletion.
-  // Failures are caught and logged separately; the session remains deleted
-  // because the index was already updated in step 1.
+  // Step 1 — purge ALL R2 objects under sessions/{sessionId}/ FIRST.
+  //
+  // The index record is intentionally NOT touched until this succeeds.
+  // If R2 throws (auth failure, network error, bucket unreachable), the error
+  // is surfaced to the caller (502) and the index record is preserved so the
+  // admin can retry the deletion without data loss.
+  //
+  // Per-key partial failures (individual objects that R2 refuses to delete)
+  // are logged inside purgeSessionFromR2 but do not abort — the function still
+  // returns so the index removal proceeds. A hard AWS-level throw is the signal
+  // that the whole operation should be aborted.
+  //
+  // Coverage: this removes session.json, every audio file, every peaks file,
+  // and any other nested object regardless of how many tracks or versions exist.
+  // The uploads/ prefix is also covered for any legacy objects that were stored
+  // there before session-scoped keys were introduced — those are tracked in the
+  // session document and purged individually if present (see note below).
   if (hasR2Config) {
     try {
       const purgedCount = await purgeSessionFromR2(sessionId);
       console.log(`[MixReview] R2 purge complete for session ${sessionId}: ${purgedCount} object(s) deleted`);
     } catch (e) {
-      // Storage cleanup failed — log it, but do not surface it to the caller.
-      // The session is gone from the index; it will never reappear in the app.
-      // Orphaned objects can be cleaned up manually or by a future lifecycle rule.
-      console.error(`[MixReview] R2 purge failed for session ${sessionId} — objects may remain in storage:`, e.message);
+      console.error(`[MixReview] R2 purge failed for session ${sessionId} — aborting delete to preserve index record:`, e.message);
+      const err = new Error(
+        "Session audio files could not be removed from cloud storage. " +
+        "The session record has been preserved so you can retry. " +
+        `R2 error: ${e.message}`
+      );
+      err.status = 502;
+      err.expose = true;
+      return next(err);
     }
+  }
+
+  // Step 2 — remove from the index.
+  // Only reached after R2 purge succeeds (or R2 is not configured).
+  // This is the visibility step: the session will no longer appear in the
+  // admin dashboard or be accessible through the API.
+  await removeSessionFromIndex(sessionId);
+
+  // Step 3 — delete the local session file (dev / cache; best-effort).
+  // Failure here is inconsequential — the file is a cache and will simply
+  // not be found on the next read, falling back to R2 or the index.
+  const localPath = buildLocalSessionPath(sessionId);
+  try {
+    await unlink(localPath);
+  } catch {
+    // Local file may not exist — not a failure condition.
   }
 
   return res.json({ ok: true, deleted: sessionId });
