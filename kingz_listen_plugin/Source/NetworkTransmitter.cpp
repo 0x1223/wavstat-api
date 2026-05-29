@@ -194,6 +194,19 @@ bool isUsableIpv4Address (const juce::String& address)
         && ! address.startsWith ("127.")
         && ! address.startsWith ("169.254.");
 }
+
+std::vector<std::uint8_t> toExactUtf8Bytes (const juce::String& text)
+{
+    const auto* utf8 = text.toRawUTF8();
+    const auto byteCount = std::strlen (utf8);
+    return { reinterpret_cast<const std::uint8_t*> (utf8),
+             reinterpret_cast<const std::uint8_t*> (utf8) + byteCount };
+}
+
+std::size_t exactUtf8ByteCount (const juce::String& text)
+{
+    return std::strlen (text.toRawUTF8());
+}
 } // namespace
 
 struct NetworkTransmitter::ClientConnection final
@@ -558,7 +571,7 @@ void NetworkTransmitter::upgradeToWebSocket (ClientConnection& client, const juc
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Accept: " + accept + "\r\n\r\n";
 
-    sendRaw (client.socket, response.toRawUTF8(), response.getNumBytesAsUTF8());
+    sendRaw (client.socket, response.toRawUTF8(), exactUtf8ByteCount (response));
     client.websocket = true;
     client.textBuffer.clear();
 }
@@ -921,8 +934,7 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::PcmChunk& chu
 
 void NetworkTransmitter::sendJson (ClientConnection& client, const juce::String& json)
 {
-    const auto* bytes = json.toRawUTF8();
-    std::vector<std::uint8_t> payload (bytes, bytes + json.getNumBytesAsUTF8());
+    const auto payload = toExactUtf8Bytes (json);
     sendWebSocketFrame (client, payload, 0x1);
 }
 
@@ -937,9 +949,9 @@ void NetworkTransmitter::sendHttpResponse (ClientConnection& client,
                                            const juce::String& body)
 {
     const auto response = "HTTP/1.1 200 OK\r\nContent-Type: " + contentType
-        + "\r\nContent-Length: " + juce::String (body.getNumBytesAsUTF8())
+        + "\r\nContent-Length: " + juce::String (exactUtf8ByteCount (body))
         + "\r\nConnection: close\r\n\r\n" + body;
-    sendRaw (client.socket, response.toRawUTF8(), response.getNumBytesAsUTF8());
+    sendRaw (client.socket, response.toRawUTF8(), exactUtf8ByteCount (response));
 }
 
 void NetworkTransmitter::sendWebSocketFrame (ClientConnection& client,
