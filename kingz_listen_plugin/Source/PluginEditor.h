@@ -32,6 +32,7 @@ private:
 
     KingzListenAudioProcessor& processorRef;
     juce::WebBrowserComponent webView;
+    juce::int64 lastTelemetryReportMs = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KingzListenAudioProcessorEditor)
 };

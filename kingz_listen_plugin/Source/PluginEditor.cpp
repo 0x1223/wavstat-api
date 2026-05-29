@@ -52,6 +52,13 @@ juce::String getPlaceholderHtml()
     dd { margin: 0; color: #ffffff; font-variant-numeric: tabular-nums; }
     input { width: 100%; box-sizing: border-box; border: 1px solid #2a303b; border-radius: 8px; padding: 8px 10px; background: #151922; color: #ffffff; font: inherit; font-variant-numeric: tabular-nums; }
     button { width: 100%; border: 0; border-radius: 8px; padding: 14px 16px; background: #ffffff; color: #0c0e12; font-weight: 700; }
+    .meter { margin: -8px 0 20px; text-align: left; }
+    .meter-label { display: flex; justify-content: space-between; margin-bottom: 8px; color: #aab2c0; font-size: 12px; }
+    .bar { height: 8px; overflow: hidden; border-radius: 8px; background: #202633; }
+    .bar span { display: block; width: 100%; height: 100%; transform-origin: left center; transform: scaleX(1); background: #52d273; transition: transform 120ms linear, background 120ms linear; }
+    .latency-good { color: #52d273; }
+    .latency-warn { color: #f1c84b; }
+    .latency-bad { color: #ff6b6b; }
     pre { display: none; margin: 18px 0 0; padding: 12px; border-radius: 8px; background: #151922; color: #d7dce5; text-align: left; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
   </style>
 </head>
@@ -63,7 +70,12 @@ juce::String getPlaceholderHtml()
       <dt>Studio IP</dt><dd><input id="studio-ip" inputmode="decimal"></dd>
       <dt>Port</dt><dd><input id="studio-port" inputmode="numeric"></dd>
       <dt>Telemetry</dt><dd id="telemetry-status">Waiting</dd>
+      <dt>Latency</dt><dd id="latency-value" class="latency-good">-- ms</dd>
     </dl>
+    <div class="meter" aria-label="Buffer health">
+      <div class="meter-label"><span>Buffer Health</span><span id="buffer-health-label">100%</span></div>
+      <div class="bar"><span id="buffer-health-bar"></span></div>
+    </div>
     <button id="connect">Connect Telemetry</button>
     <button id="toggle">Toggle Monitoring</button>
     <pre id="telemetry-preview"></pre>
@@ -107,6 +119,38 @@ juce::String getPlaceholderHtml()
       const preview = document.getElementById("telemetry-preview");
       preview.style.display = "block";
       preview.textContent = JSON.stringify(parsed, null, 2);
+    }
+
+    function latencyClass(latencyMs) {
+      if (latencyMs <= 12) return "latency-good";
+      if (latencyMs <= 30) return "latency-warn";
+      return "latency-bad";
+    }
+
+    function applyTelemetryReport(payload) {
+      let report = payload;
+      if (typeof payload === "string") {
+        try { report = JSON.parse(payload); } catch (_) { return; }
+      }
+      if (!report) return;
+
+      const health = Math.max(0, Math.min(1, Number(report.bufferHealth ?? 1)));
+      const latency = Number(report.latencyMs ?? 0);
+      const latencyNode = document.getElementById("latency-value");
+      const bar = document.getElementById("buffer-health-bar");
+      const healthLabel = document.getElementById("buffer-health-label");
+      const clientCount = Number(report.activeClientCount ?? 0);
+
+      document.getElementById("telemetry-status").textContent = report.isConnected
+        ? "Live (" + clientCount + " client" + (clientCount === 1 ? "" : "s") + ")"
+        : "Waiting";
+
+      latencyNode.textContent = latency > 0 ? latency.toFixed(1) + " ms" : "-- ms";
+      latencyNode.className = latencyClass(latency);
+      bar.style.transform = "scaleX(" + health.toFixed(3) + ")";
+      bar.style.background = health >= 0.75 ? "#52d273" : (health >= 0.4 ? "#f1c84b" : "#ff6b6b");
+      healthLabel.textContent = Math.round(health * 100) + "%";
+      window.__KINGZ_LISTEN_TELEMETRY_REPORT__ = report;
     }
 
     function hasNativeBridge() {
@@ -180,13 +224,7 @@ juce::String getPlaceholderHtml()
       window.__JUCE__.backend.addEventListener("kingzConnectionAttempt", (payload) => {
         document.getElementById("telemetry-status").textContent = "Opening " + (payload && payload.url ? payload.url : "socket");
       });
-      window.__JUCE__.backend.addEventListener("kingzNetworkState", (payload) => {
-        if (!payload) return;
-        const status = payload.isConnected
-          ? "Live (" + payload.activeClientCount + " client" + (payload.activeClientCount === 1 ? "" : "s") + ", buffer " + Math.round(payload.bufferHealth * 100) + "%)"
-          : "Waiting";
-        document.getElementById("telemetry-status").textContent = status;
-      });
+      window.__JUCE__.backend.addEventListener("kingzTelemetryReport", applyTelemetryReport);
       window.__JUCE__.backend.addEventListener("__juce__complete", ({ promiseId, result }) => {
         const completion = nativePromises.get(promiseId);
         if (!completion) return;
@@ -292,15 +330,15 @@ void KingzListenAudioProcessorEditor::resized()
 
 void KingzListenAudioProcessorEditor::timerCallback()
 {
-    const auto& transmitter = processorRef.getNetworkTransmitter();
+    const auto nowMs = juce::Time::currentTimeMillis();
+    if (nowMs - lastTelemetryReportMs < 100)
+        return;
 
-    auto state = std::make_unique<juce::DynamicObject>();
-    state->setProperty ("isConnected", transmitter.isConnected.load (std::memory_order_acquire));
-    state->setProperty ("activeClientCount", transmitter.activeClientCount.load (std::memory_order_acquire));
-    state->setProperty ("bufferHealth", transmitter.bufferHealth.load (std::memory_order_acquire));
+    lastTelemetryReportMs = nowMs;
+    const auto report = processorRef.getTelemetryReport();
 
-    webView.emitEventIfBrowserIsVisible (juce::Identifier { "kingzNetworkState" },
-                                         juce::var { state.release() });
+    webView.emitEventIfBrowserIsVisible (juce::Identifier { "kingzTelemetryReport" },
+                                         juce::var { report });
 }
 
 void KingzListenAudioProcessorEditor::emitTelemetryToWebView (const juce::String& telemetryJson)

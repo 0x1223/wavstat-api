@@ -42,6 +42,7 @@ public:
     void startTelemetryConnection (const juce::String& host, int port);
     WebSocketManager& getWebSocketManager() noexcept;
     const NetworkTransmitter& getNetworkTransmitter() const noexcept;
+    juce::String getTelemetryReport() const;
     juce::String getLocalLanIpAddress() const;
     int getNetworkPort() const noexcept;
 

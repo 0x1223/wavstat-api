@@ -167,6 +167,31 @@ const NetworkTransmitter& KingzListenAudioProcessor::getNetworkTransmitter() con
     return networkTransmitter;
 }
 
+juce::String KingzListenAudioProcessor::getTelemetryReport() const
+{
+    const auto activeClients = networkTransmitter.activeClientCount.load (std::memory_order_acquire);
+    const auto health = networkTransmitter.bufferHealth.load (std::memory_order_acquire);
+    const auto connected = networkTransmitter.isConnected.load (std::memory_order_acquire);
+
+    const auto bufferedRatio = juce::jlimit (0.0f, 1.0f, 1.0f - health);
+    const auto estimatedLatencyMs = static_cast<float> (AudioFifoWorker::chunkDurationMs)
+        + bufferedRatio * static_cast<float> (AudioFifoWorker::chunkDurationMs * 2);
+
+    auto* report = new juce::DynamicObject();
+    report->setProperty ("type", "telemetry.report");
+    report->setProperty ("isConnected", connected);
+    report->setProperty ("activeClientCount", activeClients);
+    report->setProperty ("bufferHealth", health);
+    report->setProperty ("latencyMs", estimatedLatencyMs);
+    report->setProperty ("latencySource", "estimated-buffered-datachannel");
+    report->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
+    report->setProperty ("channels", AudioFifoWorker::inputChannels);
+    report->setProperty ("chunkMs", AudioFifoWorker::chunkDurationMs);
+    report->setProperty ("chunkBytes", AudioFifoWorker::bytesPerChunk);
+
+    return juce::JSON::toString (juce::var (report), true);
+}
+
 juce::String KingzListenAudioProcessor::getLocalLanIpAddress() const
 {
     return networkTransmitter.getLocalLanIpAddress();
