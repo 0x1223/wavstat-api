@@ -3055,14 +3055,103 @@ h2 {
 
 /* ─ Landscape-phone-only overrides ─────────────────────────────────────────
    Applied on top of the combined mobile block above.
-   Matches landscape phones (CSS height ≤ 500px) but NOT iPads (height ≥ 768px). */
+   Matches landscape phones (CSS height ≤ 500px) but NOT iPads (height ≥ 768px).
+
+   KEY LAYOUT CHANGE vs portrait:
+   In landscape the waveform becomes the primary element (top, flex:1) and the
+   track nav drops below it. This gives the waveform the maximum vertical room
+   while keeping the project selector + track pills accessible at the bottom.
+
+   These rules deliberately re-declare the shell/layout flex properties so the
+   block is self-contained — landscape phones are often wider than 639 px and
+   therefore won't inherit the portrait max-width:639px block. */
 @media (orientation: landscape) and (max-height: 500px) {
+
+  /* ── Shell: lock to viewport, reserve room for fixed transport ──────── */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
+    /* Transport bar is shorter in landscape — 56px is enough */
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-layout {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    gap: 4px;
+  }
+
+  /* ── Layout swap: waveform first, nav below ─────────────────────────── */
+  /* order:0 (waveform) renders before order:1 (nav) regardless of DOM order */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
+    order: 0;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .mobile-track-nav {
+    order: 1;
+    flex-shrink: 0;
+  }
+
+  /* Waveform inner layout — identical to portrait but re-declared for safety */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
+    order: 2;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    /* Slightly less padding than portrait since the REVIEW button is shorter */
+    padding-bottom: 38px;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    flex-shrink: 0;
+    padding: 3px 0;
+    margin: 0;
+    pointer-events: auto;
+    order: 1;
+  }
+
+  /* ── Project selector: compact height, dropdown opens UPWARD ────────── */
+  /* The selector is now at the bottom of the screen. If the dropdown opened
+     downward it would be clipped by the transport bar. Flip it upward with
+     a small gap so it clears the waveform/pill strip above. */
+  .mobile-project-selector-btn {
+    min-height: 32px;
+    padding: 4px 8px;
+  }
+
+  .mobile-project-dropdown {
+    /* Override the portrait downward position */
+    top: auto;
+    bottom: calc(100% + 6px);
+  }
+
+  /* ── Track list: horizontal pill strip ──────────────────────────────── */
   /* Hide the "Stems" label — too wide in landscape */
   .mobile-track-nav-label {
     display: none;
   }
 
-  /* Compact horizontal pill strip instead of the tall vertical list */
+  /* Compact horizontal scrollable pill strip */
   .mobile-track-nav-list {
     flex-direction: row;
     max-height: none;
@@ -3105,16 +3194,6 @@ h2 {
     height: 36px;
     font-size: 18px;
     min-width: 110px;
-  }
-
-  /* Tighten review console vertical padding in landscape multitrack layout */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {
-    padding: 3px 0;
-  }
-
-  /* Smaller gap in landscape since the REVIEW button is shorter */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
-    padding-bottom: 38px;
   }
 }
 
