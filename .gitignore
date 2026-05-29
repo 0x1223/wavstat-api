@@ -15,6 +15,9 @@ dist-ssr
 .env.*
 !.env.example
 
+# C++ plugin build artifacts
+kingz_listen_plugin/build/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
