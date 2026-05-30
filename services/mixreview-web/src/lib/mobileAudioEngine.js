@@ -817,6 +817,10 @@ export function mountMobileEngine(container, url, handlers) {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
         })
+        .then((peaks) => {
+          if (!Array.isArray(peaks) || peaks.length === 0) return null;
+          return Array.isArray(peaks[0]) ? peaks : [peaks];
+        })
         .catch((err) => {
           console.warn("[MixReview] Peaks fetch failed — falling back to full decode:", err.message);
           return null;

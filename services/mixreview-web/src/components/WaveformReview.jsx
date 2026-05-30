@@ -7,6 +7,42 @@ function getPlaybackUrl(audioSource) {
   return audioSource?.previewUrl || audioSource?.playbackUrl || audioSource?.url || "";
 }
 
+const STATIC_WAVEFORM_CURVE = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
+
+function buildStaticPeaks(length = 300) {
+  return [Array.from({ length }, (_, i) => STATIC_WAVEFORM_CURVE[i % STATIC_WAVEFORM_CURVE.length])];
+}
+
+function normalizePeaks(peaks) {
+  if (!Array.isArray(peaks) || peaks.length === 0) {
+    return null;
+  }
+  return Array.isArray(peaks[0]) ? peaks : [peaks];
+}
+
+function fetchPeaks(peaksUrl, timeoutMs = 800) {
+  if (!peaksUrl) {
+    return Promise.resolve(null);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(peaksUrl, { signal: controller.signal })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then(normalizePeaks)
+    .catch((error) => {
+      if (error?.name !== "AbortError") {
+        console.warn("[WaveformReview] Peaks fetch failed — using static peaks", error.message);
+      }
+      return null;
+    })
+    .finally(() => window.clearTimeout(timeoutId));
+}
+
 
 export function WaveformReview({
   audioSource,
@@ -263,6 +299,7 @@ export function WaveformReview({
       // Mobile: singleton engine — survives React re-renders and comment state changes
       console.log("[WaveformReview] Mobile decode start", { url: playbackUrl.slice(0, 100) });
       const ws = mountMobileEngine(containerRef.current, playbackUrl, {
+        peaksUrl: audioSource?.peaksUrl || null,
         onReady: (player) => {
           console.log("[WaveformReview] Mobile decode success");
           setIsLoading(false);
@@ -319,24 +356,7 @@ export function WaveformReview({
     let decodeTimeout = null;
     let audioReadyTimer = null;
 
-    // ── HLS peak bypass ─────────────────────────────────────────────────────
-    // HLS streams (.m3u8) must never be decoded on the frontend. WaveSurfer's
-    // default path (fetch → decodeAudioData) downloads every segment into an
-    // ArrayBuffer and runs WebAudio decoding, causing severe lag on Android
-    // and crashes on old iOS/WebKit where decodeAudioData rejects HLS.
-    //
-    // When isHLSStream: supply peaks directly to WaveSurfer so it renders
-    // immediately and skips all fetch+decodeAudioData work. The <audio>
-    // element is still created from the URL for normal playback — only the
-    // peak extraction path is bypassed.
-    //
-    // Plain JS arrays throughout — no Float32Array/typed-array construction —
-    // to avoid Safari/Android WebView compatibility issues.
-    const isHLSStream = /\.m3u8(\?|$)/i.test(playbackUrl ?? "");
-    const staticCurve = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
-    const precalcPeaks = isHLSStream
-      ? [Array.from({ length: 300 }, (_, i) => staticCurve[i % staticCurve.length])]
-      : undefined;
+    const peaksFetch = fetchPeaks(audioSource?.peaksUrl || null);
 
     // Defer DOM binding past first paint — same frame budget for initial load
     // and all subsequent manual track switches.
@@ -347,20 +367,14 @@ export function WaveformReview({
         url: playbackUrl.slice(0, 120),
         ext,
         fileSize,
-        hlsBypass: isHLSStream,
-        peaksSource: isHLSStream
-          ? (audioSource?.peaks ? "backend" : "static-fallback")
-          : "wavesurfer-decode",
+        peaksUrl: audioSource?.peaksUrl || null,
       });
 
       // containerRef, height (180), and fillParent are intentionally fixed —
       // do not alter them; the waveform canvas must not shift or resize.
       wavesurfer = WaveSurfer.create({
         container: containerRef.current,
-        url: playbackUrl,
-        // HLS only: pre-calculated peaks suppress fetch+decodeAudioData entirely.
-        // Direct audio files (WAV/MP3/FLAC/etc.): omit so WaveSurfer decodes real peaks.
-        ...(precalcPeaks && { peaks: precalcPeaks }),
+        backend: "MediaElement",
         waveColor: "#6d6457",
         progressColor: "#d6a354",
         cursorColor: "#f5efe3",
@@ -373,7 +387,9 @@ export function WaveformReview({
         autoCenter: false,
         normalize: true,
         dragToSeek: true,
-        fillParent: true
+        fillParent: true,
+        pixelRatio: 1,
+        minPxPerSec: 1,
       });
 
       wavesurferRef.current = wavesurfer;
@@ -539,6 +555,27 @@ export function WaveformReview({
       wavesurfer.on("finish", () => {
         if (!isDisposed) callbacksRef.current.onPlaybackChange(false);
       });
+
+      peaksFetch.then((peaks) => {
+        if (isDisposed || !wavesurfer) return;
+        const resolvedPeaks = peaks || buildStaticPeaks();
+        console.log("[WaveformReview] Desktop loading with precomputed peaks", {
+          source: peaks ? "peaksUrl" : "static",
+          points: resolvedPeaks[0]?.length || 0,
+        });
+        wavesurfer.load(playbackUrl, resolvedPeaks).catch((error) => {
+          if (isDisposed || hasLoaded) return;
+          console.warn("[WaveformReview] Desktop load failed", error?.message ?? String(error));
+          hasLoaded = true;
+          clearTimeout(decodeTimeout);
+          clearTimeout(audioReadyTimer);
+          setIsLoading(false);
+          setLoadError("This audio file could not be loaded. Try a WAV or MP3 file.");
+          callbacksRef.current.onReady(null);
+          callbacksRef.current.onDurationChange(0);
+          callbacksRef.current.onPlaybackChange(false);
+        });
+      });
     });
 
     return () => {
@@ -552,7 +589,7 @@ export function WaveformReview({
       }
       resizeObserver.disconnect();
     };
-  }, [audioSource?.previewUrl, audioSource?.playbackUrl, audioSource?.url]);
+  }, [audioSource?.previewUrl, audioSource?.playbackUrl, audioSource?.url, audioSource?.peaksUrl]);
 
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
