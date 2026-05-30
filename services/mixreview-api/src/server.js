@@ -111,6 +111,7 @@ sessionRouter.post("/:sessionId/confirm-audio", requireAdminAuth, confirmAudioUp
 app.use("/api/sessions", sessionRouter);
 app.post("/api/audio/upload", upload.single("audio"), handleAudioUpload);
 app.post("/api/get-presigned-url", requireAdminAuth, getPresignedUploadUrl);
+app.delete("/api/tracks/:id", requireAdminAuth, deleteTrack);
 
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError) {
@@ -1062,6 +1063,84 @@ async function deleteSession(req, res, next) {
   return res.json({ ok: true, deleted: sessionId });
 }
 
+async function deleteTrack(req, res, next) {
+  try {
+    const trackId = sanitizePathSegment(req.params.id);
+    if (!trackId) {
+      return res.status(400).json({ error: "Valid track id is required." });
+    }
+
+    const database = await readDatabase();
+    const sessionSummaries = Array.isArray(database.sessions) ? database.sessions : [];
+    const sessionUpdates = [];
+    const r2Keys = new Set();
+
+    for (const summary of sessionSummaries) {
+      const sessionId = sanitizeSessionId(summary.id);
+      if (!sessionId) continue;
+
+      const session = await readSessionDocument(sessionId).catch(() => null);
+      const tracks = Array.isArray(session?.tracks) ? session.tracks : [];
+      const trackIndex = tracks.findIndex((track) => track.id === trackId);
+      if (trackIndex < 0) continue;
+
+      const deletedTrack = tracks[trackIndex];
+      collectTrackAudioKeys(deletedTrack, r2Keys);
+
+      const nextTracks = tracks.filter((track) => track.id !== trackId);
+      const fallbackTrack = nextTracks[trackIndex] || nextTracks[trackIndex - 1] || nextTracks[0] || null;
+      const nextAlbums = Array.isArray(session.albums)
+        ? session.albums.map((album) => ({
+            ...album,
+            trackIds: (Array.isArray(album.trackIds) ? album.trackIds : []).filter((id) => id !== trackId),
+          }))
+        : session.albums;
+      const activeVersion =
+        fallbackTrack?.versions?.find((version) => version.id === fallbackTrack.activeVersionId) ||
+        fallbackTrack?.versions?.[0] ||
+        null;
+
+      const nextSession = normalizeSessionDocument({
+        ...session,
+        tracks: nextTracks,
+        albums: nextAlbums,
+        activeTrackId: session.activeTrackId === trackId ? fallbackTrack?.id || null : session.activeTrackId,
+        activeVersionId: session.activeTrackId === trackId ? activeVersion?.id || "version-v1" : session.activeVersionId,
+        versions: session.activeTrackId === trackId ? fallbackTrack?.versions || [] : session.versions,
+        updatedAt: new Date().toISOString(),
+      });
+
+      sessionUpdates.push({ sessionId, nextSession });
+    }
+
+    if (sessionUpdates.length === 0) {
+      return res.status(404).json({ error: "Track not found." });
+    }
+
+    const deletedObjects = hasR2Config ? await deleteTrackAudioObjects(r2Keys) : 0;
+    for (const { sessionId, nextSession } of sessionUpdates) {
+      await writeSessionDocument(sessionId, nextSession);
+      await upsertSessionIndex(nextSession);
+    }
+
+    console.log("[MixReview] Track deleted", {
+      trackId,
+      sessions: sessionUpdates.map((update) => update.sessionId),
+      r2ObjectCount: r2Keys.size,
+      deletedObjects,
+    });
+
+    return res.json({
+      ok: true,
+      deleted: trackId,
+      sessions: sessionUpdates.map((update) => update.sessionId),
+      deletedObjects,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 // purgeSessionFromR2 — lists and batch-deletes every R2 object whose key
 // starts with sessions/{sessionId}/. Handles pagination so sessions with
 // large numbers of audio files (multi-track, multi-version) are fully cleared.
@@ -1110,6 +1189,67 @@ async function purgeSessionFromR2(sessionId) {
   } while (continuationToken);
 
   return totalDeleted;
+}
+
+function collectTrackAudioKeys(track, keySet) {
+  const versions = Array.isArray(track?.versions) ? track.versions : [];
+  versions.forEach((version) => {
+    const metadata = version?.audioMetadata;
+    if (!metadata) return;
+    addAudioMetadataKey(metadata.key, keySet);
+    addAudioMetadataKey(metadata.previewKey, keySet);
+    addAudioMetadataKey(keyFromPlaybackUrl(metadata.originalUrl), keySet);
+    addAudioMetadataKey(keyFromPlaybackUrl(metadata.previewUrl), keySet);
+  });
+}
+
+function addAudioMetadataKey(key, keySet) {
+  if (typeof key === "string" && key && !key.includes("..")) {
+    keySet.add(key);
+  }
+}
+
+function keyFromPlaybackUrl(value) {
+  if (typeof value !== "string" || !value) return null;
+  const marker = "/api/audio/playback/";
+  const markerIndex = value.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const encodedKey = value.slice(markerIndex + marker.length).split(/[?#]/)[0];
+  try {
+    return decodeURIComponent(encodedKey);
+  } catch {
+    return null;
+  }
+}
+
+async function deleteTrackAudioObjects(keySet) {
+  const keys = [...keySet];
+  if (keys.length === 0) return 0;
+
+  let deletedCount = 0;
+  for (let index = 0; index < keys.length; index += 1000) {
+    const batch = keys.slice(index, index + 1000).map((Key) => ({ Key }));
+    const response = await r2Client.send(
+      new DeleteObjectsCommand({
+        Bucket: r2Config.bucketName,
+        Delete: { Objects: batch, Quiet: false },
+      })
+    );
+    const failed = response.Errors?.length || 0;
+    if (failed > 0) {
+      console.warn("[MixReview] Partial R2 delete failure during track delete", {
+        failedCount: failed,
+        sample: response.Errors.slice(0, 5).map((error) => ({
+          key: error.Key,
+          code: error.Code,
+          message: error.Message,
+        })),
+      });
+    }
+    deletedCount += batch.length - failed;
+  }
+
+  return deletedCount;
 }
 
 async function attachAudioToSession(sessionId, audio, versionId, trackId = "track-1") {
@@ -1587,7 +1727,9 @@ async function refreshSessionPlaybackUrls(session, req = null) {
     // Rebuild all three URL aliases at once so that whichever field the
     // frontend reads first (normalizeAudioUrl priority: playbackUrl →
     // audioUrl → url) it always gets a fresh, non-expired value.
-    const freshUrl = buildApiPlaybackUrl(req, key);
+    const originalUrl = buildApiPlaybackUrl(req, key);
+    const previewKey = version.audioMetadata.previewKey;
+    const freshUrl = previewKey ? buildApiPlaybackUrl(req, previewKey) : originalUrl;
 
     // Re-derive the peaks URL from the well-known naming convention.
     // peaksKey is never stored separately — it is always ${key}.peaks.json.
@@ -1600,6 +1742,8 @@ async function refreshSessionPlaybackUrls(session, req = null) {
         url: freshUrl,
         playbackUrl: freshUrl,
         audioUrl: freshUrl,
+        originalUrl,
+        previewUrl: previewKey ? freshUrl : version.audioMetadata.previewUrl || null,
         peaksUrl: freshPeaksUrl,
       }
     };

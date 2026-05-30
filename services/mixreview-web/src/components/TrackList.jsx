@@ -1,4 +1,5 @@
 import { useState, useMemo, memo, useCallback } from "react";
+import { apiUrl } from "../config/api.js";
 
 const AUDIO_ACCEPT = [
   ".flac",
@@ -27,25 +28,50 @@ const TrackRow = memo(function TrackRow({
   isActive,
   canEdit,
   onTrackSelect,
+  onTrackDelete,
   onDragStart,  // (e, trackId) — stable useCallback from parent
   onDragEnd,    // ()           — stable useCallback from parent
+  isDeleting,
 }) {
   const activeVersion =
     track.versions.find((v) => v.id === track.activeVersionId) ||
     track.versions[0];
 
   return (
-    <button
-      type="button"
-      className={isActive ? "active" : ""}
+    <div
+      style={{ display: "grid", gap: "6px", minWidth: "180px" }}
       draggable={canEdit}
       onDragStart={canEdit ? (e) => onDragStart(e, track.id) : undefined}
       onDragEnd={onDragEnd}
-      onClick={() => onTrackSelect(track.id)}
     >
-      <span>{track.title || `Track ${index + 1}`}</span>
-      <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
-    </button>
+      <button
+        type="button"
+        className={isActive ? "active" : ""}
+        onClick={() => onTrackSelect(track.id)}
+      >
+        <span>{track.title || `Track ${index + 1}`}</span>
+        <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
+      </button>
+      {canEdit && (
+        <button
+          type="button"
+          disabled={isDeleting}
+          onClick={(event) => {
+            event.stopPropagation();
+            onTrackDelete(track.id);
+          }}
+          style={{
+            minWidth: "auto",
+            minHeight: "30px",
+            padding: "6px 10px",
+            color: "#ffb5a8",
+            justifyItems: "center",
+          }}
+        >
+          {isDeleting ? "Deleting" : "Delete"}
+        </button>
+      )}
+    </div>
   );
 });
 
@@ -68,10 +94,18 @@ export const TrackList = memo(function TrackList({
   const [renamingAlbumId, setRenamingAlbumId] = useState(null);
   const [renameValue,     setRenameValue]     = useState("");
   const [dragOverAlbumId, setDragOverAlbumId] = useState(null);
+  const [deletedTrackIds, setDeletedTrackIds] = useState(() => new Set());
+  const [deletingTrackId, setDeletingTrackId] = useState(null);
+  const [deleteError, setDeleteError] = useState("");
 
   // ── Memoized derived data ─────────────────────────────────────────────────
   // Prevents O(n) recomputation on every render caused by unrelated state
   // changes (collapse toggle, rename input, drag state, etc.).
+
+  const visibleTracks = useMemo(
+    () => tracks.filter((track) => !deletedTrackIds.has(track.id)),
+    [deletedTrackIds, tracks],
+  );
 
   const effectiveAlbums = useMemo(
     () => (Array.isArray(albums) && albums.length > 0 ? albums : []),
@@ -79,14 +113,14 @@ export const TrackList = memo(function TrackList({
   );
 
   const importedTracks = useMemo(
-    () => tracks.filter((t) => t.versions.some((v) => v.audioSource)),
-    [tracks],
+    () => visibleTracks.filter((t) => t.versions.some((v) => v.audioSource)),
+    [visibleTracks],
   );
 
   // O(1) track lookup by id — rebuilt only when the tracks array identity changes.
   const trackMap = useMemo(
-    () => Object.fromEntries(tracks.map((t) => [t.id, t])),
-    [tracks],
+    () => Object.fromEntries(visibleTracks.map((t) => [t.id, t])),
+    [visibleTracks],
   );
 
   const assignedIds = useMemo(
@@ -96,8 +130,8 @@ export const TrackList = memo(function TrackList({
 
   // Safety net: tracks that somehow slipped through without an album assignment.
   const unassignedTracks = useMemo(
-    () => tracks.filter((t) => !assignedIds.has(t.id)),
-    [tracks, assignedIds],
+    () => visibleTracks.filter((t) => !assignedIds.has(t.id)),
+    [visibleTracks, assignedIds],
   );
 
   // ── Stable event handlers (stable refs → TrackRow memo holds) ─────────────
@@ -145,10 +179,43 @@ export const TrackList = memo(function TrackList({
 
   const handleDragEnd = useCallback(() => setDragOverAlbumId(null), []);
 
+  const handleTrackDelete = useCallback(async (trackId) => {
+    if (!canEdit || !trackId || deletingTrackId) return;
+    const confirmed = window.confirm("Delete this track and its stored audio files?");
+    if (!confirmed) return;
+
+    setDeleteError("");
+    setDeletingTrackId(trackId);
+    try {
+      const adminKey = import.meta.env.VITE_ADMIN_API_KEY;
+      const response = await fetch(apiUrl(`/api/tracks/${encodeURIComponent(trackId)}`), {
+        method: "DELETE",
+        headers: adminKey ? { Authorization: `Bearer ${adminKey}` } : {},
+      });
+      if (!response.ok && response.status !== 204) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "Track could not be deleted.");
+      }
+
+      setDeletedTrackIds((current) => {
+        const next = new Set(current);
+        next.add(trackId);
+        return next;
+      });
+
+      if (trackId === activeTrackId) {
+        const fallbackTrack = visibleTracks.find((track) => track.id !== trackId);
+        if (fallbackTrack) onTrackSelect(fallbackTrack.id);
+      }
+    } catch (error) {
+      setDeleteError(error.message || "Track could not be deleted.");
+    } finally {
+      setDeletingTrackId(null);
+    }
+  }, [activeTrackId, canEdit, deletingTrackId, onTrackSelect, visibleTracks]);
+
   // ── Render ────────────────────────────────────────────────────────────────
-  const isEmpty =
-    tracks.length === 0 &&
-    effectiveAlbums.every((a) => (a.trackIds || []).length === 0);
+  const isEmpty = visibleTracks.length === 0;
 
   return (
     <section className="track-list-panel" aria-label="Project tracks">
@@ -156,6 +223,7 @@ export const TrackList = memo(function TrackList({
         <div>
           <p className="eyebrow">Project Tracks</p>
           <h2>{importedTracks.length} imported</h2>
+          {deleteError && <p className="upload-error">{deleteError}</p>}
         </div>
       </div>
 
@@ -289,8 +357,10 @@ export const TrackList = memo(function TrackList({
                         isActive={track.id === activeTrackId}
                         canEdit={canEdit}
                         onTrackSelect={onTrackSelect}
+                        onTrackDelete={handleTrackDelete}
                         onDragStart={handleDragStart}
                         onDragEnd={handleDragEnd}
+                        isDeleting={deletingTrackId === track.id}
                       />
                     ))}
                     {albumTracks.length === 0 && isDragTarget && (
@@ -312,8 +382,10 @@ export const TrackList = memo(function TrackList({
                   isActive={track.id === activeTrackId}
                   canEdit={false}
                   onTrackSelect={onTrackSelect}
+                  onTrackDelete={handleTrackDelete}
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
+                  isDeleting={false}
                 />
               ))}
             </div>
