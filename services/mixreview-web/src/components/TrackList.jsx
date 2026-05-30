@@ -48,6 +48,7 @@ const TrackRow = memo(function TrackRow({
   canEdit,
   onTrackSelect,
   onTrackDelete,
+  onTrackReplace,
   onDragStart,
   onDragEnd,
   isDeleting,
@@ -72,19 +73,34 @@ const TrackRow = memo(function TrackRow({
         <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
       </button>
       {canEdit && (
-        <button
-          type="button"
-          className={`track-row-delete${isDeleting ? " is-deleting" : ""}`}
-          disabled={isDeleting}
-          onClick={(e) => {
-            e.stopPropagation();
-            onTrackDelete(track.id);
-          }}
-          aria-label="Delete stem"
-          tabIndex={-1}
-        >
-          {isDeleting ? "…" : "Delete"}
-        </button>
+        <div className="track-row-actions" aria-label="Track actions">
+          <label className="track-row-replace">
+            <input
+              type="file"
+              accept={AUDIO_ACCEPT}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onTrackReplace(track.id, file);
+                event.target.value = "";
+              }}
+              tabIndex={-1}
+            />
+            <span>Replace</span>
+          </label>
+          <button
+            type="button"
+            className={`track-row-delete${isDeleting ? " is-deleting" : ""}`}
+            disabled={isDeleting}
+            onClick={(e) => {
+              e.stopPropagation();
+              onTrackDelete(track.id);
+            }}
+            aria-label="Delete stem"
+            tabIndex={-1}
+          >
+            {isDeleting ? "…" : "Delete"}
+          </button>
+        </div>
       )}
     </div>
   );
@@ -107,6 +123,7 @@ export const TrackList = memo(function TrackList({
   activeTrackId,
   canEdit,
   onTrackSelect,
+  onTrackReplace,
   onTrackUpload,
   onCreateAlbum,
   onRenameAlbum,
@@ -331,8 +348,17 @@ export const TrackList = memo(function TrackList({
                       />
                     ) : (
                       <span
-                        className="album-title"
-                        title={canEdit ? "Double-click to rename" : undefined}
+                        className={`album-title${isStemProject ? " album-title-preview" : ""}`}
+                        title={
+                          isStemProject
+                            ? "Click to preview stem session"
+                            : canEdit ? "Double-click to rename" : undefined
+                        }
+                        onClick={() => {
+                          if (isStemProject && album.trackIds?.[0]) {
+                            onTrackSelect(album.trackIds[0], { previewStemAlbumId: album.id });
+                          }
+                        }}
                         onDoubleClick={() => canEdit && startRename(album)}
                       >
                         {album.title}
@@ -403,6 +429,7 @@ export const TrackList = memo(function TrackList({
                         canEdit={canEdit}
                         onTrackSelect={onTrackSelect}
                         onTrackDelete={handleTrackDelete}
+                        onTrackReplace={onTrackReplace}
                         onDragStart={handleDragStart}
                         onDragEnd={handleDragEnd}
                         isDeleting={deletingTrackId === track.id}
@@ -431,6 +458,7 @@ export const TrackList = memo(function TrackList({
                   canEdit={false}
                   onTrackSelect={onTrackSelect}
                   onTrackDelete={handleTrackDelete}
+                  onTrackReplace={onTrackReplace}
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
                   isDeleting={false}

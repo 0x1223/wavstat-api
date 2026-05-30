@@ -160,6 +160,7 @@ export default function App({ onFirstRender } = {}) {
   const [tracks, setTracks] = useState(initialTracks);
   const [albums, setAlbums] = useState(initialAlbums);
   const [activeTrackId, setActiveTrackId] = useState(initialActiveTrackId);
+  const [activeStemPreviewAlbumId, setActiveStemPreviewAlbumId] = useState(null);
   const [currentReviewer, setCurrentReviewer] = useState(
     initialReviewer,
   );
@@ -261,7 +262,8 @@ export default function App({ onFirstRender } = {}) {
     () => albums.find((a) => (a.trackIds || []).includes(activeTrackId)) ?? albums[0] ?? null,
     [activeTrackId, albums],
   );
-  const isActiveStemProject = activeAlbum?.type === "stem_project";
+  const isActiveStemProject =
+    activeAlbum?.type === "stem_project" && activeStemPreviewAlbumId === activeAlbum?.id;
 
   // Build the ordered stems array for StemPlayer (admin stem-project view only).
   // Each entry mirrors the shape StemPlayer expects: { id, title, audioSource }.
@@ -433,6 +435,7 @@ export default function App({ onFirstRender } = {}) {
     setTracks(nextTracks);
     setAlbums(buildInitialAlbums(session));
     setActiveTrackId(nextActiveTrackId);
+    setActiveStemPreviewAlbumId(null);
     setVersions(nextVersions);
     setActiveVersionId(
       routeVersionId && nextVersions.some((version) => version.id === routeVersionId)
@@ -524,6 +527,7 @@ export default function App({ onFirstRender } = {}) {
           clearSharedSession(routeSessionId);
           setTracks([]);
           setActiveTrackId(null);
+          setActiveStemPreviewAlbumId(null);
           setVersions(createEmptyVersions());
           setActiveVersionId("version-v1");
           setHasStarted(false);
@@ -716,7 +720,7 @@ export default function App({ onFirstRender } = {}) {
     });
   }, [ensureSessionPersisted]);
 
-  const handleAudioUpload = useCallback(async (file) => {
+  const handleAudioUpload = useCallback(async (file, requestedTrackId = null) => {
     if (!permissions.canEdit) {
       return;
     }
@@ -731,8 +735,13 @@ export default function App({ onFirstRender } = {}) {
     }
 
     const title = deriveProjectTitle(file.name);
-    const targetTrackId = activeTrackId || createTrackId(title);
-    const targetVersionId = activeVersionId || "version-v1";
+    const syncedTracks = syncActiveTrack(tracks, activeTrackId, versions, activeVersionId);
+    const requestedTrack = requestedTrackId
+      ? syncedTracks.find((track) => track.id === requestedTrackId)
+      : null;
+    const targetTrackId = requestedTrack?.id || activeTrackId || createTrackId(title);
+    const targetVersions = requestedTrack?.versions || versions;
+    const targetVersionId = requestedTrack?.activeVersionId || activeVersionId || "version-v1";
     setUploadError("Uploading audio to session storage...");
     setSessionMessage("");
 
@@ -770,6 +779,7 @@ export default function App({ onFirstRender } = {}) {
           idx === 0 ? { ...album, trackIds: [...album.trackIds, targetTrackId] } : album
         ));
         setActiveTrackId(targetTrackId);
+        setActiveStemPreviewAlbumId(null);
         setVersions(nextVersions);
         setActiveVersionId(targetVersionId);
         return;
@@ -779,7 +789,7 @@ export default function App({ onFirstRender } = {}) {
       // `versions` is the closure value captured when this handler was last
       // created — it belongs to `targetTrackId`, not to whatever track may be
       // active now if the user switched tracks during the async upload.
-      const uploadedVersions = versions.map((version) =>
+      const uploadedVersions = targetVersions.map((version) =>
         version.id === targetVersionId
           ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
           : version,
@@ -819,7 +829,11 @@ export default function App({ onFirstRender } = {}) {
     } catch (error) {
       setUploadError(error.message || "Audio upload failed.");
     }
-  }, [activeTrackId, activeVersionId, currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, versions]);
+  }, [activeTrackId, activeVersionId, currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, tracks, versions]);
+
+  const handleTrackReplaceUpload = useCallback((trackId, file) => {
+    handleAudioUpload(file, trackId);
+  }, [handleAudioUpload]);
 
   // handleTrackUpload accepts an array of File objects (from a multi-select picker)
   // or a single File for backwards compatibility.
@@ -972,6 +986,7 @@ export default function App({ onFirstRender } = {}) {
     // Activate the last successfully uploaded track.
     const lastTrack = allNewTracks[allNewTracks.length - 1];
     setActiveTrackId(lastTrack.id);
+    setActiveStemPreviewAlbumId(null);
     setVersions(lastTrack.versions);
     setActiveVersionId("version-v1");
     setCurrentTime(0);
@@ -1075,6 +1090,7 @@ export default function App({ onFirstRender } = {}) {
         selectTrackRef.current?.(remaining[0].id);
       } else {
         setActiveTrackId(null);
+        setActiveStemPreviewAlbumId(null);
         setVersions(createEmptyVersions());
         setActiveVersionId("version-v1");
       }
@@ -1098,6 +1114,7 @@ export default function App({ onFirstRender } = {}) {
     setTracks([]);
     setAlbums([{ id: "album-default", title: emptyProjectName, type: "album", trackIds: [], createdAt: new Date().toISOString() }]);
     setActiveTrackId(null);
+    setActiveStemPreviewAlbumId(null);
     setVersions(createEmptyVersions());
     setCurrentReviewer("Engineer");
     setActiveVersionId("version-v1");
@@ -1342,6 +1359,11 @@ export default function App({ onFirstRender } = {}) {
       trackId,
     );
   }, [activeTrackId, activeVersionId, isEngineerMode, sessionId, tracks, versions]);
+
+  const selectProjectTrack = useCallback((trackId, options = {}) => {
+    setActiveStemPreviewAlbumId(options.previewStemAlbumId || null);
+    selectTrack(trackId);
+  }, [selectTrack]);
 
   // Called by MobileTrackNav whenever the reviewer picks a project from the
   // dropdown (or when the auto-switch fires). Switches both the reviewer album
@@ -2299,7 +2321,8 @@ export default function App({ onFirstRender } = {}) {
             albums={albums}
             activeTrackId={activeTrackId}
             canEdit={canUploadAudio}
-            onTrackSelect={selectTrack}
+            onTrackSelect={selectProjectTrack}
+            onTrackReplace={handleTrackReplaceUpload}
             onTrackUpload={handleTrackUpload}
             onCreateAlbum={handleCreateAlbum}
             onRenameAlbum={handleRenameAlbum}
@@ -2308,7 +2331,7 @@ export default function App({ onFirstRender } = {}) {
             onDeleteProject={handleDeleteProject}
           />
 
-          {(permissions.canEdit || !hasPlayableAudio) && (
+          {!hasPlayableAudio && (
             <AudioUpload
               audioSource={audioSource}
               duration={duration}

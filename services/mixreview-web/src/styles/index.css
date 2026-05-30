@@ -987,19 +987,53 @@ h2 {
   color: var(--soft);
 }
 
-/* ── Track row: container for the card + hover-only delete ──────────────── */
+/* ── Track row: container for the card + hover-only actions ─────────────── */
 .track-row {
   position: relative;
   min-width: 180px;
 }
 
-/* Override all .track-list button defaults for the delete link */
-.track-list .track-row-delete {
+.track-row-actions {
   position: absolute;
   bottom: 11px;
   right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
   opacity: 0;
   pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.track-list .track-row:hover .track-row-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.track-row-replace {
+  position: relative;
+  display: inline-flex;
+  color: rgba(215, 173, 98, 0.72);
+  font-size: 0.67rem;
+  font-weight: 800;
+  letter-spacing: 0.025em;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.track-row-replace:hover {
+  color: rgba(242, 200, 117, 1);
+}
+
+.track-row-replace input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Override all .track-list button defaults for the delete link */
+.track-list .track-row-delete {
   background: none;
   border: none;
   padding: 0;
@@ -1011,12 +1045,7 @@ h2 {
   color: rgba(255, 100, 80, 0.65);
   cursor: pointer;
   letter-spacing: 0.025em;
-  transition: opacity 140ms ease, color 140ms ease;
-}
-
-.track-list .track-row:hover .track-row-delete {
-  opacity: 1;
-  pointer-events: auto;
+  transition: color 140ms ease;
 }
 
 .track-list .track-row-delete:hover {
@@ -1106,6 +1135,14 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: default;
+}
+
+.album-title-preview {
+  cursor: pointer;
+}
+
+.album-title-preview:hover {
+  color: #f2c875;
 }
 
 .album-track-count {
