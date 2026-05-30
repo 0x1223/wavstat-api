@@ -21,10 +21,9 @@ const col = (i) => LANE_COLOURS[i % LANE_COLOURS.length];
 // Drift threshold for follower re-sync during playback (seconds).
 // Below this, normal clock variance; above it, we force a setTime() correction.
 const DRIFT_THRESHOLD = 0.08;
-const STATIC_WAVEFORM_CURVE = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
 
-function buildStaticPeaks(length = 240) {
-  return [Array.from({ length }, (_, i) => STATIC_WAVEFORM_CURVE[i % STATIC_WAVEFORM_CURVE.length])];
+function buildUnavailablePeaks(length = 240) {
+  return [Array.from({ length }, () => 0)];
 }
 
 function normalizePeaks(peaks) {
@@ -50,7 +49,7 @@ function fetchPeaks(peaksUrl, timeoutMs = 1200) {
     .then(normalizePeaks)
     .catch((error) => {
       if (error?.name !== "AbortError") {
-        console.warn("[StemPlayer] Peaks fetch failed; using static peaks", error.message);
+        console.warn("[StemPlayer] Peaks fetch failed; using neutral waveform", error.message);
       }
       return null;
     })
@@ -263,7 +262,7 @@ export const StemPlayer = memo(function StemPlayer({
           fetchPeaks(peaksUrl).then((peaks) => {
             if (disposed || !ws || loadStarted) return;
             loadStarted = true;
-            const resolvedPeaks = peaks || buildStaticPeaks();
+            const resolvedPeaks = peaks || buildUnavailablePeaks();
             ws.load(url, resolvedPeaks).catch((error) => {
               if (disposed) return;
               console.warn(`[StemPlayer] Lane ${i} ("${stem.title}") load failed:`, error?.message ?? error);

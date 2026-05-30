@@ -144,6 +144,7 @@ export function toStoredAudioMetadata(audioSource) {
     requiresTranscode: Boolean(audioSource.requiresTranscode),
     previewUrl: audioSource.previewUrl || null,
     previewKey: audioSource.previewKey || null,
+    peaksUrl: audioSource.peaksUrl || null,
     transcodedAt: audioSource.transcodedAt || null,
     objectUrl: audioSource.objectUrl || null,
     key: audioSource.key || null,
