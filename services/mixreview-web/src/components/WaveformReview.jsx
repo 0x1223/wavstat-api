@@ -20,7 +20,7 @@ function normalizePeaks(peaks) {
   return Array.isArray(peaks[0]) ? peaks : [peaks];
 }
 
-function fetchPeaks(peaksUrl, timeoutMs = 800) {
+function fetchPeaks(peaksUrl, timeoutMs = 2_500) {
   if (!peaksUrl) {
     return Promise.resolve(null);
   }
@@ -440,22 +440,21 @@ export function WaveformReview({
       }
 
       // ── Desktop decode timeout ────────────────────────────────────────────
-      // If WaveSurfer's fetch or decodeAudioData stalls, surface a clear
-      // message rather than leaving the UI stuck on "Preparing waveform".
-      const DESKTOP_TIMEOUT_MS = 45_000;
+      // If WaveSurfer's media metadata stalls, keep playback controls available
+      // instead of surfacing a hard waveform-generation failure.
+      const DESKTOP_TIMEOUT_MS = 90_000;
       decodeTimeout = setTimeout(() => {
         if (isDisposed || hasLoaded) return;
         hasLoaded = true;
-        console.warn("[WaveformReview] Desktop decode timeout after", DESKTOP_TIMEOUT_MS, "ms");
+        console.warn("[WaveformReview] Desktop metadata timeout after", DESKTOP_TIMEOUT_MS, "ms");
         const mediaEl = wavesurfer.getMediaElement?.();
-        if (mediaEl && !mediaEl.error && mediaEl.readyState >= 2) {
-          // Audio element has data even though waveform decode stalled — audio-only
+        if (mediaEl && !mediaEl.error) {
           mediaEl.muted = false;
           mediaEl.volume = 1;
           const dur = Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0;
           setDuration(dur);
           setIsLoading(false);
-          setLoadError("Waveform unavailable — audio is ready to play");
+          setLoadError("Waveform unavailable — audio-only mode");
           callbacksRef.current.onDurationChange(dur);
           callbacksRef.current.onReady({
             wavesurfer,
@@ -472,7 +471,7 @@ export function WaveformReview({
           });
         } else {
           setIsLoading(false);
-          setLoadError("Waveform generation timed out — please refresh and try again.");
+          setLoadError("Audio is still loading — switch tracks or try again.");
           callbacksRef.current.onReady(null);
           callbacksRef.current.onDurationChange(0);
           callbacksRef.current.onPlaybackChange(false);
@@ -569,11 +568,35 @@ export function WaveformReview({
           hasLoaded = true;
           clearTimeout(decodeTimeout);
           clearTimeout(audioReadyTimer);
-          setIsLoading(false);
-          setLoadError("This audio file could not be loaded. Try a WAV or MP3 file.");
-          callbacksRef.current.onReady(null);
-          callbacksRef.current.onDurationChange(0);
-          callbacksRef.current.onPlaybackChange(false);
+          const mediaEl = wavesurfer.getMediaElement?.();
+          if (mediaEl && !mediaEl.error) {
+            mediaEl.muted = false;
+            mediaEl.volume = 1;
+            const dur = Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0;
+            setDuration(dur);
+            setIsLoading(false);
+            setLoadError("Waveform unavailable — audio-only mode");
+            callbacksRef.current.onDurationChange(dur);
+            callbacksRef.current.onReady({
+              wavesurfer,
+              mediaElement: mediaEl,
+              play: async () => { await wavesurfer.play(); },
+              pause: () => wavesurfer.pause(),
+              playPause: async () => { await wavesurfer.playPause(); },
+              skip: (s) => wavesurfer.skip(s),
+              seekToTime: (time) => {
+                const t = Math.min(Math.max(time, 0), wavesurfer.getDuration() || dur || Infinity);
+                wavesurfer.setTime(t);
+                callbacksRef.current.onTimeUpdate(t);
+              },
+            });
+          } else {
+            setIsLoading(false);
+            setLoadError("Audio is still loading — switch tracks or try again.");
+            callbacksRef.current.onReady(null);
+            callbacksRef.current.onDurationChange(0);
+            callbacksRef.current.onPlaybackChange(false);
+          }
         });
       });
     });
@@ -585,6 +608,8 @@ export function WaveformReview({
       clearTimeout(audioReadyTimer);
       if (wavesurfer) {
         if (wavesurferRef.current === wavesurfer) wavesurferRef.current = null;
+        try { wavesurfer.pause(); } catch (_) {}
+        try { wavesurfer.unAll?.(); } catch (_) {}
         wavesurfer.destroy();
       }
       resizeObserver.disconnect();
