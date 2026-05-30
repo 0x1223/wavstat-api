@@ -53,10 +53,6 @@ const TrackRow = memo(function TrackRow({
   onDragEnd,
   isDeleting,
 }) {
-  const activeVersion =
-    track.versions.find((v) => v.id === track.activeVersionId) ||
-    track.versions[0];
-
   return (
     <div
       className="track-row"
@@ -70,7 +66,6 @@ const TrackRow = memo(function TrackRow({
         onClick={() => onTrackSelect(track.id)}
       >
         <span>{track.title || `Track ${index + 1}`}</span>
-        <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
       </button>
       {canEdit && (
         <div className="track-row-actions" aria-label="Track actions">

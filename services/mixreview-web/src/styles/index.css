@@ -496,6 +496,34 @@ h2 {
   white-space: nowrap;
 }
 
+.status-switch button.pending-review-summary,
+.approval-state-grid button.pending-review-summary {
+  display: grid;
+  gap: 2px;
+  align-content: center;
+  justify-items: center;
+  color: #fff3ea;
+  border-color: rgba(255, 109, 85, 0.54);
+  background: linear-gradient(180deg, #c44833, #8f241f);
+}
+
+.status-switch button.pending-review-summary small,
+.approval-state-grid button.pending-review-summary small {
+  font-size: 0.72rem;
+  font-weight: 900;
+  color: inherit;
+  opacity: 0.95;
+}
+
+.status-switch button.pending-review-summary.muted,
+.approval-state-grid button.pending-review-summary.muted {
+  color: rgba(207, 198, 182, 0.62);
+  border-color: rgba(255, 255, 255, 0.11);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
+    #121212;
+}
+
 .status-switch button:hover,
 .version-switcher button:hover,
 .session-actions button:hover,
@@ -766,6 +794,17 @@ h2 {
 .approval-state-grid button.active.approved {
   color: #07160f;
   background: #79d28d;
+}
+
+.status-switch button.pending-review-summary.muted,
+.approval-state-grid button.pending-review-summary.muted,
+.status-switch button.pending-review-summary.muted:hover,
+.approval-state-grid button.pending-review-summary.muted:hover {
+  color: rgba(207, 198, 182, 0.62);
+  border-color: rgba(255, 255, 255, 0.11);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
+    #121212;
 }
 
 .review-layout {

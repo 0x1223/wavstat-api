@@ -1,6 +1,6 @@
 const approvalStates = [
-  "Pending Review",
   "Needs Review",
+  "Pending Review",
   "Approved"
 ];
 
@@ -64,12 +64,21 @@ if (isMobile) {
           {approvalStates.map((state) => (
             <button
               type="button"
-              disabled={!canApprove || !statusState?.[state]?.enabled}
-              className={`${statusState?.[state]?.active || state === activeVersion.approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}`}
+              disabled={
+                !canApprove ||
+                !statusState?.[state]?.enabled ||
+                (state === "Pending Review" && !approvalCount.needsReview)
+              }
+              className={`${statusState?.[state]?.active || state === activeVersion.approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}${state === "Pending Review" ? " pending-review-summary" : ""}${state === "Pending Review" && !approvalCount.needsReview ? " muted" : ""}`}
               key={state}
               onClick={() => onApprovalChange(state)}
             >
-              {state}
+              {state === "Pending Review" ? (
+                <>
+                  <span>Pending Reviews</span>
+                  <small>{approvalCount.needsReview || 0}/{approvalCount.total || 0}</small>
+                </>
+              ) : state}
             </button>
           ))}
           <button type="button" disabled={!canSubmit} onClick={onSubmitFeedback}>

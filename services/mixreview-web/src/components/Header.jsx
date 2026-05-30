@@ -7,6 +7,7 @@ export function Header({
   backLabel = "Back to Start",
   onStatusChange,
   statusState,
+  reviewSummary,
   onVersionChange,
   onShareSession,
   onBackToStart,
@@ -16,8 +17,8 @@ export function Header({
   permissions,
 }) {
   const approvalStates = [
-    "Pending Review",
     "Needs Review",
+    "Pending Review",
     "Approved"
   ];
   const isBackToStart = backLabel === "Back to Start";
@@ -55,22 +56,6 @@ export function Header({
         </div>
         <div className="permission-badge">{permissions.label}</div>
 
-        {permissions.canEdit && (
-          <div className="version-switcher" aria-label="Mix versions">
-            {versions.map((version) => (
-              <button
-                type="button"
-                className={version.id === activeVersionId ? "active" : ""}
-                key={version.id}
-                onClick={() => onVersionChange(version.id)}
-              >
-                <span>{version.label}</span>
-                <small>{version.comments.length}</small>
-              </button>
-            ))}
-          </div>
-        )}
-
         {showAdminActions && (
           <div className="session-actions">
             <button type="button" onClick={handleBackClick}>
@@ -96,12 +81,20 @@ export function Header({
             {approvalStates.map((state) => (
               <button
                 type="button"
-                disabled={!statusState?.[state]?.enabled}
-                className={`${statusState?.[state]?.active || state === approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}`}
+                disabled={
+                  !statusState?.[state]?.enabled ||
+                  (state === "Pending Review" && !reviewSummary?.needsReview)
+                }
+                className={`${statusState?.[state]?.active || state === approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}${state === "Pending Review" ? " pending-review-summary" : ""}${state === "Pending Review" && !reviewSummary?.needsReview ? " muted" : ""}`}
                 key={state}
                 onClick={() => onStatusChange(state)}
               >
-                {state}
+                {state === "Pending Review" ? (
+                  <>
+                    <span>Pending Reviews</span>
+                    <small>{reviewSummary?.needsReview || 0}/{reviewSummary?.total || 0}</small>
+                  </>
+                ) : state}
               </button>
             ))}
           </div>

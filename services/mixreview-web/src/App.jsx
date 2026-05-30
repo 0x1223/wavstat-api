@@ -2222,6 +2222,7 @@ export default function App({ onFirstRender } = {}) {
           backLabel={isEngineerMode ? "Admin Dashboard" : "Back to Start"}
           onStatusChange={updateApprovalStatus}
           statusState={statusState}
+          reviewSummary={approvalSummary}
           onVersionChange={switchVersion}
           onShareSession={shareSession}
           onBackToStart={isEngineerMode ? openAdminDashboard : returnToStart}
@@ -3191,6 +3192,10 @@ function getTrackApprovalSummary(tracks) {
     approved: importedTracks.filter((track) => {
       const activeVersion = track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
       return activeVersion?.approvalStatus === "Approved";
+    }).length,
+    needsReview: importedTracks.filter((track) => {
+      const activeVersion = track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
+      return activeVersion?.approvalStatus === "Needs Review";
     }).length,
     total: importedTracks.length
   };
