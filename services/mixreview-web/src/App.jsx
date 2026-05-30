@@ -3188,14 +3188,21 @@ function getTrackApprovalSummary(tracks) {
   const importedTracks = tracks.filter((track) =>
     track.versions.some((version) => version.audioSource),
   );
+  const getActiveVersion = (track) =>
+    track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
+  const hasUnresolvedReview = (version) => {
+    const reviewComments = getSubmittedReviewComments(version?.comments || []);
+    return reviewComments.length > 0 && reviewComments.some((comment) => !comment.resolved);
+  };
+
   return {
     approved: importedTracks.filter((track) => {
-      const activeVersion = track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
+      const activeVersion = getActiveVersion(track);
       return activeVersion?.approvalStatus === "Approved";
     }).length,
     needsReview: importedTracks.filter((track) => {
-      const activeVersion = track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
-      return activeVersion?.approvalStatus === "Needs Review";
+      const activeVersion = getActiveVersion(track);
+      return activeVersion?.approvalStatus === "Needs Review" || hasUnresolvedReview(activeVersion);
     }).length,
     total: importedTracks.length
   };
