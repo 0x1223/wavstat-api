@@ -3191,7 +3191,9 @@ function getTrackApprovalSummary(tracks) {
   const getActiveVersion = (track) =>
     track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
   const hasUnresolvedReview = (version) => {
-    const reviewComments = getSubmittedReviewComments(version?.comments || []);
+    const reviewComments = (version?.comments || []).filter((comment) =>
+      reviewerIdentities.includes(comment.author),
+    );
     return reviewComments.length > 0 && reviewComments.some((comment) => !comment.resolved);
   };
 
