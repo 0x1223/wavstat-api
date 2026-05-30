@@ -1025,20 +1025,6 @@ export default function App({ onFirstRender } = {}) {
     setIsDirty(true);
   }, []);
 
-  // Called by MobileTrackNav whenever the reviewer picks a project from the
-  // dropdown (or when the auto-switch fires). Switches both the reviewer album
-  // reference and the active track so WaveformReview / MobileStemStack have
-  // valid audio to load.
-  const handleReviewerAlbumChange = useCallback((albumId) => {
-    setReviewerAlbumId(albumId);
-    const targetAlbum  = albums.find((a) => a.id === albumId);
-    const firstTrackId = targetAlbum?.trackIds?.[0];
-    // selectTrack handles pause + version reset; only call if switching tracks.
-    if (firstTrackId && firstTrackId !== activeTrackId) {
-      selectTrack(firstTrackId);
-    }
-  }, [albums, activeTrackId, selectTrack]);
-
   const handleUpdateAlbumType = useCallback((albumId, newType) => {
     if (!albumId) return;
     const validType = newType === "stem_project" ? "stem_project" : "album";
@@ -1320,6 +1306,20 @@ export default function App({ onFirstRender } = {}) {
       trackId,
     );
   }, [activeTrackId, activeVersionId, isEngineerMode, sessionId, tracks, versions]);
+
+  // Called by MobileTrackNav whenever the reviewer picks a project from the
+  // dropdown (or when the auto-switch fires). Switches both the reviewer album
+  // reference and the active track so WaveformReview / MobileStemStack have
+  // valid audio to load.
+  const handleReviewerAlbumChange = useCallback((albumId) => {
+    setReviewerAlbumId(albumId);
+    const targetAlbum  = albums.find((a) => a.id === albumId);
+    const firstTrackId = targetAlbum?.trackIds?.[0];
+    // selectTrack handles pause + version reset; only call if switching tracks.
+    if (firstTrackId && firstTrackId !== activeTrackId) {
+      selectTrack(firstTrackId);
+    }
+  }, [albums, activeTrackId, selectTrack]);
 
   // Keep selectTrackRef current so handleNativeEnded always invokes the latest
   // selectTrack without the ended listener needing to be re-attached every time
