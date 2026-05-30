@@ -1,5 +1,21 @@
 import { formatTimecode } from "../lib/time.js";
 
+const AUDIO_ACCEPT = [
+  ".flac",
+  ".aiff",
+  ".aif",
+  ".alac",
+  ".wav",
+  ".w64",
+  ".mp3",
+  ".aac",
+  ".m4a",
+  ".ogg",
+  ".opus",
+  ".wma",
+  "audio/*",
+].join(",");
+
 export function AudioUpload({ audioSource, duration, error, onFileSelect, disabled }) {
   return (
     <section className="upload-panel" aria-label="Audio upload">
@@ -19,7 +35,7 @@ export function AudioUpload({ audioSource, duration, error, onFileSelect, disabl
       <label className="upload-button">
         <input
           type="file"
-          accept="audio/*"
+          accept={AUDIO_ACCEPT}
           disabled={disabled}
           onChange={(event) => {
             onFileSelect(event.target.files?.[0]);

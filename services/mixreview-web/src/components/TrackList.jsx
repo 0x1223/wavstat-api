@@ -1,5 +1,21 @@
 import { useState, useMemo, memo, useCallback } from "react";
 
+const AUDIO_ACCEPT = [
+  ".flac",
+  ".aiff",
+  ".aif",
+  ".alac",
+  ".wav",
+  ".w64",
+  ".mp3",
+  ".aac",
+  ".m4a",
+  ".ogg",
+  ".opus",
+  ".wma",
+  "audio/*",
+].join(",");
+
 // ── TrackRow ──────────────────────────────────────────────────────────────────
 // Memoized individual track button. Skips reconciliation unless its specific
 // track reference, active state, or edit permission changes.
@@ -231,7 +247,7 @@ export const TrackList = memo(function TrackList({
                       <label className="upload-button compact small">
                         <input
                           type="file"
-                          accept="audio/*"
+                          accept={AUDIO_ACCEPT}
                           multiple
                           onChange={(event) => {
                             const files = Array.from(event.target.files || []);
@@ -250,7 +266,7 @@ export const TrackList = memo(function TrackList({
                     <label className="upload-button compact">
                       <input
                         type="file"
-                        accept="audio/*"
+                        accept={AUDIO_ACCEPT}
                         multiple
                         onChange={(event) => {
                           const files = Array.from(event.target.files || []);

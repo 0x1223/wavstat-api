@@ -143,31 +143,75 @@ async function handleAudioUpload(req, res, next) {
       sizeMB: (audioFile.size / 1_048_576).toFixed(2),
     });
 
-    const validation = validateStereoReviewAudio(audioFile);
-    if (!validation.ok) {
-      return res.status(415).json({ error: validation.error });
+    const classification = classifyAudioFormat(audioFile.originalname, audioFile.mimetype);
+    if (!classification.ok) {
+      return res.status(415).json({ error: classification.error });
     }
 
     const sessionId = sanitizeSessionId(req.params.sessionId);
-    const trackId = sanitizePathSegment(req.body?.trackId || "track-1");
+    const trackId   = sanitizePathSegment(req.body?.trackId   || "track-1");
     const versionId = sanitizePathSegment(req.body?.versionId || "version-v1");
-    const objectKey = buildAudioObjectKey(audioFile.originalname, validation.extension, {
-      sessionId,
-      trackId,
-      versionId
-    });
+
+    // Upload the lossless original to R2 under its natural extension.
+    const objectKey     = buildAudioObjectKey(audioFile.originalname, classification.ext, { sessionId, trackId, versionId });
     const storageResult = hasR2Config
-      ? await uploadAudioToR2(objectKey, audioFile, validation.contentType, req)
+      ? await uploadAudioToR2(objectKey, audioFile, classification.mimeType, req)
       : await saveAudioLocally(objectKey, audioFile, req);
+
+    const originalUrl = storageResult.playbackUrl;
+    let   playbackUrl = originalUrl;
+    let   previewKey  = null;
+
+    // For non-browser-native formats transcode to 256 kbps AAC inline (buffer is
+    // in memory here) and store the preview alongside the original in R2.
+    if (classification.requiresTranscode && hasR2Config) {
+      try {
+        const previewBuffer = await transcodeToAac(audioFile.buffer);
+        previewKey = objectKey.replace(/\.[^.]+$/, ".preview.m4a");
+        await r2Client.send(new PutObjectCommand({
+          Bucket: r2Config.bucketName, Key: previewKey,
+          Body: previewBuffer, ContentType: "audio/mp4",
+          CacheControl: "public, max-age=31536000",
+        }));
+        playbackUrl = buildApiPlaybackUrl(req, previewKey);
+        console.log("[MixReview] Inline transcode stored", { previewKey });
+      } catch (transcodeErr) {
+        // Non-fatal — WaveSurfer will surface its own decode error if the format
+        // is truly unplayable in the browser.
+        console.warn("[MixReview] Inline transcode failed; using original URL", {
+          file: audioFile.originalname, error: transcodeErr.message,
+        });
+      }
+    } else if (classification.requiresTranscode && !hasR2Config) {
+      try {
+        const previewBuffer = await transcodeToAac(audioFile.buffer);
+        previewKey = objectKey.replace(/\.[^.]+$/, ".preview.m4a");
+        const previewPath = path.join(uploadRoot, previewKey);
+        await mkdir(path.dirname(previewPath), { recursive: true });
+        await writeFile(previewPath, previewBuffer);
+        playbackUrl = `${req.protocol}://${req.get("host")}/uploads/${previewKey}`;
+        console.log("[MixReview] Local transcode stored", { previewKey });
+      } catch (transcodeErr) {
+        console.warn("[MixReview] Local transcode failed; using original URL", {
+          file: audioFile.originalname, error: transcodeErr.message,
+        });
+      }
+    }
+
     const audioPayload = {
-      key: objectKey,
-      playbackUrl: storageResult.playbackUrl,
-      peaksUrl: storageResult.peaksUrl || null,
-      fileName: audioFile.originalname,
-      contentType: validation.contentType,
-      size: audioFile.size,
-      storage: storageResult.storage,
-      uploadedAt: new Date().toISOString()
+      key:              objectKey,
+      playbackUrl,
+      originalUrl,
+      originalFormat:   classification.ext.slice(1),
+      requiresTranscode: classification.requiresTranscode,
+      previewUrl:       previewKey ? playbackUrl : null,
+      previewKey,
+      peaksUrl:         storageResult.peaksUrl || null,
+      fileName:         audioFile.originalname,
+      contentType:      classification.mimeType,
+      size:             audioFile.size,
+      storage:          storageResult.storage,
+      uploadedAt:       new Date().toISOString(),
     };
 
     if (sessionId) {
@@ -176,24 +220,30 @@ async function handleAudioUpload(req, res, next) {
 
     console.log("[MixReview] Upload stored", {
       fileName: audioFile.originalname,
-      contentType: validation.contentType,
+      contentType: classification.mimeType,
+      requiresTranscode: classification.requiresTranscode,
       storage: storageResult.storage,
       key: objectKey,
-      playbackUrl: storageResult.playbackUrl.slice(0, 120),
+      playbackUrl: playbackUrl.slice(0, 120),
     });
 
     return res.status(201).json({
-      ok: true,
-      storage: storageResult.storage,
-      key: objectKey,
-      playbackUrl: storageResult.playbackUrl,
-      peaksUrl: storageResult.peaksUrl || null,
-      fileName: audioFile.originalname,
-      sessionId: sessionId || null,
+      ok:                true,
+      storage:           storageResult.storage,
+      key:               objectKey,
+      playbackUrl,
+      originalUrl,
+      originalFormat:    classification.ext.slice(1),
+      requiresTranscode: classification.requiresTranscode,
+      previewUrl:        previewKey ? playbackUrl : null,
+      previewKey,
+      peaksUrl:          storageResult.peaksUrl || null,
+      fileName:          audioFile.originalname,
+      sessionId:         sessionId || null,
       trackId,
       versionId,
-      contentType: validation.contentType,
-      size: audioFile.size
+      contentType:       classification.mimeType,
+      size:              audioFile.size,
     });
   } catch (error) {
     next(error);
@@ -259,15 +309,20 @@ async function getPresignedUploadUrl(req, res, next) {
       return res.status(400).json({ error: "fileType is required." });
     }
 
-    // Only the two formats the rest of the pipeline supports.
+    // Validate against the full supported extension set.
     const extension = path.extname(fileName).toLowerCase();
-    if (![".mp3", ".wav"].includes(extension)) {
-      return res.status(400).json({ error: "Only .mp3 and .wav files are supported." });
+    if (!ALLOWED_AUDIO_EXTS.has(extension)) {
+      return res.status(400).json({
+        error: `Unsupported audio format "${extension || "(no extension)"}". Accepted: ${[...ALLOWED_AUDIO_EXTS].join(", ")}`,
+      });
     }
 
-    // When session context is supplied use the same session-scoped key structure
-    // as server-side uploads so all audio objects live under sessions/<id>/…
-    // Without context fall back to the date-prefixed uploads/ path.
+    // Resolve canonical MIME from extension — the browser may misreport file.type
+    // for AIFF, ALAC, WMA, W64 on some operating systems.  The presigned URL embeds
+    // ContentType in its HMAC signature; the value here MUST match the Content-Type
+    // header the browser sends on the R2 PUT or R2 returns 403.
+    const resolvedMime = AUDIO_MIME_BY_EXT[extension.slice(1)] || fileType.trim();
+
     const resolvedSessionId = sanitizeSessionId(rawSessionId);
     const objectKey = buildAudioObjectKey(fileName.trim(), extension, resolvedSessionId ? {
       sessionId: resolvedSessionId,
@@ -275,28 +330,23 @@ async function getPresignedUploadUrl(req, res, next) {
       versionId: versionId || "version-v1"
     } : {});
 
-    // ContentType is embedded in the presigned URL signature — the browser MUST
-    // send the exact same value as the Content-Type request header when it PUTs
-    // the file, otherwise R2 returns 403 SignatureDoesNotMatch.
     const command = new PutObjectCommand({
       Bucket:      r2Config.bucketName,
       Key:         objectKey,
-      ContentType: fileType.trim(),
+      ContentType: resolvedMime,
     });
 
-    // 15-minute window — long enough for a large file on a slow connection
-    // without leaving a stale URL live for hours.
     const url = await getSignedUrl(r2Client, command, { expiresIn: 900 });
 
     console.log("[MixReview] Pre-signed upload URL issued", {
       objectKey,
-      fileType: fileType.trim(),
+      resolvedMime,
       expiresIn: 900,
     });
 
-    // Return the key alongside the URL so the client can pass it back to the
-    // session save route once the direct upload completes.
-    return res.json({ url, key: objectKey });
+    // Return resolvedMime alongside the URL so the client uses the identical
+    // Content-Type on its PUT (guarantees the R2 signature matches).
+    return res.json({ url, key: objectKey, resolvedMime });
   } catch (error) {
     next(error);
   }
@@ -347,40 +397,65 @@ async function confirmAudioUpload(req, res, next) {
 
     const safeTrackId   = sanitizePathSegment(trackId   || "track-1");
     const safeVersionId = sanitizePathSegment(versionId || "version-v1");
-    const playbackUrl   = buildApiPlaybackUrl(req, safeKey);
 
+    // Resolve canonical MIME from the R2 key's extension — the browser-reported
+    // fileType may be wrong (e.g. "application/octet-stream") for AIFF/ALAC/WMA.
+    const ext = path.extname(safeKey).toLowerCase();
+    const format = classifyAudioFormat(fileName.trim(), fileType.trim());
+    if (!format.ok) {
+      return res.status(415).json({ error: format.error });
+    }
+    const mimeType = AUDIO_MIME_BY_EXT[ext.slice(1)] || format.mimeType;
+
+    const originalUrl = buildApiPlaybackUrl(req, safeKey);
     const audioPayload = {
-      key:         safeKey,
-      playbackUrl,
-      peaksUrl:    null,  // peaks not available for direct uploads
-      fileName:    fileName.trim(),
-      contentType: fileType.trim(),
-      size:        typeof size === "number" && size > 0 ? size : 0,
-      storage:     "r2",
-      uploadedAt:  new Date().toISOString()
+      key:               safeKey,
+      playbackUrl:       originalUrl,  // updated to preview URL if transcode succeeds
+      originalUrl,
+      originalFormat:    format.ext.slice(1),
+      requiresTranscode: format.requiresTranscode,
+      peaksUrl:          null,
+      fileName:          fileName.trim(),
+      contentType:       mimeType,
+      size:              typeof size === "number" && size > 0 ? size : 0,
+      storage:           "r2",
+      uploadedAt:        new Date().toISOString(),
     };
 
     await attachAudioToSession(sessionId, audioPayload, safeVersionId, safeTrackId);
 
+    // For non-browser-native formats, kick off a background fetch → transcode →
+    // store cycle.  The session document is patched with the preview URL when done.
+    if (format.requiresTranscode && hasR2Config) {
+      const previewKey = safeKey.replace(/\.[^.]+$/, ".preview.m4a");
+      const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
+      transcodeAndStorePreview(safeKey, previewKey, apiBaseUrl, sessionId, safeTrackId, safeVersionId)
+        .catch((err) => console.error("[MixReview] Background transcode error:", err.message));
+    }
+
     console.log("[MixReview] Direct upload confirmed and attached to session", {
       sessionId,
-      trackId: safeTrackId,
+      trackId:  safeTrackId,
       versionId: safeVersionId,
-      key: safeKey,
+      key:      safeKey,
+      requiresTranscode: format.requiresTranscode,
     });
 
     return res.status(201).json({
-      ok:          true,
-      storage:     "r2",
-      key:         safeKey,
-      playbackUrl,
-      peaksUrl:    null,
-      fileName:    fileName.trim(),
+      ok:                true,
+      storage:           "r2",
+      key:               safeKey,
+      playbackUrl:       originalUrl,
+      originalUrl,
+      originalFormat:    format.ext.slice(1),
+      requiresTranscode: format.requiresTranscode,
+      peaksUrl:          null,
+      fileName:          fileName.trim(),
       sessionId,
-      trackId:     safeTrackId,
-      versionId:   safeVersionId,
-      contentType: fileType.trim(),
-      size:        audioPayload.size
+      trackId:           safeTrackId,
+      versionId:         safeVersionId,
+      contentType:       mimeType,
+      size:              audioPayload.size,
     });
   } catch (error) {
     next(error);
@@ -474,15 +549,46 @@ async function generatePeaksWithFfmpeg(audioBuffer, numPoints = 800) {
   });
 }
 
-// Map file extensions to MIME types for content-type fallback when R2 omits the header.
+// ── Audio format registry ─────────────────────────────────────────────────────
+//
+// AUDIO_MIME_BY_EXT — canonical MIME per extension.
+// Used by streamAudioPlayback, classifyAudioFormat, and the presign endpoint.
 const AUDIO_MIME_BY_EXT = {
-  mp3: "audio/mpeg",
-  wav: "audio/wav",
-  m4a: "audio/mp4",
-  aac: "audio/aac",
-  ogg: "audio/ogg",
+  // Lossless
+  wav:  "audio/wav",
   flac: "audio/flac",
+  aiff: "audio/x-aiff",
+  aif:  "audio/x-aiff",
+  alac: "audio/x-alac",
+  w64:  "audio/x-w64",
+  // Compressed — universally browser-native
+  mp3:  "audio/mpeg",
+  aac:  "audio/aac",
+  m4a:  "audio/mp4",
+  webm: "audio/webm",
+  // Compressed — limited browser support (Safari gap for OGG/Opus)
+  ogg:  "audio/ogg",
+  opus: "audio/opus",
+  wma:  "audio/x-ms-wma",
 };
+
+// All file extensions accepted by the ingestion pipeline.
+const ALLOWED_AUDIO_EXTS = new Set([
+  ".wav", ".flac", ".aiff", ".aif", ".alac", ".w64",  // lossless
+  ".mp3", ".aac", ".m4a", ".ogg", ".opus", ".wma",    // compressed
+]);
+
+// Formats not natively playable in ALL major browsers.
+// Files with these extensions are transcoded to 256 kbps AAC (M4A) in a
+// background job. The lossless original is preserved in R2 so the admin view
+// can eventually support high-res analysis/editing via originalUrl.
+//
+//   AIFF/AIF  — no browser plays this container natively
+//   ALAC      — QuickTime codec; no web browser plays it standalone
+//   WMA       — Windows Media; unsupported outside Edge/IE
+//   W64       — Sony Wave64; no browser support
+//   OGG/Opus  — Safari (macOS + iOS) does not support Vorbis/Opus
+const TRANSCODE_FORMATS = new Set([".aiff", ".aif", ".alac", ".wma", ".w64", ".ogg", ".opus"]);
 
 async function streamAudioPlayback(req, res, next) {
   try {
@@ -552,90 +658,86 @@ async function saveAudioLocally(objectKey, audioFile, req) {
   };
 }
 
-function validateStereoReviewAudio(audioFile) {
-  const extension = path.extname(audioFile.originalname).toLowerCase();
-  const isWav = extension === ".wav" || audioFile.mimetype === "audio/wav" || audioFile.mimetype === "audio/x-wav";
-  const isMp3 = extension === ".mp3" || audioFile.mimetype === "audio/mpeg" || audioFile.mimetype === "audio/mp3";
-
-  if (!isWav && !isMp3) {
+// classifyAudioFormat — validates extension + resolves canonical MIME.
+// Replaces validateStereoReviewAudio (which was limited to WAV/MP3 stereo-only).
+// Professional audio — especially stems — is frequently mono; the channel-count
+// restriction is intentionally removed.
+function classifyAudioFormat(fileName, mimetype) {
+  const ext = path.extname(fileName).toLowerCase();
+  if (!ALLOWED_AUDIO_EXTS.has(ext)) {
     return {
       ok: false,
-      error: "Only stereo WAV or MP3 files are supported."
+      error: `Unsupported audio format "${ext || "(no extension)"}". Accepted: ${[...ALLOWED_AUDIO_EXTS].join(", ")}`,
     };
   }
-
-  if (isWav && !isStereoWav(audioFile.buffer)) {
-    return {
-      ok: false,
-      error: "WAV uploads must be stereo."
-    };
-  }
-
-  if (isMp3 && !isStereoMp3(audioFile.buffer)) {
-    return {
-      ok: false,
-      error: "MP3 uploads must be stereo."
-    };
-  }
-
-  return {
-    ok: true,
-    extension: isWav ? ".wav" : ".mp3",
-    contentType: isWav ? "audio/wav" : "audio/mpeg"
-  };
+  const mimeType = AUDIO_MIME_BY_EXT[ext.slice(1)] || mimetype || "application/octet-stream";
+  return { ok: true, ext, mimeType, requiresTranscode: TRANSCODE_FORMATS.has(ext) };
 }
 
-function isStereoWav(buffer) {
-  if (buffer.length < 36 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WAVE") {
-    return false;
-  }
+// transcodeToAac — converts any FFmpeg-readable audio buffer to 256 kbps AAC in
+// an M4A container.  Returns the output as a Node Buffer.
+async function transcodeToAac(inputBuffer) {
+  return new Promise((resolve, reject) => {
+    const ff = spawn("ffmpeg", [
+      "-i",        "pipe:0",
+      "-c:a",      "aac",
+      "-b:a",      "256k",
+      "-movflags", "+frag_keyframe+empty_moov",
+      "-f",        "mp4",
+      "pipe:1",
+    ]);
+    const out = []; const err = [];
+    ff.stdout.on("data", (c) => out.push(c));
+    ff.stderr.on("data", (c) => err.push(c));
+    ff.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`FFmpeg transcode exited ${code}: ${Buffer.concat(err).toString().slice(0, 400)}`));
+      resolve(Buffer.concat(out));
+    });
+    ff.on("error", (e) => reject(new Error(`Failed to spawn FFmpeg: ${e.message}`)));
+    ff.stdin.on("error", () => {});
+    ff.stdin.write(inputBuffer);
+    ff.stdin.end();
+  });
+}
 
-  let offset = 12;
-  while (offset + 8 <= buffer.length) {
-    const chunkId = buffer.toString("ascii", offset, offset + 4);
-    const chunkSize = buffer.readUInt32LE(offset + 4);
-    if (chunkId === "fmt " && offset + 12 <= buffer.length) {
-      return buffer.readUInt16LE(offset + 10) === 2;
+// transcodeAndStorePreview — fire-and-forget background job for direct-to-R2 uploads.
+// Fetches the original, transcodes to AAC, stores the preview, then patches the
+// session document so the next client load finds a browser-playable URL.
+// The lossless original is preserved under its original key for admin analysis.
+async function transcodeAndStorePreview(originalKey, previewKey, apiBaseUrl, sessionId, trackId, versionId) {
+  try {
+    const r2Obj = await r2Client.send(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }));
+    const chunks = [];
+    for await (const chunk of r2Obj.Body) chunks.push(chunk);
+    const originalBuffer = Buffer.concat(chunks);
+    console.log("[MixReview] Background transcode: fetched original", { originalKey, bytes: originalBuffer.length });
+
+    const previewBuffer = await transcodeToAac(originalBuffer);
+    await r2Client.send(new PutObjectCommand({
+      Bucket: r2Config.bucketName, Key: previewKey,
+      Body: previewBuffer, ContentType: "audio/mp4",
+      CacheControl: "public, max-age=31536000",
+    }));
+
+    const previewUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(previewKey)}`;
+    const existingDoc = await readSessionDocument(sessionId);
+    if (existingDoc) {
+      const patchedTracks = (existingDoc.tracks || []).map((track) => {
+        if (track.id !== trackId) return track;
+        return {
+          ...track,
+          versions: (track.versions || []).map((v) => {
+            if (v.id !== versionId || !v.audioMetadata) return v;
+            return { ...v, audioMetadata: { ...v.audioMetadata, playbackUrl: previewUrl, url: previewUrl, previewUrl, previewKey, transcodedAt: new Date().toISOString() } };
+          }),
+        };
+      });
+      await writeSessionDocument(sessionId, { ...existingDoc, tracks: patchedTracks });
     }
-    offset += 8 + chunkSize + (chunkSize % 2);
+    console.log("[MixReview] Background transcode complete", { previewKey, sessionId, trackId });
+  } catch (err) {
+    console.error("[MixReview] Background transcode failed", { originalKey, error: err.message });
   }
-
-  return false;
-}
-
-function isStereoMp3(buffer) {
-  let offset = skipId3v2Header(buffer);
-  while (offset + 4 <= buffer.length) {
-    if (buffer[offset] === 0xff && (buffer[offset + 1] & 0xe0) === 0xe0) {
-      const layerBits = (buffer[offset + 1] >> 1) & 0x03;
-      const bitrateBits = (buffer[offset + 2] >> 4) & 0x0f;
-      const sampleRateBits = (buffer[offset + 2] >> 2) & 0x03;
-      if (layerBits !== 0 && bitrateBits !== 0 && bitrateBits !== 0x0f && sampleRateBits !== 0x03) {
-        const channelMode = (buffer[offset + 3] >> 6) & 0x03;
-        return channelMode !== 0x03;
-      }
-    }
-    offset += 1;
-  }
-
-  return false;
-}
-
-function skipId3v2Header(buffer) {
-  if (buffer.length < 10 || buffer.toString("ascii", 0, 3) !== "ID3") {
-    return 0;
-  }
-
-  return 10 + readSynchsafeInt(buffer, 6);
-}
-
-function readSynchsafeInt(buffer, offset) {
-  return (
-    ((buffer[offset] & 0x7f) << 21) |
-    ((buffer[offset + 1] & 0x7f) << 14) |
-    ((buffer[offset + 2] & 0x7f) << 7) |
-    (buffer[offset + 3] & 0x7f)
-  );
 }
 
 function buildAudioObjectKey(originalName, extension, { sessionId, trackId, versionId } = {}) {
@@ -788,6 +890,8 @@ function preserveAudioMetadata(incoming, stored) {
           const storedHasKey    = typeof storedMeta?.key === "string" && storedMeta.key;
           const incomingLostKey = !incomingMeta?.key;
           const incomingLostUrl = !(incomingMeta?.playbackUrl || incomingMeta?.url || incomingMeta?.audioUrl);
+          const storedHasPreview = typeof storedMeta?.previewUrl === "string" && storedMeta.previewUrl;
+          const incomingLostPreview = !incomingMeta?.previewUrl || incomingMeta?.playbackUrl !== storedMeta?.playbackUrl;
 
           if (storedHasKey && (incomingLostKey || incomingLostUrl)) {
             console.log("[MixReview] preserveAudioMetadata: restored stored key for", {
@@ -796,6 +900,24 @@ function preserveAudioMetadata(incoming, stored) {
               storedKey: storedMeta.key,
             });
             return { ...incomingVersion, audioMetadata: storedMeta };
+          }
+
+          if (storedHasKey && storedHasPreview && incomingLostPreview) {
+            return {
+              ...incomingVersion,
+              audioMetadata: {
+                ...incomingMeta,
+                playbackUrl: storedMeta.playbackUrl,
+                url: storedMeta.url || storedMeta.playbackUrl,
+                audioUrl: storedMeta.audioUrl || storedMeta.playbackUrl,
+                originalUrl: storedMeta.originalUrl || incomingMeta?.originalUrl || storedMeta.playbackUrl,
+                originalFormat: storedMeta.originalFormat || incomingMeta?.originalFormat || null,
+                requiresTranscode: storedMeta.requiresTranscode ?? incomingMeta?.requiresTranscode ?? false,
+                previewUrl: storedMeta.previewUrl,
+                previewKey: storedMeta.previewKey || incomingMeta?.previewKey || null,
+                transcodedAt: storedMeta.transcodedAt || incomingMeta?.transcodedAt || null,
+              },
+            };
           }
 
           return incomingVersion;
@@ -1022,6 +1144,13 @@ async function attachAudioToSession(sessionId, audio, versionId, trackId = "trac
     mimeType: audio.contentType,
     url: audio.playbackUrl,
     playbackUrl: audio.playbackUrl,
+    audioUrl: audio.playbackUrl,
+    originalUrl: audio.originalUrl || audio.playbackUrl,
+    originalFormat: audio.originalFormat || path.extname(audio.fileName).replace(/^\./, "").toLowerCase() || null,
+    requiresTranscode: Boolean(audio.requiresTranscode),
+    previewUrl: audio.previewUrl || null,
+    previewKey: audio.previewKey || null,
+    transcodedAt: audio.transcodedAt || null,
     key: audio.key,
     storage: audio.storage,
     uploadedAt: audio.uploadedAt

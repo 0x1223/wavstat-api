@@ -107,17 +107,18 @@ export async function uploadSessionAudio(sessionId, versionId, file, trackId = n
     throw new Error(presignPayload.error || "Could not obtain an upload URL.");
   }
 
-  const { url: presignedUrl, key } = presignPayload;
+  const { url: presignedUrl, key, resolvedMime } = presignPayload;
   if (!presignedUrl || !key) {
     throw new Error("Server returned an invalid upload URL.");
   }
+  const uploadMime = resolvedMime || file.type || "audio/mpeg";
 
   // ── Step 2: PUT directly to R2 — bypasses the Node.js server entirely ───────
   // Content-Type MUST match the value used when requesting the URL; it is baked
   // into the presigned signature and R2 validates it on every PUT request.
   const r2Response = await fetch(presignedUrl, {
     method:  "PUT",
-    headers: { "Content-Type": file.type || "audio/mpeg" },
+    headers: { "Content-Type": uploadMime },
     body:    file
   });
 
@@ -134,7 +135,7 @@ export async function uploadSessionAudio(sessionId, versionId, file, trackId = n
       body: JSON.stringify({
         key,
         fileName: file.name,
-        fileType: file.type || "audio/mpeg",
+        fileType: uploadMime,
         size:     file.size,
         trackId:  trackId || "track-1",
         versionId

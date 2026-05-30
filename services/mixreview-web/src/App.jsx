@@ -3172,7 +3172,7 @@ function isAudioFile(file) {
     return true;
   }
 
-  return /\.(aac|aif|aiff|flac|m4a|mp3|ogg|wav|webm)$/i.test(file.name);
+  return /\.(aac|aif|aiff|alac|flac|m4a|mp3|ogg|opus|w64|wav|wma)$/i.test(file.name);
 }
 
 function versionIdFromLabel(label) {
