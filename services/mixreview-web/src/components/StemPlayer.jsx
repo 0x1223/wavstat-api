@@ -221,8 +221,6 @@ export const StemPlayer = memo(function StemPlayer({
         if (rafId !== null) cancelAnimationFrame(rafId);
         if (ws) {
           if (wsRefs.current[i] === ws) wsRefs.current[i] = null;
-          try { ws.pause(); } catch (_) {}
-          try { ws.unAll?.(); } catch (_) {}
           ws.destroy();
         }
       });
@@ -231,10 +229,6 @@ export const StemPlayer = memo(function StemPlayer({
     return () => {
       cleanups.forEach((fn) => fn());
       wsRefs.current = [];
-      cbRef.current.onReady(null);
-      cbRef.current.onTimeUpdate(0);
-      cbRef.current.onDurationChange(0);
-      cbRef.current.onPlaybackChange(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stemsKey]);

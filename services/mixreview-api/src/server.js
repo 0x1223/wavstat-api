@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const app = express();
@@ -70,7 +70,6 @@ const r2Client = hasR2Config
       }
     })
   : null;
-const inFlightPeaksJobs = new Set();
 
 if (isProduction && !hasR2Config) {
   console.warn("R2 credentials are not configured; MixReview API is using local storage fallback.");
@@ -465,46 +464,6 @@ async function generateAndUploadPeaks(audioBuffer, peaksKey, numPoints = 800) {
   console.log("[MixReview] Peaks uploaded", { peaksKey, numPoints: peaks.length });
 }
 
-async function ensurePeaksForAudioKey(audioKey) {
-  if (!hasR2Config || !audioKey || audioKey.includes("..")) return;
-
-  const peaksKey = `${audioKey}.peaks.json`;
-  if (inFlightPeaksJobs.has(peaksKey)) return;
-
-  inFlightPeaksJobs.add(peaksKey);
-  try {
-    try {
-      await r2Client.send(
-        new HeadObjectCommand({
-          Bucket: r2Config.bucketName,
-          Key: peaksKey
-        })
-      );
-      return;
-    } catch (error) {
-      if (error?.name !== "NotFound" && error?.name !== "NoSuchKey" && error?.$metadata?.httpStatusCode !== 404) {
-        throw error;
-      }
-    }
-
-    const response = await r2Client.send(
-      new GetObjectCommand({
-        Bucket: r2Config.bucketName,
-        Key: audioKey
-      })
-    );
-    const chunks = [];
-    for await (const chunk of response.Body) chunks.push(chunk);
-    const audioBuffer = Buffer.concat(chunks);
-    await generateAndUploadPeaks(audioBuffer, peaksKey);
-    console.log("[MixReview] Lazy peaks generated", { audioKey, peaksKey });
-  } catch (error) {
-    console.warn("[MixReview] Lazy peaks generation failed", { audioKey, error: error.message });
-  } finally {
-    inFlightPeaksJobs.delete(peaksKey);
-  }
-}
-
 // generatePeaksWithFfmpeg — decodes any audio format to mono f32le PCM via
 // FFmpeg, then downsamples to `numPoints` peak values in the range [-1, 1].
 // Each point is the highest-magnitude sample in its window (sign preserved).
@@ -742,9 +701,6 @@ async function transcodeAndStorePreview(originalKey, previewKey, apiBaseUrl, ses
       Body: previewBuffer, ContentType: "audio/mp4",
       CacheControl: "public, max-age=31536000",
     }));
-    await generateAndUploadPeaks(previewBuffer, `${previewKey}.peaks.json`).catch((error) => {
-      console.warn("[MixReview] Preview peaks generation failed", { previewKey, error: error.message });
-    });
 
     const previewUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(previewKey)}`;
     const existingDoc = await readSessionDocument(sessionId);
@@ -1389,7 +1345,6 @@ async function attachAudioToSession(sessionId, audio, versionId, trackId = "trac
     requiresTranscode: Boolean(audio.requiresTranscode),
     previewUrl: audio.previewUrl || null,
     previewKey: audio.previewKey || null,
-    peaksUrl: audio.peaksUrl || null,
     transcodedAt: audio.transcodedAt || null,
     key: audio.key,
     storage: audio.storage,
@@ -1843,15 +1798,10 @@ async function refreshSessionPlaybackUrls(session, req = null) {
     const originalUrl = buildApiPlaybackUrl(req, key);
     const previewKey = version.audioMetadata.previewKey;
     const freshUrl = previewKey ? buildApiPlaybackUrl(req, previewKey) : originalUrl;
-    const activeAudioKey = previewKey || key;
 
     // Re-derive the peaks URL from the well-known naming convention.
-    // peaksKey is never stored separately — it is always ${audioKey}.peaks.json.
-    const freshPeaksUrl = buildApiPlaybackUrl(req, `${activeAudioKey}.peaks.json`);
-
-    ensurePeaksForAudioKey(activeAudioKey).catch((error) => {
-      console.warn("[MixReview] Lazy peaks job failed to start", { key: activeAudioKey, error: error.message });
-    });
+    // peaksKey is never stored separately — it is always ${key}.peaks.json.
+    const freshPeaksUrl = buildApiPlaybackUrl(req, `${key}.peaks.json`);
 
     return {
       ...version,
