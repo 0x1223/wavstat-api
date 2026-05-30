@@ -24,7 +24,8 @@ export function ReviewDashboard({
   const unresolvedCount = activeVersion.comments.filter(
     (comment) => !comment.resolved,
   ).length;
-  const approvalCount = approvalSummary || { approved: 0, total: 0 };
+  const selectedTrackReviewCount = unresolvedCount;
+  const selectedTrackTotal = activeTrack ? 1 : 0;
 if (isMobile) {
   return null;
 }
@@ -55,8 +56,6 @@ if (isMobile) {
       <div className="summary-grid">
         <SummaryMetric label="Total Comments" value={activeVersion.comments.length} />
         <SummaryMetric label="Unresolved" value={unresolvedCount} />
-        <SummaryMetric label="Approvals" value={`${approvalCount.approved}/${approvalCount.total}`} />
-        <SummaryMetric label="Latest Revision" value={activeVersion.label} />
       </div>
 
       {(canApprove || canSubmit) && (
@@ -67,16 +66,16 @@ if (isMobile) {
               disabled={
                 !canApprove ||
                 !statusState?.[state]?.enabled ||
-                (state === "Pending Review" && !approvalCount.needsReview)
+                (state === "Pending Review" && !selectedTrackReviewCount)
               }
-              className={`${statusState?.[state]?.active || state === activeVersion.approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}${state === "Pending Review" ? " pending-review-summary" : ""}${state === "Pending Review" && !approvalCount.needsReview ? " muted" : ""}`}
+              className={`${statusState?.[state]?.active || state === activeVersion.approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}${state === "Pending Review" ? " pending-review-summary" : ""}${state === "Pending Review" && !selectedTrackReviewCount ? " muted" : ""}`}
               key={state}
               onClick={() => onApprovalChange(state)}
             >
               {state === "Pending Review" ? (
                 <>
                   <span>Pending Reviews</span>
-                  <small>{approvalCount.needsReview || 0}/{approvalCount.total || 0}</small>
+                  <small>{selectedTrackReviewCount}/{selectedTrackTotal}</small>
                 </>
               ) : state}
             </button>
