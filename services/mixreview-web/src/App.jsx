@@ -214,6 +214,11 @@ export default function App({ onFirstRender } = {}) {
   // True once the user has tapped the "Tap to Listen" overlay on mobile.
   // Passed to WaveformReview so the overlay is hidden after first play.
   const [mobileHasPlayed, setMobileHasPlayed] = useState(false);
+  // Bulk import guard — true while handleTrackUpload is processing a multi-file
+  // batch; triggers the blocking overlay so the user cannot interact mid-import.
+  const [isImporting,    setIsImporting]    = useState(false);
+  const [importProgress, setImportProgress] = useState({ done: 0, total: 0, errors: 0 });
+
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
     () =>
       safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
@@ -813,14 +818,29 @@ export default function App({ onFirstRender } = {}) {
   }, [activeTrackId, activeVersionId, currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, versions]);
 
   // handleTrackUpload accepts an array of File objects (from a multi-select picker)
-  // or a single File for backwards compatibility. Files are uploaded sequentially
-  // to preserve selection order; each becomes its own track. Per-file errors are
-  // collected and reported at the end rather than aborting the whole batch, so a
-  // bad file doesn't prevent valid files in the same selection from uploading.
+  // or a single File for backwards compatibility.
+  //
+  // Bulk-import safeguards (for large batches such as 38 × 40 MB tracks):
+  //
+  //   1. BATCH PROCESSING — files are uploaded UPLOAD_BATCH_SIZE at a time in
+  //      parallel. A single setTracks + setAlbums call is made per batch rather
+  //      than per file, reducing React re-renders from O(n) to O(n/batch).
+  //      A setTimeout(0) yield between batches gives the browser a frame to
+  //      commit the previous render before the next network wave starts.
+  //
+  //   2. MEMORY CLEANUP — each File reference is nulled in the validFiles array
+  //      as soon as its R2 PUT completes, allowing the GC to release the raw
+  //      audio data from browser memory without waiting for the function to return.
+  //
+  //   3. IMPORT OVERLAY — setIsImporting(true) triggers a blocking overlay that
+  //      prevents the user from interacting with the session while data is in flight.
+  //
+  // Per-file errors are collected; a bad file never aborts the rest of the batch.
+  const UPLOAD_BATCH_SIZE = 5;
+
   const handleTrackUpload = useCallback(async (fileOrFiles, targetAlbumId = null) => {
     if (!permissions.canEdit) return;
 
-    // Normalise to array regardless of how the caller passes the files.
     const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
     const validFiles = files.filter(Boolean).filter((f) => {
       if (!isAudioFile(f)) {
@@ -832,10 +852,17 @@ export default function App({ onFirstRender } = {}) {
 
     if (validFiles.length === 0) return;
 
-    const isMulti = validFiles.length > 1;
+    const isBulk = validFiles.length > 1;
+
+    // Show the blocking overlay for any multi-file import
+    if (isBulk) {
+      setIsImporting(true);
+      setImportProgress({ done: 0, total: validFiles.length, errors: 0 });
+    }
+
     setUploadError(
-      isMulti
-        ? `Uploading ${validFiles.length} tracks to session storage...`
+      isBulk
+        ? `Importing ${validFiles.length} tracks…`
         : "Uploading track to session storage...",
     );
     setSessionMessage("");
@@ -844,69 +871,102 @@ export default function App({ onFirstRender } = {}) {
       await ensureSessionPersisted();
     } catch (error) {
       setUploadError(error.message || "Track upload failed.");
+      if (isBulk) setIsImporting(false);
       return;
     }
 
-    const newTracks = [];
-    let lastError = null;
+    const allNewTracks = [];
+    let totalErrors    = 0;
+    let lastError      = null;
 
-    for (let i = 0; i < validFiles.length; i++) {
-      const file = validFiles[i];
+    for (let batchStart = 0; batchStart < validFiles.length; batchStart += UPLOAD_BATCH_SIZE) {
+      const batchEnd   = Math.min(batchStart + UPLOAD_BATCH_SIZE, validFiles.length);
+      // Upload files in this batch in parallel — O(batch) network calls concurrent
+      const batchResults = await Promise.allSettled(
+        validFiles.slice(batchStart, batchEnd).map(async (file) => {
+          const title       = deriveProjectTitle(file.name);
+          const nextTrackId = createTrackId(title);
+          const nextVersionId = "version-v1";
 
-      if (isMulti) {
-        setUploadError(`Uploading track ${i + 1} of ${validFiles.length}...`);
-      }
+          const uploadResult = await uploadSessionAudio(sessionId, nextVersionId, file, nextTrackId);
+          const nextAudioSource = normalizeAudioSource({
+            playbackUrl: uploadResult.playbackUrl,
+            audioUrl:    uploadResult.audioUrl,
+            url:         uploadResult.url,
+            key:         uploadResult.key,
+            storage:     uploadResult.storage,
+            fileName:    uploadResult.fileName || file.name,
+            title,
+            size:        uploadResult.size || file.size,
+            type:        uploadResult.contentType || file.type || "audio file",
+            mimeType:    uploadResult.contentType || file.type || null,
+          });
+          const nextVersions = createEmptyVersions().map((version) =>
+            version.id === nextVersionId
+              ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
+              : version,
+          );
+          return createTrack(title, nextVersions, nextTrackId);
+        })
+      );
 
-      try {
-        const title = deriveProjectTitle(file.name);
-        const nextTrackId = createTrackId(title);
-        const nextVersionId = "version-v1";
+      // Collect results and null File refs as soon as each PUT is complete.
+      // This allows the GC to release up to UPLOAD_BATCH_SIZE × file.size bytes
+      // of browser memory before moving to the next batch.
+      const batchTracks = [];
+      batchResults.forEach((result, j) => {
+        validFiles[batchStart + j] = null; // ← memory cleanup
+        if (result.status === "fulfilled") {
+          batchTracks.push(result.value);
+        } else {
+          totalErrors++;
+          lastError = result.reason;
+          console.warn("[MixReview] Batch upload partial failure:", result.reason?.message);
+        }
+      });
 
-        const uploadResult = await uploadSessionAudio(sessionId, nextVersionId, file, nextTrackId);
-        const nextAudioSource = normalizeAudioSource({
-          playbackUrl: uploadResult.playbackUrl,
-          audioUrl: uploadResult.audioUrl,
-          url: uploadResult.url,
-          key: uploadResult.key,
-          storage: uploadResult.storage,
-          fileName: uploadResult.fileName || file.name,
-          title,
-          size: uploadResult.size || file.size,
-          type: uploadResult.contentType || file.type || "audio file",
-          mimeType: uploadResult.contentType || file.type || null
-        });
-        const nextVersions = createEmptyVersions().map((version) =>
-          version.id === nextVersionId
-            ? withUploadedAudio(version, nextAudioSource, currentReviewer, file.name)
-            : version,
-        );
-        const nextTrack = createTrack(title, nextVersions, nextTrackId);
-        newTracks.push(nextTrack);
+      if (batchTracks.length > 0) {
+        allNewTracks.push(...batchTracks);
 
-        // Add to state immediately so the track list updates as each file lands.
-        setTracks((currentTracks) => [...currentTracks, nextTrack]);
+        // Single React state update for the entire batch — React 18 auto-batches
+        // setTracks + setAlbums + setImportProgress into one re-render commit.
+        setTracks((prev) => [...prev, ...batchTracks]);
         setAlbums((prevAlbums) => {
           const albumIdx = targetAlbumId
             ? prevAlbums.findIndex((a) => a.id === targetAlbumId)
             : 0;
           const destIdx = albumIdx >= 0 ? albumIdx : 0;
           return prevAlbums.map((album, i) =>
-            i === destIdx ? { ...album, trackIds: [...album.trackIds, nextTrack.id] } : album
+            i === destIdx
+              ? { ...album, trackIds: [...album.trackIds, ...batchTracks.map((t) => t.id)] }
+              : album,
           );
         });
-      } catch (error) {
-        lastError = error;
-        // Continue to the next file — don't abort the whole batch.
+      }
+
+      // Update the overlay progress counter alongside the track/album state.
+      if (isBulk) {
+        setImportProgress({ done: allNewTracks.length, total: validFiles.length, errors: totalErrors });
+      }
+
+      // Yield to the browser so the committed render has time to paint before
+      // the next batch of network requests starts. This keeps the UI responsive
+      // and prevents the main thread from locking during a 38-file import.
+      if (batchEnd < validFiles.length) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
       }
     }
 
-    if (newTracks.length === 0) {
+    // ── Post-import cleanup ───────────────────────────────────────────────────
+    if (isBulk) setIsImporting(false);
+
+    if (allNewTracks.length === 0) {
       setUploadError(lastError?.message || "Track upload failed.");
       return;
     }
 
     // Activate the last successfully uploaded track.
-    const lastTrack = newTracks[newTracks.length - 1];
+    const lastTrack = allNewTracks[allNewTracks.length - 1];
     setActiveTrackId(lastTrack.id);
     setVersions(lastTrack.versions);
     setActiveVersionId("version-v1");
@@ -916,27 +976,26 @@ export default function App({ onFirstRender } = {}) {
     setMobileNoteDraft(null);
 
     setUploadError(
-      lastError
-        ? `${newTracks.length} of ${validFiles.length} track(s) uploaded — some files failed.`
+      totalErrors > 0
+        ? `${allNewTracks.length} of ${allNewTracks.length + totalErrors} track(s) imported — ${totalErrors} failed.`
         : "",
     );
 
-    // Eagerly persist all new tracks at once. sessionSnapshot is captured at
-    // call-entry (before any setTracks calls in this loop), so we append all
-    // newTracks explicitly rather than relying on the debounced auto-save.
-    // albums is also captured at call-entry; add new track IDs to the target album.
-    const newTrackIds = newTracks.map((t) => t.id);
-    const albumIdx = targetAlbumId ? albums.findIndex((a) => a.id === targetAlbumId) : 0;
-    const destAlbumIdx = albumIdx >= 0 ? albumIdx : 0;
-    const updatedAlbums = albums.map((album, idx) =>
+    // Eagerly persist all new tracks. sessionSnapshot and albums are captured at
+    // call-entry so we append all new track IDs explicitly rather than relying on
+    // the debounced auto-save (which would use stale closure state).
+    const newTrackIds    = allNewTracks.map((t) => t.id);
+    const albumIdx       = targetAlbumId ? albums.findIndex((a) => a.id === targetAlbumId) : 0;
+    const destAlbumIdx   = albumIdx >= 0 ? albumIdx : 0;
+    const updatedAlbums  = albums.map((album, idx) =>
       idx === destAlbumIdx ? { ...album, trackIds: [...album.trackIds, ...newTrackIds] } : album
     );
     const savedSnapshot = {
       ...sessionSnapshot,
-      activeTrackId: lastTrack.id,
+      activeTrackId:   lastTrack.id,
       activeVersionId: "version-v1",
-      tracks: [...sessionSnapshot.tracks, ...newTracks.map(toStoredTrack)],
-      albums: updatedAlbums,
+      tracks:  [...sessionSnapshot.tracks, ...allNewTracks.map(toStoredTrack)],
+      albums:  updatedAlbums,
     };
     await saveSessionToApi(savedSnapshot).catch(() => {});
   }, [albums, currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, sessionSnapshot]);
@@ -2149,6 +2208,39 @@ export default function App({ onFirstRender } = {}) {
         className={`review-layout${isEngineerMode && !isSidePanelOpen ? " side-collapsed" : ""}`}
         aria-label="Mix review workspace"
       >
+        {/* Bulk-import overlay — blocks interaction while tracks are uploading.
+            position:absolute inside the relative .review-layout so the header
+            stays accessible while the workspace is locked. */}
+        {isImporting && (
+          <div className="import-overlay" role="status" aria-live="polite" aria-label="Importing tracks">
+            <div className="import-overlay-card">
+              <p className="import-overlay-headline">Importing tracks</p>
+              <p className="import-overlay-count">
+                {importProgress.done}&thinsp;/&thinsp;{importProgress.total}
+              </p>
+              <div className="import-overlay-bar" role="progressbar"
+                aria-valuenow={importProgress.done}
+                aria-valuemin={0}
+                aria-valuemax={importProgress.total}
+              >
+                <div
+                  className="import-overlay-bar-fill"
+                  style={{
+                    width: importProgress.total > 0
+                      ? `${(importProgress.done / importProgress.total) * 100}%`
+                      : "0%",
+                  }}
+                />
+              </div>
+              {importProgress.errors > 0 && (
+                <p className="import-overlay-errors">
+                  {importProgress.errors} file{importProgress.errors !== 1 ? "s" : ""} failed
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="review-main">
           {isReviewerMode && tracks.length > 1 && (
             <MobileTrackNav

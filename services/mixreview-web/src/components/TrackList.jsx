@@ -1,6 +1,42 @@
-import { useState } from "react";
+import { useState, useMemo, memo, useCallback } from "react";
 
-export function TrackList({
+// ── TrackRow ──────────────────────────────────────────────────────────────────
+// Memoized individual track button. Skips reconciliation unless its specific
+// track reference, active state, or edit permission changes.
+// Key benefit: when 5 tracks are appended to a 33-track list, the 33 existing
+// rows never re-render — only the 5 new ones are mounted.
+const TrackRow = memo(function TrackRow({
+  track,
+  index,
+  isActive,
+  canEdit,
+  onTrackSelect,
+  onDragStart,  // (e, trackId) — stable useCallback from parent
+  onDragEnd,    // ()           — stable useCallback from parent
+}) {
+  const activeVersion =
+    track.versions.find((v) => v.id === track.activeVersionId) ||
+    track.versions[0];
+
+  return (
+    <button
+      type="button"
+      className={isActive ? "active" : ""}
+      draggable={canEdit}
+      onDragStart={canEdit ? (e) => onDragStart(e, track.id) : undefined}
+      onDragEnd={onDragEnd}
+      onClick={() => onTrackSelect(track.id)}
+    >
+      <span>{track.title || `Track ${index + 1}`}</span>
+      <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
+    </button>
+  );
+});
+
+// ── TrackList ─────────────────────────────────────────────────────────────────
+// Wrapped in memo so App.jsx re-renders (e.g. playback time ticks) don't
+// propagate into this tree when tracks/albums/canEdit are unchanged.
+export const TrackList = memo(function TrackList({
   tracks,
   albums,
   activeTrackId,
@@ -10,74 +46,93 @@ export function TrackList({
   onCreateAlbum,
   onRenameAlbum,
   onUpdateAlbumType,
-  onMoveTrack
+  onMoveTrack,
 }) {
-  const [collapsed, setCollapsed] = useState({});
+  const [collapsed,       setCollapsed]       = useState({});
   const [renamingAlbumId, setRenamingAlbumId] = useState(null);
-  const [renameValue, setRenameValue] = useState("");
-  // dragOverAlbumId: which album is the current drop target (for visual feedback)
+  const [renameValue,     setRenameValue]     = useState("");
   const [dragOverAlbumId, setDragOverAlbumId] = useState(null);
 
-  const importedTracks = tracks.filter((track) =>
-    track.versions.some((version) => version.audioSource)
+  // ── Memoized derived data ─────────────────────────────────────────────────
+  // Prevents O(n) recomputation on every render caused by unrelated state
+  // changes (collapse toggle, rename input, drag state, etc.).
+
+  const effectiveAlbums = useMemo(
+    () => (Array.isArray(albums) && albums.length > 0 ? albums : []),
+    [albums],
   );
-  const trackMap = Object.fromEntries(tracks.map((t) => [t.id, t]));
-  const effectiveAlbums = Array.isArray(albums) && albums.length > 0 ? albums : [];
 
-  // Safety net: tracks not assigned to any album (should not happen after backend normalisation)
-  const assignedIds = new Set(effectiveAlbums.flatMap((a) => a.trackIds || []));
-  const unassignedTracks = tracks.filter((t) => !assignedIds.has(t.id));
+  const importedTracks = useMemo(
+    () => tracks.filter((t) => t.versions.some((v) => v.audioSource)),
+    [tracks],
+  );
 
-  // ── collapse helpers ──────────────────────────────────────────────────────
-  const toggleCollapse = (albumId) => {
+  // O(1) track lookup by id — rebuilt only when the tracks array identity changes.
+  const trackMap = useMemo(
+    () => Object.fromEntries(tracks.map((t) => [t.id, t])),
+    [tracks],
+  );
+
+  const assignedIds = useMemo(
+    () => new Set(effectiveAlbums.flatMap((a) => a.trackIds || [])),
+    [effectiveAlbums],
+  );
+
+  // Safety net: tracks that somehow slipped through without an album assignment.
+  const unassignedTracks = useMemo(
+    () => tracks.filter((t) => !assignedIds.has(t.id)),
+    [tracks, assignedIds],
+  );
+
+  // ── Stable event handlers (stable refs → TrackRow memo holds) ─────────────
+  const toggleCollapse = useCallback((albumId) => {
     setCollapsed((prev) => ({ ...prev, [albumId]: !prev[albumId] }));
-  };
+  }, []);
 
-  // ── inline rename helpers ────────────────────────────────────────────────
-  const startRename = (album) => {
+  const startRename = useCallback((album) => {
     setRenamingAlbumId(album.id);
     setRenameValue(album.title);
-  };
+  }, []);
 
-  const commitRename = () => {
+  const commitRename = useCallback(() => {
     if (renamingAlbumId && renameValue.trim()) {
       onRenameAlbum?.(renamingAlbumId, renameValue.trim());
     }
     setRenamingAlbumId(null);
     setRenameValue("");
-  };
+  // renameValue intentionally in deps — commitRename must close over current text
+  }, [onRenameAlbum, renamingAlbumId, renameValue]);
 
-  // ── drag-and-drop handlers ───────────────────────────────────────────────
-  const handleDragStart = (e, trackId) => {
+  const handleDragStart = useCallback((e, trackId) => {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", trackId);
-  };
+  }, []);
 
-  const handleDragOver = (e, albumId) => {
+  const handleDragOver = useCallback((e, albumId) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     setDragOverAlbumId(albumId);
-  };
+  }, []);
 
-  const handleDragLeave = (e) => {
-    // Only clear when leaving the album container itself, not a child element
+  const handleDragLeave = useCallback((e) => {
     if (!e.currentTarget.contains(e.relatedTarget)) {
       setDragOverAlbumId(null);
     }
-  };
+  }, []);
 
-  const handleDrop = (e, albumId) => {
+  const handleDrop = useCallback((e, albumId) => {
     e.preventDefault();
     const trackId = e.dataTransfer.getData("text/plain");
-    if (trackId) {
-      onMoveTrack?.(trackId, albumId);
-    }
+    if (trackId) onMoveTrack?.(trackId, albumId);
     setDragOverAlbumId(null);
-  };
+  }, [onMoveTrack]);
 
-  const handleDragEnd = () => setDragOverAlbumId(null);
+  const handleDragEnd = useCallback(() => setDragOverAlbumId(null), []);
 
-  const isEmpty = tracks.length === 0 && effectiveAlbums.every((a) => (a.trackIds || []).length === 0);
+  // ── Render ────────────────────────────────────────────────────────────────
+  const isEmpty =
+    tracks.length === 0 &&
+    effectiveAlbums.every((a) => (a.trackIds || []).length === 0);
 
   return (
     <section className="track-list-panel" aria-label="Project tracks">
@@ -99,8 +154,8 @@ export function TrackList({
             const albumTracks = (album.trackIds || [])
               .map((id) => trackMap[id])
               .filter(Boolean);
-            const isCollapsed = Boolean(collapsed[album.id]);
-            const isDragTarget = dragOverAlbumId === album.id;
+            const isCollapsed      = Boolean(collapsed[album.id]);
+            const isDragTarget     = dragOverAlbumId === album.id;
             const showAlbumHeaders = effectiveAlbums.length > 1;
 
             return (
@@ -118,7 +173,9 @@ export function TrackList({
                       className="album-collapse-btn"
                       onClick={() => toggleCollapse(album.id)}
                       aria-expanded={!isCollapsed}
-                      aria-label={isCollapsed ? `Expand ${album.title}` : `Collapse ${album.title}`}
+                      aria-label={
+                        isCollapsed ? `Expand ${album.title}` : `Collapse ${album.title}`
+                      }
                     >
                       <span className={`album-chevron${isCollapsed ? " collapsed" : ""}`}>
                         ▾
@@ -153,12 +210,16 @@ export function TrackList({
                     {canEdit && (
                       <button
                         type="button"
-                        className={`album-type-badge album-type-badge--${album.type === "stem_project" ? "stems" : "album"}`}
+                        className={`album-type-badge album-type-badge--${
+                          album.type === "stem_project" ? "stems" : "album"
+                        }`}
                         title="Click to toggle container type"
-                        onClick={() => onUpdateAlbumType?.(
-                          album.id,
-                          album.type === "stem_project" ? "album" : "stem_project"
-                        )}
+                        onClick={() =>
+                          onUpdateAlbumType?.(
+                            album.id,
+                            album.type === "stem_project" ? "album" : "stem_project",
+                          )
+                        }
                       >
                         {album.type === "stem_project" ? "Stems" : "Album"}
                       </button>
@@ -174,8 +235,6 @@ export function TrackList({
                           multiple
                           onChange={(event) => {
                             const files = Array.from(event.target.files || []);
-                            // Pass album.id so handleTrackUpload assigns the new
-                            // track to THIS album, not always to albums[0].
                             if (files.length > 0) onTrackUpload(files, album.id);
                             event.target.value = "";
                           }}
@@ -186,7 +245,6 @@ export function TrackList({
                   </div>
                 )}
 
-                {/* Single-album mode: show the Add Track button in the main header area */}
                 {!showAlbumHeaders && canEdit && (
                   <div className="track-list-single-album-actions">
                     <label className="upload-button compact">
@@ -207,25 +265,18 @@ export function TrackList({
 
                 {!isCollapsed && (
                   <div className="track-list">
-                    {albumTracks.map((track, index) => {
-                      const activeVersion =
-                        track.versions.find((v) => v.id === track.activeVersionId) ||
-                        track.versions[0];
-                      return (
-                        <button
-                          type="button"
-                          key={track.id}
-                          className={track.id === activeTrackId ? "active" : ""}
-                          draggable={canEdit}
-                          onDragStart={canEdit ? (e) => handleDragStart(e, track.id) : undefined}
-                          onDragEnd={handleDragEnd}
-                          onClick={() => onTrackSelect(track.id)}
-                        >
-                          <span>{track.title || `Track ${index + 1}`}</span>
-                          <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
-                        </button>
-                      );
-                    })}
+                    {albumTracks.map((track, index) => (
+                      <TrackRow
+                        key={track.id}
+                        track={track}
+                        index={index}
+                        isActive={track.id === activeTrackId}
+                        canEdit={canEdit}
+                        onTrackSelect={onTrackSelect}
+                        onDragStart={handleDragStart}
+                        onDragEnd={handleDragEnd}
+                      />
+                    ))}
                     {albumTracks.length === 0 && isDragTarget && (
                       <div className="track-list-album-drop-hint">Drop track here</div>
                     )}
@@ -235,25 +286,20 @@ export function TrackList({
             );
           })}
 
-          {/* Safety-net: render unassigned tracks so nothing is ever hidden */}
           {unassignedTracks.length > 0 && (
             <div className="track-list">
-              {unassignedTracks.map((track, index) => {
-                const activeVersion =
-                  track.versions.find((v) => v.id === track.activeVersionId) ||
-                  track.versions[0];
-                return (
-                  <button
-                    type="button"
-                    key={track.id}
-                    className={track.id === activeTrackId ? "active" : ""}
-                    onClick={() => onTrackSelect(track.id)}
-                  >
-                    <span>{track.title || `Track ${index + 1}`}</span>
-                    <small>{activeVersion?.approvalStatus || "Pending Review"}</small>
-                  </button>
-                );
-              })}
+              {unassignedTracks.map((track, index) => (
+                <TrackRow
+                  key={track.id}
+                  track={track}
+                  index={index}
+                  isActive={track.id === activeTrackId}
+                  canEdit={false}
+                  onTrackSelect={onTrackSelect}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                />
+              ))}
             </div>
           )}
         </div>
@@ -279,4 +325,4 @@ export function TrackList({
       )}
     </section>
   );
-}
+});

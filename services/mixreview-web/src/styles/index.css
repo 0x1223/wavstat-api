@@ -769,12 +769,86 @@ h2 {
 }
 
 .review-layout {
+  position: relative; /* anchors the import-overlay */
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(310px, 380px);
   gap: 18px;
   /* Smooth column-width transition when the side panel collapses */
   transition: grid-template-columns 220ms ease;
+}
+
+/* ── Bulk-import overlay ──────────────────────────────────────────────────── */
+/* Covers the full workspace while tracks are uploading, preventing the
+   engineer from interacting with session state mid-import. The header
+   remains fully accessible — only the review-layout is locked.             */
+.import-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 8, 8, 0.80);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-radius: inherit;
+  animation: rise-in 200ms ease both;
+}
+
+.import-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 36px;
+  border: 1px solid rgba(215, 173, 98, 0.22);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 60%),
+    rgba(14, 12, 9, 0.96);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  min-width: 220px;
+  text-align: center;
+}
+
+.import-overlay-headline {
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(215, 173, 98, 0.7);
+  margin: 0;
+}
+
+.import-overlay-count {
+  font-size: 1.9rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: #f5efe3;
+  margin: 0;
+  line-height: 1;
+}
+
+.import-overlay-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.import-overlay-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #d6a354, #ffd889);
+  transition: width 300ms ease;
+}
+
+.import-overlay-errors {
+  font-size: 0.72rem;
+  color: rgba(220, 80, 80, 0.75);
+  margin: 0;
 }
 
 /* Side panel hidden — reclaim the full width for the main workspace */
