@@ -1,4 +1,4 @@
-import { useState, useMemo, memo, useCallback } from "react";
+import { useEffect, useState, useMemo, memo, useCallback } from "react";
 import { apiUrl } from "../config/api.js";
 
 const AUDIO_ACCEPT = [
@@ -17,11 +17,30 @@ const AUDIO_ACCEPT = [
   "audio/*",
 ].join(",");
 
+const INITIAL_RENDERED_TRACKS = 14;
+const RENDERED_TRACK_BATCH = 12;
+
+function useDeferredTrackLimit(resetKey, total) {
+  const [limit, setLimit] = useState(() => Math.min(total, INITIAL_RENDERED_TRACKS));
+
+  useEffect(() => {
+    setLimit(Math.min(total, INITIAL_RENDERED_TRACKS));
+  }, [resetKey, total]);
+
+  useEffect(() => {
+    if (limit >= total) return undefined;
+
+    const timerId = window.setTimeout(() => {
+      setLimit((current) => Math.min(total, current + RENDERED_TRACK_BATCH));
+    }, 50);
+
+    return () => window.clearTimeout(timerId);
+  }, [limit, total]);
+
+  return limit;
+}
+
 // ── TrackRow ──────────────────────────────────────────────────────────────────
-// Memoized individual track button. Skips reconciliation unless its specific
-// track reference, active state, or edit permission changes.
-// Key benefit: when 5 tracks are appended to a 33-track list, the 33 existing
-// rows never re-render — only the 5 new ones are mounted.
 const TrackRow = memo(function TrackRow({
   track,
   index,
@@ -29,8 +48,8 @@ const TrackRow = memo(function TrackRow({
   canEdit,
   onTrackSelect,
   onTrackDelete,
-  onDragStart,  // (e, trackId) — stable useCallback from parent
-  onDragEnd,    // ()           — stable useCallback from parent
+  onDragStart,
+  onDragEnd,
   isDeleting,
 }) {
   const activeVersion =
@@ -39,7 +58,7 @@ const TrackRow = memo(function TrackRow({
 
   return (
     <div
-      style={{ display: "grid", gap: "6px", minWidth: "180px" }}
+      className="track-row"
       draggable={canEdit}
       onDragStart={canEdit ? (e) => onDragStart(e, track.id) : undefined}
       onDragEnd={onDragEnd}
@@ -55,29 +74,33 @@ const TrackRow = memo(function TrackRow({
       {canEdit && (
         <button
           type="button"
+          className={`track-row-delete${isDeleting ? " is-deleting" : ""}`}
           disabled={isDeleting}
-          onClick={(event) => {
-            event.stopPropagation();
+          onClick={(e) => {
+            e.stopPropagation();
             onTrackDelete(track.id);
           }}
-          style={{
-            minWidth: "auto",
-            minHeight: "30px",
-            padding: "6px 10px",
-            color: "#ffb5a8",
-            justifyItems: "center",
-          }}
+          aria-label="Delete stem"
+          tabIndex={-1}
         >
-          {isDeleting ? "Deleting" : "Delete"}
+          {isDeleting ? "…" : "Delete"}
         </button>
       )}
     </div>
   );
 });
 
+// ── TypeBadge ─────────────────────────────────────────────────────────────────
+function TypeBadge({ type }) {
+  const isStem = type === "stem_project";
+  return (
+    <span className={`project-type-tag project-type-tag--${isStem ? "stems" : "stereo"}`}>
+      {isStem ? "Stems" : "Stereo"}
+    </span>
+  );
+}
+
 // ── TrackList ─────────────────────────────────────────────────────────────────
-// Wrapped in memo so App.jsx re-renders (e.g. playback time ticks) don't
-// propagate into this tree when tracks/albums/canEdit are unchanged.
 export const TrackList = memo(function TrackList({
   tracks,
   albums,
@@ -89,6 +112,7 @@ export const TrackList = memo(function TrackList({
   onRenameAlbum,
   onUpdateAlbumType,
   onMoveTrack,
+  onDeleteProject,
 }) {
   const [collapsed,       setCollapsed]       = useState({});
   const [renamingAlbumId, setRenamingAlbumId] = useState(null);
@@ -96,11 +120,8 @@ export const TrackList = memo(function TrackList({
   const [dragOverAlbumId, setDragOverAlbumId] = useState(null);
   const [deletedTrackIds, setDeletedTrackIds] = useState(() => new Set());
   const [deletingTrackId, setDeletingTrackId] = useState(null);
-  const [deleteError, setDeleteError] = useState("");
-
-  // ── Memoized derived data ─────────────────────────────────────────────────
-  // Prevents O(n) recomputation on every render caused by unrelated state
-  // changes (collapse toggle, rename input, drag state, etc.).
+  const [deleteError,     setDeleteError]     = useState("");
+  const [showTypePicker,  setShowTypePicker]  = useState(false);
 
   const visibleTracks = useMemo(
     () => tracks.filter((track) => !deletedTrackIds.has(track.id)),
@@ -117,7 +138,6 @@ export const TrackList = memo(function TrackList({
     [visibleTracks],
   );
 
-  // O(1) track lookup by id — rebuilt only when the tracks array identity changes.
   const trackMap = useMemo(
     () => Object.fromEntries(visibleTracks.map((t) => [t.id, t])),
     [visibleTracks],
@@ -128,13 +148,38 @@ export const TrackList = memo(function TrackList({
     [effectiveAlbums],
   );
 
-  // Safety net: tracks that somehow slipped through without an album assignment.
   const unassignedTracks = useMemo(
     () => visibleTracks.filter((t) => !assignedIds.has(t.id)),
     [visibleTracks, assignedIds],
   );
 
-  // ── Stable event handlers (stable refs → TrackRow memo holds) ─────────────
+  const albumBuckets = useMemo(() => {
+    let previousTrackCount = 0;
+    return effectiveAlbums.map((album) => {
+      const albumTracks = (album.trackIds || [])
+        .map((id) => trackMap[id])
+        .filter(Boolean);
+      const bucket = { album, albumTracks, previousTrackCount };
+      previousTrackCount += albumTracks.length;
+      return bucket;
+    });
+  }, [effectiveAlbums, trackMap]);
+
+  const renderResetKey = useMemo(
+    () => [
+      albumBuckets.map(({ album }) => `${album.id}:${(album.trackIds || []).join(",")}`).join("|"),
+      unassignedTracks.map((track) => track.id).join(","),
+    ].join("::"),
+    [albumBuckets, unassignedTracks],
+  );
+
+  const totalTrackRows = useMemo(
+    () => albumBuckets.reduce((sum, { albumTracks }) => sum + albumTracks.length, 0) + unassignedTracks.length,
+    [albumBuckets, unassignedTracks.length],
+  );
+
+  const renderedTrackLimit = useDeferredTrackLimit(renderResetKey, totalTrackRows);
+
   const toggleCollapse = useCallback((albumId) => {
     setCollapsed((prev) => ({ ...prev, [albumId]: !prev[albumId] }));
   }, []);
@@ -150,7 +195,6 @@ export const TrackList = memo(function TrackList({
     }
     setRenamingAlbumId(null);
     setRenameValue("");
-  // renameValue intentionally in deps — commitRename must close over current text
   }, [onRenameAlbum, renamingAlbumId, renameValue]);
 
   const handleDragStart = useCallback((e, trackId) => {
@@ -181,7 +225,7 @@ export const TrackList = memo(function TrackList({
 
   const handleTrackDelete = useCallback(async (trackId) => {
     if (!canEdit || !trackId || deletingTrackId) return;
-    const confirmed = window.confirm("Delete this track and its stored audio files?");
+    const confirmed = window.confirm("Delete this track and its stored audio files? This cannot be undone.");
     if (!confirmed) return;
 
     setDeleteError("");
@@ -214,7 +258,11 @@ export const TrackList = memo(function TrackList({
     }
   }, [activeTrackId, canEdit, deletingTrackId, onTrackSelect, visibleTracks]);
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  const handleCreateProject = useCallback((title, type) => {
+    onCreateAlbum?.(title, type);
+    setShowTypePicker(false);
+  }, [onCreateAlbum]);
+
   const isEmpty = visibleTracks.length === 0;
 
   return (
@@ -234,13 +282,13 @@ export const TrackList = memo(function TrackList({
         </div>
       ) : (
         <div className="track-list-albums">
-          {effectiveAlbums.map((album) => {
-            const albumTracks = (album.trackIds || [])
-              .map((id) => trackMap[id])
-              .filter(Boolean);
+          {albumBuckets.map(({ album, albumTracks, previousTrackCount }) => {
+            const visibleAlbumTracks = albumTracks.slice(0, Math.max(0, renderedTrackLimit - previousTrackCount));
             const isCollapsed      = Boolean(collapsed[album.id]);
             const isDragTarget     = dragOverAlbumId === album.id;
             const showAlbumHeaders = effectiveAlbums.length > 1;
+            const isStemProject    = album.type === "stem_project";
+            const uploadLabel      = isStemProject ? "Upload Stems" : "Add Track";
 
             return (
               <div
@@ -291,23 +339,7 @@ export const TrackList = memo(function TrackList({
                       </span>
                     )}
 
-                    {canEdit && (
-                      <button
-                        type="button"
-                        className={`album-type-badge album-type-badge--${
-                          album.type === "stem_project" ? "stems" : "album"
-                        }`}
-                        title="Click to toggle container type"
-                        onClick={() =>
-                          onUpdateAlbumType?.(
-                            album.id,
-                            album.type === "stem_project" ? "album" : "stem_project",
-                          )
-                        }
-                      >
-                        {album.type === "stem_project" ? "Stems" : "Album"}
-                      </button>
-                    )}
+                    <TypeBadge type={album.type} />
 
                     <span className="album-track-count">{albumTracks.length}</span>
 
@@ -323,14 +355,27 @@ export const TrackList = memo(function TrackList({
                             event.target.value = "";
                           }}
                         />
-                        <span>Add Track</span>
+                        <span>{uploadLabel}</span>
                       </label>
+                    )}
+
+                    {canEdit && (
+                      <button
+                        type="button"
+                        className="album-delete-btn"
+                        onClick={() => onDeleteProject?.(album.id)}
+                        title="Delete project"
+                        aria-label="Delete project"
+                      >
+                        ×
+                      </button>
                     )}
                   </div>
                 )}
 
                 {!showAlbumHeaders && canEdit && (
                   <div className="track-list-single-album-actions">
+                    <TypeBadge type={album.type} />
                     <label className="upload-button compact">
                       <input
                         type="file"
@@ -342,14 +387,14 @@ export const TrackList = memo(function TrackList({
                           event.target.value = "";
                         }}
                       />
-                      <span>Add Track</span>
+                      <span>{uploadLabel}</span>
                     </label>
                   </div>
                 )}
 
                 {!isCollapsed && (
                   <div className="track-list">
-                    {albumTracks.map((track, index) => (
+                    {visibleAlbumTracks.map((track, index) => (
                       <TrackRow
                         key={track.id}
                         track={track}
@@ -363,6 +408,9 @@ export const TrackList = memo(function TrackList({
                         isDeleting={deletingTrackId === track.id}
                       />
                     ))}
+                    {visibleAlbumTracks.length < albumTracks.length && (
+                      <div className="track-list-album-drop-hint">Loading tracks…</div>
+                    )}
                     {albumTracks.length === 0 && isDragTarget && (
                       <div className="track-list-album-drop-hint">Drop track here</div>
                     )}
@@ -372,9 +420,9 @@ export const TrackList = memo(function TrackList({
             );
           })}
 
-          {unassignedTracks.length > 0 && (
+          {unassignedTracks.length > 0 && renderedTrackLimit > totalTrackRows - unassignedTracks.length && (
             <div className="track-list">
-              {unassignedTracks.map((track, index) => (
+              {unassignedTracks.slice(0, renderedTrackLimit - (totalTrackRows - unassignedTracks.length)).map((track, index) => (
                 <TrackRow
                   key={track.id}
                   track={track}
@@ -393,22 +441,44 @@ export const TrackList = memo(function TrackList({
         </div>
       )}
 
-      {canEdit && effectiveAlbums.length > 0 && (
+      {canEdit && (
         <div className="add-album-actions">
-          <button
-            type="button"
-            className="add-album-btn"
-            onClick={() => onCreateAlbum?.("New Album", "album")}
-          >
-            + Add Album
-          </button>
-          <button
-            type="button"
-            className="add-album-btn add-album-btn--stems"
-            onClick={() => onCreateAlbum?.("New Stem Project", "stem_project")}
-          >
-            + Add Stems
-          </button>
+          {showTypePicker ? (
+            <div className="project-type-picker">
+              <button
+                type="button"
+                className="project-type-picker-card"
+                onClick={() => handleCreateProject("New Project", "album")}
+              >
+                <strong>Project</strong>
+                <span>Final stereo tracks for client review</span>
+              </button>
+              <button
+                type="button"
+                className="project-type-picker-card project-type-picker-card--stems"
+                onClick={() => handleCreateProject("New Stem Project", "stem_project")}
+              >
+                <strong>Stem Project</strong>
+                <span>Multitrack stems for DAW-style review</span>
+              </button>
+              <button
+                type="button"
+                className="project-type-picker-cancel"
+                onClick={() => setShowTypePicker(false)}
+                aria-label="Cancel"
+              >
+                ×
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="add-album-btn"
+              onClick={() => setShowTypePicker(true)}
+            >
+              + Create Project
+            </button>
+          )}
         </div>
       )}
     </section>

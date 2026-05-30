@@ -107,6 +107,7 @@ sessionRouter.put("/:sessionId", requireAdminAuth, saveSession);
 sessionRouter.delete("/:sessionId", deleteSession);
 sessionRouter.post("/:sessionId/audio", upload.single("audio"), handleAudioUpload);
 sessionRouter.post("/:sessionId/confirm-audio", requireAdminAuth, confirmAudioUpload);
+sessionRouter.delete("/:sessionId/albums/:albumId", requireAdminAuth, deleteAlbum);
 
 app.use("/api/sessions", sessionRouter);
 app.post("/api/audio/upload", upload.single("audio"), handleAudioUpload);
@@ -160,44 +161,8 @@ async function handleAudioUpload(req, res, next) {
       : await saveAudioLocally(objectKey, audioFile, req);
 
     const originalUrl = storageResult.playbackUrl;
-    let   playbackUrl = originalUrl;
-    let   previewKey  = null;
-
-    // For non-browser-native formats transcode to 256 kbps AAC inline (buffer is
-    // in memory here) and store the preview alongside the original in R2.
-    if (classification.requiresTranscode && hasR2Config) {
-      try {
-        const previewBuffer = await transcodeToAac(audioFile.buffer);
-        previewKey = objectKey.replace(/\.[^.]+$/, ".preview.m4a");
-        await r2Client.send(new PutObjectCommand({
-          Bucket: r2Config.bucketName, Key: previewKey,
-          Body: previewBuffer, ContentType: "audio/mp4",
-          CacheControl: "public, max-age=31536000",
-        }));
-        playbackUrl = buildApiPlaybackUrl(req, previewKey);
-        console.log("[MixReview] Inline transcode stored", { previewKey });
-      } catch (transcodeErr) {
-        // Non-fatal — WaveSurfer will surface its own decode error if the format
-        // is truly unplayable in the browser.
-        console.warn("[MixReview] Inline transcode failed; using original URL", {
-          file: audioFile.originalname, error: transcodeErr.message,
-        });
-      }
-    } else if (classification.requiresTranscode && !hasR2Config) {
-      try {
-        const previewBuffer = await transcodeToAac(audioFile.buffer);
-        previewKey = objectKey.replace(/\.[^.]+$/, ".preview.m4a");
-        const previewPath = path.join(uploadRoot, previewKey);
-        await mkdir(path.dirname(previewPath), { recursive: true });
-        await writeFile(previewPath, previewBuffer);
-        playbackUrl = `${req.protocol}://${req.get("host")}/uploads/${previewKey}`;
-        console.log("[MixReview] Local transcode stored", { previewKey });
-      } catch (transcodeErr) {
-        console.warn("[MixReview] Local transcode failed; using original URL", {
-          file: audioFile.originalname, error: transcodeErr.message,
-        });
-      }
-    }
+    const playbackUrl = originalUrl;
+    const previewKey  = null;
 
     const audioPayload = {
       key:              objectKey,
@@ -217,6 +182,23 @@ async function handleAudioUpload(req, res, next) {
 
     if (sessionId) {
       await attachAudioToSession(sessionId, audioPayload, versionId, trackId);
+    }
+
+    if (classification.requiresTranscode && hasR2Config) {
+      const asyncPreviewKey = objectKey.replace(/\.[^.]+$/, ".preview.m4a");
+      const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
+      transcodeAndStorePreview(objectKey, asyncPreviewKey, apiBaseUrl, sessionId, trackId, versionId)
+        .catch((err) => console.error("[MixReview] Background transcode error:", err.message));
+    } else if (classification.requiresTranscode && !hasR2Config) {
+      const asyncPreviewKey = objectKey.replace(/\.[^.]+$/, ".preview.m4a");
+      transcodeToAac(audioFile.buffer)
+        .then(async (previewBuffer) => {
+          const previewPath = path.join(uploadRoot, asyncPreviewKey);
+          await mkdir(path.dirname(previewPath), { recursive: true });
+          await writeFile(previewPath, previewBuffer);
+          console.log("[MixReview] Local background transcode stored", { previewKey: asyncPreviewKey });
+        })
+        .catch((err) => console.error("[MixReview] Local background transcode error:", err.message));
     }
 
     console.log("[MixReview] Upload stored", {
@@ -757,7 +739,20 @@ function buildAudioObjectKey(originalName, extension, { sessionId, trackId, vers
   return `${new Date().toISOString().slice(0, 10)}/${randomUUID()}-${safeBaseName}${extension}`;
 }
 
-async function listSessions(_req, res) {
+async function listSessions(_req, res, next) {
+  try {
+    const database = await withTimeout(loadSessionIndexForList(), 10_000, "Session index read timed out.");
+    return res.json({ sessions: database.sessions });
+  } catch (error) {
+    if (error?.name === "TimeoutError") {
+      return res.status(504).json({ error: "Session list could not be loaded within 10 seconds." });
+    }
+    return next(error);
+  }
+
+}
+
+async function loadSessionIndexForList() {
   let database = await readDatabase();
 
   // If the index is empty and R2 is configured, scan R2 for existing session
@@ -779,7 +774,7 @@ async function listSessions(_req, res) {
     }
   }
 
-  res.json({ sessions: database.sessions });
+  return database;
 }
 
 async function createSession(req, res) {
@@ -797,9 +792,17 @@ async function createSession(req, res) {
   res.status(201).json({ session });
 }
 
-async function getSession(req, res) {
+async function getSession(req, res, next) {
   const sessionId = sanitizeSessionId(req.params.sessionId);
-  const session = sessionId ? await readSessionDocument(sessionId) : null;
+  let session;
+  try {
+    session = sessionId ? await withTimeout(readSessionDocument(sessionId), 30_000, "Session document read timed out.") : null;
+  } catch (error) {
+    if (error?.name === "TimeoutError") {
+      return res.status(504).json({ error: "Session could not be loaded within 30 seconds." });
+    }
+    return next(error);
+  }
   if (!session) {
     return res.status(404).json({ error: "Session not found." });
   }
@@ -1061,6 +1064,58 @@ async function deleteSession(req, res, next) {
   }
 
   return res.json({ ok: true, deleted: sessionId });
+}
+
+async function deleteAlbum(req, res, next) {
+  try {
+    const sessionId = sanitizeSessionId(req.params.sessionId);
+    const albumId = typeof req.params.albumId === "string" ? req.params.albumId.trim() : null;
+
+    if (!sessionId) return res.status(400).json({ error: "Valid session ID is required." });
+    if (!albumId) return res.status(400).json({ error: "Valid album ID is required." });
+
+    const session = await readSessionDocument(sessionId);
+    if (!session) return res.status(404).json({ error: "Session not found." });
+
+    const albums = Array.isArray(session.albums) ? session.albums : [];
+    const album = albums.find((a) => a.id === albumId);
+    if (!album) return res.status(404).json({ error: "Project not found in this session." });
+
+    const albumTrackIds = new Set(Array.isArray(album.trackIds) ? album.trackIds : []);
+    const tracks = Array.isArray(session.tracks) ? session.tracks : [];
+
+    const r2Keys = new Set();
+    for (const track of tracks) {
+      if (albumTrackIds.has(track.id)) collectTrackAudioKeys(track, r2Keys);
+    }
+
+    const deletedObjects = hasR2Config ? await deleteTrackAudioObjects(r2Keys) : 0;
+
+    const nextTracks = tracks.filter((t) => !albumTrackIds.has(t.id));
+    const nextAlbums = albums.filter((a) => a.id !== albumId);
+
+    const wasActiveInAlbum = albumTrackIds.has(session.activeTrackId);
+    const fallbackTrack = wasActiveInAlbum ? nextTracks[0] || null : null;
+
+    const nextSession = normalizeSessionDocument({
+      ...session,
+      tracks: nextTracks,
+      albums: nextAlbums,
+      activeTrackId: wasActiveInAlbum ? (fallbackTrack?.id || null) : session.activeTrackId,
+      activeVersionId: wasActiveInAlbum ? (fallbackTrack?.activeVersionId || "version-v1") : session.activeVersionId,
+      updatedAt: new Date().toISOString(),
+    });
+
+    if (!nextSession) return res.status(500).json({ error: "Session could not be updated." });
+
+    await writeSessionDocument(sessionId, nextSession);
+    await upsertSessionIndex(nextSession);
+
+    console.log("[MixReview] Project deleted", { sessionId, albumId, tracksRemoved: albumTrackIds.size, deletedObjects });
+    return res.json({ ok: true, deleted: albumId, tracksRemoved: albumTrackIds.size, deletedObjects });
+  } catch (error) {
+    next(error);
+  }
 }
 
 async function deleteTrack(req, res, next) {
@@ -1368,6 +1423,19 @@ async function readDatabase() {
   } catch {
     return { sessions: [] };
   }
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const error = new Error(message);
+      error.name = "TimeoutError";
+      reject(error);
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 // writeDatabase — persists the index locally AND to R2 when configured.

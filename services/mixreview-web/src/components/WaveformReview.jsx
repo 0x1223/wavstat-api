@@ -3,6 +3,10 @@ import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
 import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
 
+function getPlaybackUrl(audioSource) {
+  return audioSource?.previewUrl || audioSource?.playbackUrl || audioSource?.url || "";
+}
+
 
 export function WaveformReview({
   audioSource,
@@ -229,7 +233,7 @@ export function WaveformReview({
     callbacksRef.current.onDurationChange(0);
     callbacksRef.current.onPlaybackChange(false);
 
-    const playbackUrl = audioSource?.playbackUrl || audioSource?.url;
+    const playbackUrl = getPlaybackUrl(audioSource);
 
     // ── Load-start logging ──────────────────────────────────────────────
     const ext = (playbackUrl ?? "").split("?")[0].split(".").pop().toLowerCase();
@@ -548,7 +552,7 @@ export function WaveformReview({
       }
       resizeObserver.disconnect();
     };
-  }, [audioSource?.playbackUrl, audioSource?.url]);
+  }, [audioSource?.previewUrl, audioSource?.playbackUrl, audioSource?.url]);
 
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
@@ -592,7 +596,7 @@ export function WaveformReview({
       setIsMarkerToolActive(false);
     }
   }
-  const hasAudio = Boolean(audioSource?.url);
+  const hasAudio = Boolean(getPlaybackUrl(audioSource));
   const markerItems = duration > 0
     ? [
         ...comments,
