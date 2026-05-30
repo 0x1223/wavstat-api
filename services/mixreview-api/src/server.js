@@ -33,6 +33,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: maxAudioBytes }
 });
+const pendingPeakRepairKeys = new Set();
+let peakRepairChain = Promise.resolve();
 
 const r2Config = {
   accountId: getEnvValue("CLOUDFLARE_ACCOUNT_ID") || getEnvValue("R2_ACCOUNT_ID"),
@@ -163,6 +165,7 @@ async function handleAudioUpload(req, res, next) {
     const originalUrl = storageResult.playbackUrl;
     const playbackUrl = originalUrl;
     const previewKey  = null;
+    const peaksKey = hasR2Config ? `${objectKey}.peaks.json` : null;
 
     const audioPayload = {
       key:              objectKey,
@@ -182,6 +185,12 @@ async function handleAudioUpload(req, res, next) {
 
     if (sessionId) {
       await attachAudioToSession(sessionId, audioPayload, versionId, trackId);
+    }
+
+    if (hasR2Config && peaksKey) {
+      const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
+      generateAndStoreSessionPeaks(audioFile.buffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, objectKey)
+        .catch((err) => console.error("[MixReview] Peaks generation failed", { objectKey, error: err.message }));
     }
 
     if (classification.requiresTranscode && hasR2Config) {
@@ -249,19 +258,10 @@ async function uploadAudioToR2(objectKey, audioFile, contentType, req) {
     }),
   );
 
-  const peaksKey = `${objectKey}.peaks.json`;
-  const peaksUrl = buildApiPlaybackUrl(req, peaksKey);
-
-  // Non-blocking: generate and upload peaks after the audio is already in R2.
-  // Errors are logged but never surface to the caller.
-  generateAndUploadPeaks(audioFile.buffer, peaksKey).catch((err) => {
-    console.error("[MixReview] Peaks generation failed", { objectKey, error: err.message });
-  });
-
   return {
     storage: "r2",
     playbackUrl: buildApiPlaybackUrl(req, objectKey),
-    peaksUrl
+    peaksUrl: null
   };
 }
 
@@ -391,6 +391,7 @@ async function confirmAudioUpload(req, res, next) {
     const mimeType = AUDIO_MIME_BY_EXT[ext.slice(1)] || format.mimeType;
 
     const originalUrl = buildApiPlaybackUrl(req, safeKey);
+    const peaksKey = `${safeKey}.peaks.json`;
     const audioPayload = {
       key:               safeKey,
       playbackUrl:       originalUrl,  // updated to preview URL if transcode succeeds
@@ -406,6 +407,9 @@ async function confirmAudioUpload(req, res, next) {
     };
 
     await attachAudioToSession(sessionId, audioPayload, safeVersionId, safeTrackId);
+
+    generateAndStoreSessionPeaksFromR2(safeKey, peaksKey, `${req.protocol}://${req.get("host")}`, sessionId, safeTrackId, safeVersionId)
+      .catch((err) => console.error("[MixReview] Direct-upload peaks generation failed", { key: safeKey, error: err.message }));
 
     // For non-browser-native formats, kick off a background fetch → transcode →
     // store cycle.  The session document is patched with the preview URL when done.
@@ -462,6 +466,54 @@ async function generateAndUploadPeaks(audioBuffer, peaksKey, numPoints = 800) {
     })
   );
   console.log("[MixReview] Peaks uploaded", { peaksKey, numPoints: peaks.length });
+}
+
+async function generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, objectKey = null) {
+  await generateAndUploadPeaks(audioBuffer, peaksKey);
+  if (!sessionId || !trackId || !versionId) return;
+  const peaksUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(peaksKey)}`;
+  await patchSessionAudioMetadata(sessionId, trackId, versionId, { peaksUrl });
+  console.log("[MixReview] Peaks URL attached to session", { sessionId, trackId, versionId, objectKey, peaksKey });
+}
+
+async function generateAndStoreSessionPeaksFromR2(originalKey, peaksKey, apiBaseUrl, sessionId, trackId, versionId) {
+  const r2Obj = await r2Client.send(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }));
+  const chunks = [];
+  for await (const chunk of r2Obj.Body) chunks.push(chunk);
+  const audioBuffer = Buffer.concat(chunks);
+  console.log("[MixReview] Peaks generation: fetched original", { originalKey, bytes: audioBuffer.length });
+  await generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
+}
+
+function queueMissingPeakRepairs(session, req) {
+  if (!hasR2Config || !session?.id) return;
+
+  const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
+  const stemTrackIds = new Set(
+    (Array.isArray(session.albums) ? session.albums : [])
+      .filter((album) => album?.type === "stem_project")
+      .flatMap((album) => Array.isArray(album.trackIds) ? album.trackIds : []),
+  );
+  const tracks = Array.isArray(session.tracks) ? session.tracks : [];
+
+  tracks.forEach((track) => {
+    if (!stemTrackIds.has(track.id)) return;
+    const versions = Array.isArray(track.versions) ? track.versions : [];
+    const version = versions.find((candidate) => candidate.id === track.activeVersionId) || versions[0];
+    const audio = version?.audioMetadata;
+    if (!version?.id || !audio?.key || audio.peaksUrl) return;
+
+    const repairId = `${session.id}:${track.id}:${version.id}:${audio.key}`;
+    if (pendingPeakRepairKeys.has(repairId)) return;
+    pendingPeakRepairKeys.add(repairId);
+
+    const peaksKey = `${audio.key}.peaks.json`;
+    peakRepairChain = peakRepairChain
+      .catch(() => {})
+      .then(() => generateAndStoreSessionPeaksFromR2(audio.key, peaksKey, apiBaseUrl, session.id, track.id, version.id))
+      .catch((err) => console.error("[MixReview] Missing peaks repair failed", { key: audio.key, error: err.message }))
+      .finally(() => pendingPeakRepairKeys.delete(repairId));
+  });
 }
 
 // generatePeaksWithFfmpeg — decodes any audio format to mono f32le PCM via
@@ -703,24 +755,42 @@ async function transcodeAndStorePreview(originalKey, previewKey, apiBaseUrl, ses
     }));
 
     const previewUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(previewKey)}`;
-    const existingDoc = await readSessionDocument(sessionId);
-    if (existingDoc) {
-      const patchedTracks = (existingDoc.tracks || []).map((track) => {
-        if (track.id !== trackId) return track;
-        return {
-          ...track,
-          versions: (track.versions || []).map((v) => {
-            if (v.id !== versionId || !v.audioMetadata) return v;
-            return { ...v, audioMetadata: { ...v.audioMetadata, playbackUrl: previewUrl, url: previewUrl, previewUrl, previewKey, transcodedAt: new Date().toISOString() } };
-          }),
-        };
-      });
-      await writeSessionDocument(sessionId, { ...existingDoc, tracks: patchedTracks });
-    }
+    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+      playbackUrl: previewUrl,
+      url: previewUrl,
+      audioUrl: previewUrl,
+      previewUrl,
+      previewKey,
+      transcodedAt: new Date().toISOString(),
+    });
     console.log("[MixReview] Background transcode complete", { previewKey, sessionId, trackId });
   } catch (err) {
     console.error("[MixReview] Background transcode failed", { originalKey, error: err.message });
   }
+}
+
+async function patchSessionAudioMetadata(sessionId, trackId, versionId, patch) {
+  const existingDoc = await readSessionDocument(sessionId);
+  if (!existingDoc) return;
+
+  const patchedTracks = (existingDoc.tracks || []).map((track) => {
+    if (track.id !== trackId) return track;
+    return {
+      ...track,
+      versions: (track.versions || []).map((version) => {
+        if (version.id !== versionId || !version.audioMetadata) return version;
+        return {
+          ...version,
+          audioMetadata: {
+            ...version.audioMetadata,
+            ...patch,
+          },
+        };
+      }),
+    };
+  });
+
+  await writeSessionDocument(sessionId, { ...existingDoc, tracks: patchedTracks });
 }
 
 function buildAudioObjectKey(originalName, extension, { sessionId, trackId, versionId } = {}) {
@@ -807,6 +877,7 @@ async function getSession(req, res, next) {
     return res.status(404).json({ error: "Session not found." });
   }
 
+  queueMissingPeakRepairs(session, req);
   return res.json({ session: await refreshSessionPlaybackUrls(session, req) });
 }
 
@@ -1345,6 +1416,7 @@ async function attachAudioToSession(sessionId, audio, versionId, trackId = "trac
     requiresTranscode: Boolean(audio.requiresTranscode),
     previewUrl: audio.previewUrl || null,
     previewKey: audio.previewKey || null,
+    peaksUrl: audio.peaksUrl || null,
     transcodedAt: audio.transcodedAt || null,
     key: audio.key,
     storage: audio.storage,
@@ -1799,10 +1871,6 @@ async function refreshSessionPlaybackUrls(session, req = null) {
     const previewKey = version.audioMetadata.previewKey;
     const freshUrl = previewKey ? buildApiPlaybackUrl(req, previewKey) : originalUrl;
 
-    // Re-derive the peaks URL from the well-known naming convention.
-    // peaksKey is never stored separately — it is always ${key}.peaks.json.
-    const freshPeaksUrl = buildApiPlaybackUrl(req, `${key}.peaks.json`);
-
     return {
       ...version,
       audioMetadata: {
@@ -1812,7 +1880,7 @@ async function refreshSessionPlaybackUrls(session, req = null) {
         audioUrl: freshUrl,
         originalUrl,
         previewUrl: previewKey ? freshUrl : version.audioMetadata.previewUrl || null,
-        peaksUrl: freshPeaksUrl,
+        peaksUrl: version.audioMetadata.peaksUrl || null,
       }
     };
   };
