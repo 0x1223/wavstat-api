@@ -21,6 +21,41 @@ const col = (i) => LANE_COLOURS[i % LANE_COLOURS.length];
 // Drift threshold for follower re-sync during playback (seconds).
 // Below this, normal clock variance; above it, we force a setTime() correction.
 const DRIFT_THRESHOLD = 0.08;
+const STATIC_WAVEFORM_CURVE = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
+
+function buildStaticPeaks(length = 240) {
+  return [Array.from({ length }, (_, i) => STATIC_WAVEFORM_CURVE[i % STATIC_WAVEFORM_CURVE.length])];
+}
+
+function normalizePeaks(peaks) {
+  if (!Array.isArray(peaks) || peaks.length === 0) {
+    return null;
+  }
+  return Array.isArray(peaks[0]) ? peaks : [peaks];
+}
+
+function fetchPeaks(peaksUrl, timeoutMs = 1200) {
+  if (!peaksUrl) {
+    return Promise.resolve(null);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(peaksUrl, { signal: controller.signal })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then(normalizePeaks)
+    .catch((error) => {
+      if (error?.name !== "AbortError") {
+        console.warn("[StemPlayer] Peaks fetch failed; using static peaks", error.message);
+      }
+      return null;
+    })
+    .finally(() => window.clearTimeout(timeoutId));
+}
 
 // ── StemPlayer ────────────────────────────────────────────────────────────────
 //
@@ -50,6 +85,7 @@ export const StemPlayer = memo(function StemPlayer({
   const containerRefs = useRef([]);
   // WaveSurfer instances indexed by stem position
   const wsRefs = useRef([]);
+  const requestedPlayingRef = useRef(false);
   // Stable ref for callbacks so effects never need to re-run on callback identity changes
   const cbRef = useRef({ onReady, onTimeUpdate, onDurationChange, onPlaybackChange });
   // Ensures onReady is only fired once per stems set
@@ -78,6 +114,7 @@ export const StemPlayer = memo(function StemPlayer({
   useEffect(() => {
     // Reset all state for the new stems set
     masterReadyFiredRef.current = false;
+    requestedPlayingRef.current = false;
     setLoadingStates(stems.map(() => true));
     setErrorStates(stems.map(() => ""));
     setDuration(0);
@@ -91,6 +128,7 @@ export const StemPlayer = memo(function StemPlayer({
 
     stems.forEach((stem, i) => {
       const url = getPlaybackUrl(stem.audioSource);
+      const peaksUrl = stem.audioSource?.peaksUrl || "";
       const container = containerRefs.current[i];
 
       if (!url || !container) {
@@ -105,6 +143,7 @@ export const StemPlayer = memo(function StemPlayer({
 
       let ws = null;
       let disposed = false;
+      let loadStarted = false;
 
       // Stagger creation so large stem sets do not lock the desktop UI.
       let rafId = null;
@@ -114,7 +153,7 @@ export const StemPlayer = memo(function StemPlayer({
 
           ws = WaveSurfer.create({
             container: containerRefs.current[i],
-            url,
+            backend: "MediaElement",
             waveColor: col(i).wave,
             progressColor: col(i).progress,
             cursorColor: "#f5efe3",
@@ -128,6 +167,8 @@ export const StemPlayer = memo(function StemPlayer({
             normalize: true,
             dragToSeek: true,  // native click/drag seek within a lane
             fillParent: true,
+            pixelRatio: 1,
+            minPxPerSec: 1,
           });
 
           wsRefs.current[i] = ws;
@@ -137,7 +178,7 @@ export const StemPlayer = memo(function StemPlayer({
             if (disposed) return;
 
             const mediaEl = ws.getMediaElement?.();
-            if (mediaEl) { mediaEl.muted = false; mediaEl.volume = 1; }
+            if (mediaEl) { mediaEl.muted = false; mediaEl.volume = 1; mediaEl.preload = "auto"; }
 
             setLoadingStates((prev) => {
               const next = [...prev];
@@ -152,7 +193,13 @@ export const StemPlayer = memo(function StemPlayer({
               const dur = ws.getDuration();
               setDuration(dur);
               cbRef.current.onDurationChange(dur);
-              cbRef.current.onReady(buildMasterControls(wsRefs));
+              cbRef.current.onReady(buildMasterControls(wsRefs, requestedPlayingRef));
+            } else if (requestedPlayingRef.current && wsRefs.current[0]?.isPlaying?.()) {
+              const leaderTime = wsRefs.current[0].getCurrentTime?.() || 0;
+              ws.setTime(leaderTime);
+              ws.play().catch((error) => {
+                if (!disposed) console.warn(`[StemPlayer] Lane ${i} late-start failed:`, error?.message ?? error);
+              });
             }
           });
 
@@ -194,9 +241,9 @@ export const StemPlayer = memo(function StemPlayer({
               }
             });
 
-            ws.on("play",   () => { if (!disposed) cbRef.current.onPlaybackChange(true); });
-            ws.on("pause",  () => { if (!disposed) cbRef.current.onPlaybackChange(false); });
-            ws.on("finish", () => { if (!disposed) cbRef.current.onPlaybackChange(false); });
+            ws.on("play",   () => { if (!disposed) { requestedPlayingRef.current = true; cbRef.current.onPlaybackChange(true); } });
+            ws.on("pause",  () => { if (!disposed) { requestedPlayingRef.current = false; cbRef.current.onPlaybackChange(false); } });
+            ws.on("finish", () => { if (!disposed) { requestedPlayingRef.current = false; cbRef.current.onPlaybackChange(false); } });
           }
 
           // ── Any lane: user seek → broadcast to all other lanes ──────────
@@ -212,6 +259,30 @@ export const StemPlayer = memo(function StemPlayer({
             setCurrentTime(newTime);
             cbRef.current.onTimeUpdate(newTime);
           });
+
+          fetchPeaks(peaksUrl).then((peaks) => {
+            if (disposed || !ws || loadStarted) return;
+            loadStarted = true;
+            const resolvedPeaks = peaks || buildStaticPeaks();
+            ws.load(url, resolvedPeaks).catch((error) => {
+              if (disposed) return;
+              console.warn(`[StemPlayer] Lane ${i} ("${stem.title}") load failed:`, error?.message ?? error);
+              setLoadingStates((prev) => {
+                const next = [...prev];
+                next[i] = false;
+                return next;
+              });
+              setErrorStates((prev) => {
+                const next = [...prev];
+                next[i] = "Could not load";
+                return next;
+              });
+              if (i === 0 && !masterReadyFiredRef.current) {
+                masterReadyFiredRef.current = true;
+                cbRef.current.onReady(null);
+              }
+            });
+          });
         });
       }, Math.floor(i / 2) * 50);
 
@@ -221,6 +292,8 @@ export const StemPlayer = memo(function StemPlayer({
         if (rafId !== null) cancelAnimationFrame(rafId);
         if (ws) {
           if (wsRefs.current[i] === ws) wsRefs.current[i] = null;
+          ws.pause?.();
+          ws.unAll?.();
           ws.destroy();
         }
       });
@@ -288,23 +361,27 @@ function getPlaybackUrl(audioSource) {
 
 // Build the master controls object. wsRefs is always current (it's a ref) so
 // all methods automatically include stems that finished loading after onReady.
-function buildMasterControls(wsRefs) {
+function buildMasterControls(wsRefs, requestedPlayingRef) {
   const all = () => wsRefs.current.filter(Boolean);
 
   return {
     // play / pause / playPause broadcast to every loaded instance
     play: async () => {
+      requestedPlayingRef.current = true;
       await Promise.allSettled(all().map((ws) => ws.play()));
     },
     pause: () => {
+      requestedPlayingRef.current = false;
       all().forEach((ws) => ws.pause());
     },
     playPause: async () => {
       const leader = wsRefs.current[0];
       if (!leader) return;
       if (leader.isPlaying?.()) {
+        requestedPlayingRef.current = false;
         all().forEach((ws) => ws.pause());
       } else {
+        requestedPlayingRef.current = true;
         await Promise.allSettled(all().map((ws) => ws.play()));
       }
     },
