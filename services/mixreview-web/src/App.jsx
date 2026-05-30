@@ -12,6 +12,7 @@ import { WaveformReview } from "./components/WaveformReview.jsx";
 import { StemPlayer } from "./components/StemPlayer.jsx";
 import { MobileStemStack } from "./components/MobileStemStack.jsx";
 import {
+  deleteAlbumFromApi,
   deleteSessionFromApi,
   listSessionsFromApi,
   loadSessionFromApi,
@@ -228,6 +229,9 @@ export default function App({ onFirstRender } = {}) {
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
+  // Guards against a stale in-flight hydration resolving after beginNewSession has
+  // already reset state. Set to null in beginNewSession so the callback is ignored.
+  const hydrationGuardRef = useRef(routeSessionId);
   // Mobile auto-play-next refs (mobile reviewer only).
   // userHasPlayedRef:       true once the user has tapped Play at least once.
   // autoPlayNextRef:        true when a track ends naturally → play next when ready.
@@ -507,7 +511,7 @@ export default function App({ onFirstRender } = {}) {
     setIsSessionHydrating(true);
     loadSessionFromApi(routeSessionId)
       .then((storedSession) => {
-        if (isCancelled) {
+        if (isCancelled || hydrationGuardRef.current !== routeSessionId) {
           return;
         }
 
@@ -1051,11 +1055,43 @@ export default function App({ onFirstRender } = {}) {
     );
     setIsDirty(true);
   }, []);
+
+  const handleDeleteProject = useCallback(async (albumId) => {
+    if (!permissions.canEdit || !albumId) return;
+    const album = albums.find((a) => a.id === albumId);
+    if (!album) return;
+
+    const confirmed = window.confirm(`Delete project "${album.title}" and all its stems? This cannot be undone.`);
+    if (!confirmed) return;
+
+    const trackIdsToRemove = new Set(album.trackIds || []);
+
+    setAlbums((prev) => prev.filter((a) => a.id !== albumId));
+    setTracks((prev) => prev.filter((t) => !trackIdsToRemove.has(t.id)));
+
+    if (trackIdsToRemove.has(activeTrackId)) {
+      const remaining = tracks.filter((t) => !trackIdsToRemove.has(t.id));
+      if (remaining.length > 0) {
+        selectTrackRef.current?.(remaining[0].id);
+      } else {
+        setActiveTrackId(null);
+        setVersions(createEmptyVersions());
+        setActiveVersionId("version-v1");
+      }
+    }
+
+    try {
+      await deleteAlbumFromApi(sessionId, albumId);
+    } catch (error) {
+      setSessionMessage(error.message || "Project could not be deleted.");
+    }
+  }, [activeTrackId, albums, permissions.canEdit, sessionId, tracks]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const beginNewSession = useCallback(() => {
     revokeVersionUrls(versionsRef.current);
     const nextSessionId = createSessionId();
+    hydrationGuardRef.current = null;
     setSessionId(nextSessionId);
     setProjectTitle(emptyProjectName);
     setSessionDetails(emptySessionDetails);
@@ -2269,6 +2305,7 @@ export default function App({ onFirstRender } = {}) {
             onRenameAlbum={handleRenameAlbum}
             onUpdateAlbumType={handleUpdateAlbumType}
             onMoveTrack={handleMoveTrack}
+            onDeleteProject={handleDeleteProject}
           />
 
           {(permissions.canEdit || !hasPlayableAudio) && (

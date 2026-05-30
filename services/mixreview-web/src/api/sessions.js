@@ -150,3 +150,18 @@ export async function uploadSessionAudio(sessionId, versionId, file, trackId = n
 
   return confirmPayload;
 }
+
+export async function deleteAlbumFromApi(sessionId, albumId) {
+  const adminKey = import.meta.env.VITE_ADMIN_API_KEY;
+  const response = await fetch(
+    apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/albums/${encodeURIComponent(albumId)}`),
+    {
+      method: "DELETE",
+      headers: adminKey ? { Authorization: `Bearer ${adminKey}` } : {},
+    }
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || "Project could not be deleted.");
+  }
+}
