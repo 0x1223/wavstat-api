@@ -1127,7 +1127,7 @@ async function saveSession(req, res) {
       // Guard: read the stored document so we can preserve audio metadata
       // that the client no longer has (cleared blob URL, stale null, etc.)
       const storedSession = await readSessionDocument(sessionId).catch(() => null);
-      const mergedSession = preserveAudioMetadata(incomingSession, storedSession);
+      const mergedSession = preserveStoredSessionMetadata(incomingSession, storedSession);
 
       const session = normalizeSessionDocument({
         ...mergedSession,
@@ -1192,6 +1192,34 @@ async function saveSession(req, res) {
  * file no longer available": the client race-writes a stale snapshot that
  * overwrites the valid key the server just wrote via POST /audio.
  */
+function preserveStoredSessionMetadata(incoming, stored) {
+  return preserveAlbumTypes(preserveAudioMetadata(incoming, stored), stored);
+}
+
+function preserveAlbumTypes(incoming, stored) {
+  if (!isPlainObject(stored) || !Array.isArray(incoming?.albums) || !Array.isArray(stored.albums)) {
+    return incoming;
+  }
+
+  const storedAlbumTypes = new Map(
+    stored.albums
+      .filter((album) => album?.id && album.type === "stem_project")
+      .map((album) => [album.id, album.type])
+  );
+
+  if (storedAlbumTypes.size === 0) return incoming;
+
+  return {
+    ...incoming,
+    albums: incoming.albums.map((album) => {
+      if (album?.id && storedAlbumTypes.get(album.id) === "stem_project" && album.type !== "stem_project") {
+        return { ...album, type: "stem_project" };
+      }
+      return album;
+    }),
+  };
+}
+
 function preserveAudioMetadata(incoming, stored) {
   if (!isPlainObject(stored) || !Array.isArray(incoming?.tracks) || !Array.isArray(stored.tracks)) {
     return incoming;
