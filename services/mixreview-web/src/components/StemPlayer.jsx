@@ -21,53 +21,6 @@ const col = (i) => LANE_COLOURS[i % LANE_COLOURS.length];
 // Drift threshold for follower re-sync during playback (seconds).
 // Below this, normal clock variance; above it, we force a setTime() correction.
 const DRIFT_THRESHOLD = 0.08;
-const STATIC_WAVEFORM_CURVE = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
-
-function buildStaticPeaks(length = 240) {
-  return [Array.from({ length }, (_, i) => STATIC_WAVEFORM_CURVE[i % STATIC_WAVEFORM_CURVE.length])];
-}
-
-function normalizePeaks(peaks) {
-  if (!Array.isArray(peaks) || peaks.length === 0) {
-    return null;
-  }
-  return Array.isArray(peaks[0]) ? peaks : [peaks];
-}
-
-function fetchPeaks(peaksUrl, timeoutMs = 700) {
-  if (!peaksUrl) {
-    return Promise.resolve(null);
-  }
-
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  return fetch(peaksUrl, { signal: controller.signal })
-    .then((response) => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.json();
-    })
-    .then(normalizePeaks)
-    .catch((error) => {
-      if (error?.name !== "AbortError") {
-        console.warn("[StemPlayer] Peaks fetch failed; using static stem preview", error.message);
-      }
-      return null;
-    })
-    .finally(() => window.clearTimeout(timeoutId));
-}
-
-function releaseWaveSurferMedia(ws) {
-  const mediaEl = ws?.getMediaElement?.();
-  if (!mediaEl) return;
-  try {
-    mediaEl.pause();
-    mediaEl.removeAttribute("src");
-    mediaEl.load();
-  } catch {
-    // Best-effort cleanup only; WaveSurfer.destroy() still runs afterward.
-  }
-}
 
 // ── StemPlayer ────────────────────────────────────────────────────────────────
 //
@@ -121,12 +74,8 @@ export const StemPlayer = memo(function StemPlayer({
   // effect to re-run and destroy already-playing WaveSurfer instances.
   const stemsKey = useMemo(
     () => stems
-      .map((s) => `${s.id}:${s.audioSource?.playbackUrl || s.audioSource?.url || ""}:${Number(s.audioSource?.duration) || 0}:${s.audioSource?.peaksUrl || ""}`)
+      .map((s) => `${s.id}:${s.audioSource?.playbackUrl || s.audioSource?.url || ""}`)
       .join("|"),
-    [stems],
-  );
-  const sharedDuration = useMemo(
-    () => Math.max(0, ...stems.map((stem) => Number(stem.audioSource?.duration) || 0)),
     [stems],
   );
 
@@ -149,8 +98,6 @@ export const StemPlayer = memo(function StemPlayer({
       // Use playbackUrl (same priority as MobileStemStack) — not previewUrl,
       // which may be null while background processing is running.
       const url = stem.audioSource?.playbackUrl || stem.audioSource?.url || "";
-      const peaksUrl = stem.audioSource?.peaksUrl || "";
-      const stemDuration = Number(stem.audioSource?.duration) || sharedDuration || undefined;
       const container = containerRefs.current[i];
 
       if (!url || !container) {
@@ -165,7 +112,6 @@ export const StemPlayer = memo(function StemPlayer({
 
       let ws = null;
       let disposed = false;
-      let loadStarted = false;
 
       // Stagger creation so large stem sets do not flood the browser with
       // simultaneous network requests. Pairs of stems share a slot so the
@@ -176,9 +122,14 @@ export const StemPlayer = memo(function StemPlayer({
         rafId = requestAnimationFrame(() => {
           if (disposed || !containerRefs.current[i]) return;
 
+          // Pass `url` directly so audio starts loading the moment the
+          // instance is created.  Previously, audio was gated on a separate
+          // fetchPeaks() HTTP request (up to 1 200 ms) which meant stems
+          // with peaks data loaded audio far later than stems without, causing
+          // some to still be loading when the user first pressed Play.
           ws = WaveSurfer.create({
             container: containerRefs.current[i],
-            backend: "MediaElement",
+            url,
             waveColor: col(i).wave,
             progressColor: col(i).progress,
             cursorColor: "#f5efe3",
@@ -288,30 +239,6 @@ export const StemPlayer = memo(function StemPlayer({
             setCurrentTime(newTime);
             cbRef.current.onTimeUpdate(newTime);
           });
-
-          fetchPeaks(peaksUrl).then((peaks) => {
-            if (disposed || !ws || loadStarted) return;
-            loadStarted = true;
-            const resolvedPeaks = peaks || buildStaticPeaks();
-            ws.load(url, resolvedPeaks, stemDuration).catch((error) => {
-              if (disposed) return;
-              console.warn(`[StemPlayer] Lane ${i} ("${stem.title}") load failed:`, error?.message ?? error);
-              setLoadingStates((prev) => {
-                const next = [...prev];
-                next[i] = false;
-                return next;
-              });
-              setErrorStates((prev) => {
-                const next = [...prev];
-                next[i] = "Could not load";
-                return next;
-              });
-              if (i === 0 && !masterReadyFiredRef.current) {
-                masterReadyFiredRef.current = true;
-                cbRef.current.onReady(null);
-              }
-            });
-          });
         });
       }, Math.floor(i / 2) * 50);
 
@@ -323,7 +250,6 @@ export const StemPlayer = memo(function StemPlayer({
           if (wsRefs.current[i] === ws) wsRefs.current[i] = null;
           ws.pause?.();
           ws.unAll?.();
-          releaseWaveSurferMedia(ws);
           ws.destroy();
         }
       });

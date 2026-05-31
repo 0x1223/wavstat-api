@@ -43,17 +43,6 @@ function fetchPeaks(peaksUrl, timeoutMs = 800) {
     .finally(() => window.clearTimeout(timeoutId));
 }
 
-function releaseWaveSurferMedia(ws) {
-  const mediaEl = ws?.getMediaElement?.();
-  if (!mediaEl) return;
-  try {
-    mediaEl.pause();
-    mediaEl.removeAttribute("src");
-    mediaEl.load();
-  } catch {
-    // Best-effort cleanup only; WaveSurfer.destroy() still runs afterward.
-  }
-}
 
 export function WaveformReview({
   audioSource,
@@ -368,7 +357,6 @@ export function WaveformReview({
     let audioReadyTimer = null;
 
     const peaksFetch = fetchPeaks(audioSource?.peaksUrl || null);
-    const sourceDuration = Number(audioSource?.duration) || undefined;
 
     // Defer DOM binding past first paint — same frame budget for initial load
     // and all subsequent manual track switches.
@@ -575,7 +563,7 @@ export function WaveformReview({
           source: peaks ? "peaksUrl" : "static",
           points: resolvedPeaks[0]?.length || 0,
         });
-        wavesurfer.load(playbackUrl, resolvedPeaks, sourceDuration).catch((error) => {
+        wavesurfer.load(playbackUrl, resolvedPeaks).catch((error) => {
           if (isDisposed || hasLoaded) return;
           console.warn("[WaveformReview] Desktop load failed", error?.message ?? String(error));
           hasLoaded = true;
@@ -597,9 +585,6 @@ export function WaveformReview({
       clearTimeout(audioReadyTimer);
       if (wavesurfer) {
         if (wavesurferRef.current === wavesurfer) wavesurferRef.current = null;
-        wavesurfer.pause?.();
-        wavesurfer.unAll?.();
-        releaseWaveSurferMedia(wavesurfer);
         wavesurfer.destroy();
       }
       resizeObserver.disconnect();
