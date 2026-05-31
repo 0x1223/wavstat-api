@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const app = express();
@@ -852,6 +852,23 @@ async function streamAudioPlayback(req, res, next) {
       return res.redirect(302, `/uploads/${objectKey}`);
     }
 
+    if (req.method === "HEAD") {
+      const response = await r2Client.send(
+        new HeadObjectCommand({
+          Bucket: r2Config.bucketName,
+          Key: objectKey,
+        }),
+      );
+      const contentType = response.ContentType || extContentType || "application/octet-stream";
+      res.status(200);
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Content-Type", contentType);
+      if (response.ContentLength) {
+        res.setHeader("Content-Length", response.ContentLength);
+      }
+      return res.end();
+    }
+
     const response = await r2Client.send(
       new GetObjectCommand({
         Bucket: r2Config.bucketName,
@@ -1092,8 +1109,6 @@ async function getSession(req, res, next) {
     return res.status(404).json({ error: "Session not found." });
   }
 
-  queueMissingPeakRepairs(session, req);
-  queueStuckProcessingRepairs(session, req);
   return res.json({ session: await refreshSessionPlaybackUrls(session, req) });
 }
 
