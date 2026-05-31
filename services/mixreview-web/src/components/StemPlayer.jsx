@@ -22,36 +22,6 @@ const col = (i) => LANE_COLOURS[i % LANE_COLOURS.length];
 // Below this, normal clock variance; above it, we force a setTime() correction.
 const DRIFT_THRESHOLD = 0.08;
 
-function normalizePeaks(peaks) {
-  if (!Array.isArray(peaks) || peaks.length === 0) {
-    return null;
-  }
-  return Array.isArray(peaks[0]) ? peaks : [peaks];
-}
-
-function fetchPeaks(peaksUrl, timeoutMs = 1200) {
-  if (!peaksUrl) {
-    return Promise.resolve(null);
-  }
-
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  return fetch(peaksUrl, { signal: controller.signal })
-    .then((response) => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.json();
-    })
-    .then(normalizePeaks)
-    .catch((error) => {
-      if (error?.name !== "AbortError") {
-        console.warn("[StemPlayer] Peaks fetch failed; decoding waveform from audio", error.message);
-      }
-      return null;
-    })
-    .finally(() => window.clearTimeout(timeoutId));
-}
-
 // ── StemPlayer ────────────────────────────────────────────────────────────────
 //
 // Renders a vertical stack of waveforms, one per stem, all tied to a single
@@ -99,9 +69,12 @@ export const StemPlayer = memo(function StemPlayer({
   // ── Main effect: create / destroy all WaveSurfer instances ─────────────────
   // Re-runs whenever the stems set changes identity (different stem project).
   // Using a stable string key so the effect is immune to object-reference churn.
+  // Anchor the key to playbackUrl (same as MobileStemStack) so a later
+  // previewUrl update after background processing does not cause the entire
+  // effect to re-run and destroy already-playing WaveSurfer instances.
   const stemsKey = useMemo(
     () => stems
-      .map((s) => `${s.id}:${getPlaybackUrl(s.audioSource)}`)
+      .map((s) => `${s.id}:${s.audioSource?.playbackUrl || s.audioSource?.url || ""}`)
       .join("|"),
     [stems],
   );
@@ -122,8 +95,9 @@ export const StemPlayer = memo(function StemPlayer({
     const cleanups = [];
 
     stems.forEach((stem, i) => {
-      const url = getPlaybackUrl(stem.audioSource);
-      const peaksUrl = stem.audioSource?.peaksUrl || "";
+      // Use playbackUrl (same priority as MobileStemStack) — not previewUrl,
+      // which may be null while background processing is running.
+      const url = stem.audioSource?.playbackUrl || stem.audioSource?.url || "";
       const container = containerRefs.current[i];
 
       if (!url || !container) {
@@ -138,17 +112,24 @@ export const StemPlayer = memo(function StemPlayer({
 
       let ws = null;
       let disposed = false;
-      let loadStarted = false;
 
-      // Stagger creation so large stem sets do not lock the desktop UI.
+      // Stagger creation so large stem sets do not flood the browser with
+      // simultaneous network requests. Pairs of stems share a slot so the
+      // maximum delay for 7 stems is 150 ms — imperceptible to the user but
+      // enough to let each batch begin rendering before the next starts.
       let rafId = null;
       const timerId = window.setTimeout(() => {
         rafId = requestAnimationFrame(() => {
           if (disposed || !containerRefs.current[i]) return;
 
+          // Pass `url` directly so audio starts loading the moment the
+          // instance is created.  Previously, audio was gated on a separate
+          // fetchPeaks() HTTP request (up to 1 200 ms) which meant stems
+          // with peaks data loaded audio far later than stems without, causing
+          // some to still be loading when the user first pressed Play.
           ws = WaveSurfer.create({
             container: containerRefs.current[i],
-            backend: "MediaElement",
+            url,
             waveColor: col(i).wave,
             progressColor: col(i).progress,
             cursorColor: "#f5efe3",
@@ -160,7 +141,7 @@ export const StemPlayer = memo(function StemPlayer({
             autoScroll: false,
             autoCenter: false,
             normalize: true,
-            dragToSeek: true,  // native click/drag seek within a lane
+            dragToSeek: true,
             fillParent: true,
             pixelRatio: 1,
             minPxPerSec: 1,
@@ -189,12 +170,16 @@ export const StemPlayer = memo(function StemPlayer({
               setDuration(dur);
               cbRef.current.onDurationChange(dur);
               cbRef.current.onReady(buildMasterControls(wsRefs, requestedPlayingRef));
-            } else if (requestedPlayingRef.current && wsRefs.current[0]?.isPlaying?.()) {
-              const leaderTime = wsRefs.current[0].getCurrentTime?.() || 0;
+            } else if (requestedPlayingRef.current) {
+              // Playback is already running — sync this late-joining stem to
+              // the leader's position.  Do NOT call ws.play() here: each
+              // WaveSurfer v7 instance owns its own AudioContext and calling
+              // play() outside a user-gesture callback cannot resume a
+              // suspended context, causing the stem to load but stay silent.
+              // buildMasterControls.play() calls all().map(ws => ws.play())
+              // so the stem will join on the user's very next transport action.
+              const leaderTime = wsRefs.current[0]?.getCurrentTime?.() || 0;
               ws.setTime(leaderTime);
-              ws.play().catch((error) => {
-                if (!disposed) console.warn(`[StemPlayer] Lane ${i} late-start failed:`, error?.message ?? error);
-              });
             }
           });
 
@@ -253,30 +238,6 @@ export const StemPlayer = memo(function StemPlayer({
             // Drive the shared time display even if this isn't the leader
             setCurrentTime(newTime);
             cbRef.current.onTimeUpdate(newTime);
-          });
-
-          fetchPeaks(peaksUrl).then((peaks) => {
-            if (disposed || !ws || loadStarted) return;
-            loadStarted = true;
-            const loadPromise = peaks ? ws.load(url, peaks) : ws.load(url);
-            loadPromise.catch((error) => {
-              if (disposed) return;
-              console.warn(`[StemPlayer] Lane ${i} ("${stem.title}") load failed:`, error?.message ?? error);
-              setLoadingStates((prev) => {
-                const next = [...prev];
-                next[i] = false;
-                return next;
-              });
-              setErrorStates((prev) => {
-                const next = [...prev];
-                next[i] = "Could not load";
-                return next;
-              });
-              if (i === 0 && !masterReadyFiredRef.current) {
-                masterReadyFiredRef.current = true;
-                cbRef.current.onReady(null);
-              }
-            });
           });
         });
       }, Math.floor(i / 2) * 50);
@@ -349,10 +310,6 @@ export const StemPlayer = memo(function StemPlayer({
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function getPlaybackUrl(audioSource) {
-  return audioSource?.previewUrl || audioSource?.playbackUrl || audioSource?.url || "";
-}
 
 // Build the master controls object. wsRefs is always current (it's a ref) so
 // all methods automatically include stems that finished loading after onReady.
