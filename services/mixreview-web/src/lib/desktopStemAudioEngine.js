@@ -1,17 +1,11 @@
 import WaveSurfer from "wavesurfer.js";
 
-const STATIC_WAVEFORM_CURVE = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
-
-function buildStaticPeaks(length = 240) {
-  return [Array.from({ length }, (_, i) => STATIC_WAVEFORM_CURVE[i % STATIC_WAVEFORM_CURVE.length])];
-}
-
 function normalizePeaks(peaks) {
   if (!Array.isArray(peaks) || peaks.length === 0) return null;
   return Array.isArray(peaks[0]) ? peaks : [peaks];
 }
 
-function fetchPeaks(peaksUrl, timeoutMs = 700) {
+function fetchPeaks(peaksUrl, timeoutMs = 3000) {
   if (!peaksUrl) return Promise.resolve(null);
 
   const controller = new AbortController();
@@ -25,7 +19,7 @@ function fetchPeaks(peaksUrl, timeoutMs = 700) {
     .then(normalizePeaks)
     .catch((error) => {
       if (error?.name !== "AbortError") {
-        console.warn("[DesktopStemEngine] Peaks fetch failed; using static preview", error.message);
+        console.warn("[DesktopStemEngine] Peaks fetch failed; decoding waveform preview", error.message);
       }
       return null;
     })
@@ -33,7 +27,10 @@ function fetchPeaks(peaksUrl, timeoutMs = 700) {
 }
 
 function getStemUrl(stem) {
-  return stem?.audioSource?.playbackUrl || stem?.audioSource?.url || stem?.audioSource?.previewUrl || "";
+  const audioSource = stem?.audioSource;
+  if (!audioSource) return "";
+  if (audioSource.previewUrl && audioSource.previewStatus !== "failed") return audioSource.previewUrl;
+  return audioSource.playbackUrl || audioSource.url || "";
 }
 
 function getStemDuration(stem, fallbackDuration) {
@@ -243,8 +240,11 @@ export function createDesktopStemAudioEngine({
 
         fetchPeaks(stem.audioSource?.peaksUrl || "").then((peaks) => {
           if (disposed || laneDisposed || !ws) return;
-          const resolvedPeaks = peaks || buildStaticPeaks();
-          ws.load(url, resolvedPeaks, getStemDuration(stem, sharedDuration)).catch((error) => {
+          const loadPromise = peaks
+            ? ws.load(url, peaks, getStemDuration(stem, sharedDuration))
+            : ws.load(url);
+
+          loadPromise.catch((error) => {
             if (disposed || laneDisposed) return;
             console.warn(`[DesktopStemEngine] Lane ${index} load failed`, error?.message ?? error);
             onLaneError(index, "Could not load");
