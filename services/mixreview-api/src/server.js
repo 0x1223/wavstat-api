@@ -35,6 +35,11 @@ const upload = multer({
 });
 const pendingPeakRepairKeys = new Set();
 let peakRepairChain = Promise.resolve();
+const pendingAudioProcessingKeys = new Set();
+let audioProcessingChain = Promise.resolve();
+const sessionMutexes = new Map();
+const previewAudioBitrate = "320k";
+const previewAudioFormat = "m4a";
 
 const r2Config = {
   accountId: getEnvValue("CLOUDFLARE_ACCOUNT_ID") || getEnvValue("R2_ACCOUNT_ID"),
@@ -166,6 +171,7 @@ async function handleAudioUpload(req, res, next) {
     const playbackUrl = originalUrl;
     const previewKey  = null;
     const peaksKey = hasR2Config ? `${objectKey}.peaks.json` : null;
+    const processingMetadata = buildInitialProcessingMetadata(storageResult.storage);
 
     const audioPayload = {
       key:              objectKey,
@@ -176,6 +182,7 @@ async function handleAudioUpload(req, res, next) {
       previewUrl:       previewKey ? playbackUrl : null,
       previewKey,
       peaksUrl:         storageResult.peaksUrl || null,
+      ...processingMetadata,
       fileName:         audioFile.originalname,
       contentType:      classification.mimeType,
       size:             audioFile.size,
@@ -189,15 +196,15 @@ async function handleAudioUpload(req, res, next) {
 
     if (hasR2Config && peaksKey) {
       const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
-      generateAndStoreSessionPeaks(audioFile.buffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, objectKey)
-        .catch((err) => console.error("[MixReview] Peaks generation failed", { objectKey, error: err.message }));
-    }
-
-    if (classification.requiresTranscode && hasR2Config) {
-      const asyncPreviewKey = objectKey.replace(/\.[^.]+$/, ".preview.m4a");
-      const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
-      transcodeAndStorePreview(objectKey, asyncPreviewKey, apiBaseUrl, sessionId, trackId, versionId)
-        .catch((err) => console.error("[MixReview] Background transcode error:", err.message));
+      enqueueAudioProcessing({
+        originalKey: objectKey,
+        previewKey: objectKey.replace(/\.[^.]+$/, `.preview.${previewAudioFormat}`),
+        peaksKey,
+        apiBaseUrl,
+        sessionId,
+        trackId,
+        versionId
+      });
     } else if (classification.requiresTranscode && !hasR2Config) {
       const asyncPreviewKey = objectKey.replace(/\.[^.]+$/, ".preview.m4a");
       transcodeToAac(audioFile.buffer)
@@ -230,6 +237,7 @@ async function handleAudioUpload(req, res, next) {
       previewUrl:        previewKey ? playbackUrl : null,
       previewKey,
       peaksUrl:          storageResult.peaksUrl || null,
+      ...processingMetadata,
       fileName:          audioFile.originalname,
       sessionId:         sessionId || null,
       trackId,
@@ -392,13 +400,17 @@ async function confirmAudioUpload(req, res, next) {
 
     const originalUrl = buildApiPlaybackUrl(req, safeKey);
     const peaksKey = `${safeKey}.peaks.json`;
+    const processingMetadata = buildInitialProcessingMetadata("r2");
     const audioPayload = {
       key:               safeKey,
       playbackUrl:       originalUrl,  // updated to preview URL if transcode succeeds
       originalUrl,
       originalFormat:    format.ext.slice(1),
       requiresTranscode: format.requiresTranscode,
+      previewUrl:        null,
+      previewKey:        null,
       peaksUrl:          null,
+      ...processingMetadata,
       fileName:          fileName.trim(),
       contentType:       mimeType,
       size:              typeof size === "number" && size > 0 ? size : 0,
@@ -408,17 +420,15 @@ async function confirmAudioUpload(req, res, next) {
 
     await attachAudioToSession(sessionId, audioPayload, safeVersionId, safeTrackId);
 
-    generateAndStoreSessionPeaksFromR2(safeKey, peaksKey, `${req.protocol}://${req.get("host")}`, sessionId, safeTrackId, safeVersionId)
-      .catch((err) => console.error("[MixReview] Direct-upload peaks generation failed", { key: safeKey, error: err.message }));
-
-    // For non-browser-native formats, kick off a background fetch → transcode →
-    // store cycle.  The session document is patched with the preview URL when done.
-    if (format.requiresTranscode && hasR2Config) {
-      const previewKey = safeKey.replace(/\.[^.]+$/, ".preview.m4a");
-      const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
-      transcodeAndStorePreview(safeKey, previewKey, apiBaseUrl, sessionId, safeTrackId, safeVersionId)
-        .catch((err) => console.error("[MixReview] Background transcode error:", err.message));
-    }
+    enqueueAudioProcessing({
+      originalKey: safeKey,
+      previewKey: safeKey.replace(/\.[^.]+$/, `.preview.${previewAudioFormat}`),
+      peaksKey,
+      apiBaseUrl: `${req.protocol}://${req.get("host")}`,
+      sessionId,
+      trackId: safeTrackId,
+      versionId: safeVersionId
+    });
 
     console.log("[MixReview] Direct upload confirmed and attached to session", {
       sessionId,
@@ -436,7 +446,10 @@ async function confirmAudioUpload(req, res, next) {
       originalUrl,
       originalFormat:    format.ext.slice(1),
       requiresTranscode: format.requiresTranscode,
+      previewUrl:        null,
+      previewKey:        null,
       peaksUrl:          null,
+      ...processingMetadata,
       fileName:          fileName.trim(),
       sessionId,
       trackId:           safeTrackId,
@@ -472,7 +485,7 @@ async function generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, s
   await generateAndUploadPeaks(audioBuffer, peaksKey);
   if (!sessionId || !trackId || !versionId) return;
   const peaksUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(peaksKey)}`;
-  await patchSessionAudioMetadata(sessionId, trackId, versionId, { peaksUrl });
+  await patchSessionAudioMetadata(sessionId, trackId, versionId, { peaksUrl, peaksStatus: "ready" });
   console.log("[MixReview] Peaks URL attached to session", { sessionId, trackId, versionId, objectKey, peaksKey });
 }
 
@@ -513,6 +526,199 @@ function queueMissingPeakRepairs(session, req) {
       .then(() => generateAndStoreSessionPeaksFromR2(audio.key, peaksKey, apiBaseUrl, session.id, track.id, version.id))
       .catch((err) => console.error("[MixReview] Missing peaks repair failed", { key: audio.key, error: err.message }))
       .finally(() => pendingPeakRepairKeys.delete(repairId));
+  });
+}
+
+const STUCK_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000;
+
+function queueStuckProcessingRepairs(session, req) {
+  if (!hasR2Config || !session?.id) return;
+
+  const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
+  const now = Date.now();
+  const tracks = Array.isArray(session.tracks) ? session.tracks : [];
+
+  tracks.forEach((track) => {
+    const versions = Array.isArray(track.versions) ? track.versions : [];
+    const version = versions.find((v) => v.id === track.activeVersionId) || versions[0];
+    const audio = version?.audioMetadata;
+
+    if (!audio?.key) return;
+    if (audio.processingStatus !== "processing") return;
+
+    const age = audio.uploadedAt ? now - new Date(audio.uploadedAt).getTime() : Infinity;
+    if (age < STUCK_PROCESSING_THRESHOLD_MS) return;
+
+    const processingId = [session.id, track.id, version.id, audio.key].join(":");
+    if (pendingAudioProcessingKeys.has(processingId)) return;
+
+    console.log("[MixReview] Re-queuing stuck processing job", {
+      sessionId: session.id, trackId: track.id, versionId: version.id, key: audio.key, ageMs: age
+    });
+
+    enqueueAudioProcessing({
+      originalKey: audio.key,
+      previewKey: audio.key.replace(/\.[^.]+$/, `.preview.${previewAudioFormat}`),
+      peaksKey: `${audio.key}.peaks.json`,
+      apiBaseUrl,
+      sessionId: session.id,
+      trackId: track.id,
+      versionId: version.id,
+    });
+  });
+}
+
+function buildInitialProcessingMetadata(storage) {
+  if (storage !== "r2") {
+    return {
+      duration: null,
+      processingStatus: "ready",
+      previewStatus: "unavailable",
+      peaksStatus: "unavailable",
+      durationStatus: "unavailable",
+      processingError: null,
+      previewBitrate: null,
+      previewFormat: null
+    };
+  }
+
+  return {
+    duration: null,
+    processingStatus: "processing",
+    previewStatus: "pending",
+    peaksStatus: "pending",
+    durationStatus: "pending",
+    processingError: null,
+    previewBitrate: previewAudioBitrate,
+    previewFormat: previewAudioFormat
+  };
+}
+
+function enqueueAudioProcessing(job) {
+  if (!hasR2Config || !job?.originalKey) return;
+
+  const processingId = [
+    job.sessionId || "standalone",
+    job.trackId || "track",
+    job.versionId || "version",
+    job.originalKey
+  ].join(":");
+  if (pendingAudioProcessingKeys.has(processingId)) return;
+  pendingAudioProcessingKeys.add(processingId);
+
+  audioProcessingChain = audioProcessingChain
+    .catch(() => {})
+    .then(() => processUploadedAudio(job))
+    .catch((err) => {
+      console.error("[MixReview] Audio processing failed", { key: job.originalKey, error: err.message });
+    })
+    .finally(() => pendingAudioProcessingKeys.delete(processingId));
+}
+
+async function processUploadedAudio({ audioBuffer, originalKey, previewKey, peaksKey, apiBaseUrl, sessionId, trackId, versionId }) {
+  const sourceBuffer = audioBuffer || await fetchR2ObjectBuffer(originalKey);
+  const failures = [];
+
+  try {
+    const duration = await probeAudioDuration(sourceBuffer);
+    await patchSessionAudioMetadata(
+      sessionId,
+      trackId,
+      versionId,
+      { duration, durationStatus: "ready" },
+      { duration }
+    );
+  } catch (err) {
+    failures.push(`duration: ${err.message}`);
+    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+      durationStatus: "failed",
+      processingError: summarizeProcessingErrors(failures)
+    });
+  }
+
+  try {
+    await generateAndStoreSessionPeaks(sourceBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
+  } catch (err) {
+    failures.push(`peaks: ${err.message}`);
+    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+      peaksStatus: "failed",
+      processingError: summarizeProcessingErrors(failures)
+    });
+  }
+
+  try {
+    await transcodeAndStorePreviewBuffer(sourceBuffer, previewKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
+  } catch (err) {
+    failures.push(`preview: ${err.message}`);
+    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+      previewStatus: "failed",
+      processingError: summarizeProcessingErrors(failures)
+    });
+  }
+
+  await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+    processingStatus: failures.length > 0 ? "failed" : "ready",
+    processingError: failures.length > 0 ? summarizeProcessingErrors(failures) : null
+  });
+}
+
+function summarizeProcessingErrors(failures) {
+  return failures.join("; ").slice(0, 600);
+}
+
+// withSessionWrite — serializes all read-modify-write cycles for the same
+// session document. Background patches (patchSessionAudioMetadata) and client
+// saves (saveSession) share this lock, so the last writer cannot silently
+// overwrite a field written by a concurrent background job.
+async function withSessionWrite(sessionId, fn) {
+  const prev = sessionMutexes.get(sessionId) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(() => fn());
+  const tail = run.catch(() => {});
+  sessionMutexes.set(sessionId, tail);
+  run.finally(() => {
+    if (sessionMutexes.get(sessionId) === tail) {
+      sessionMutexes.delete(sessionId);
+    }
+  });
+  return run;
+}
+
+async function fetchR2ObjectBuffer(objectKey) {
+  const r2Obj = await r2Client.send(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: objectKey }));
+  const chunks = [];
+  for await (const chunk of r2Obj.Body) chunks.push(chunk);
+  const audioBuffer = Buffer.concat(chunks);
+  console.log("[MixReview] Audio processing: fetched original", { objectKey, bytes: audioBuffer.length });
+  return audioBuffer;
+}
+
+async function probeAudioDuration(inputBuffer) {
+  return new Promise((resolve, reject) => {
+    const ffprobe = spawn("ffprobe", [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      "pipe:0"
+    ]);
+
+    const out = [];
+    const err = [];
+    ffprobe.stdout.on("data", (chunk) => out.push(chunk));
+    ffprobe.stderr.on("data", (chunk) => err.push(chunk));
+    ffprobe.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(`FFprobe exited ${code}: ${Buffer.concat(err).toString().slice(0, 300)}`));
+      }
+      const duration = Number.parseFloat(Buffer.concat(out).toString().trim());
+      if (!Number.isFinite(duration) || duration < 0) {
+        return reject(new Error("FFprobe did not return a valid duration."));
+      }
+      resolve(duration);
+    });
+    ffprobe.on("error", (e) => reject(new Error(`Failed to spawn FFprobe: ${e.message}`)));
+    ffprobe.stdin.on("error", () => {});
+    ffprobe.stdin.write(inputBuffer);
+    ffprobe.stdin.end();
   });
 }
 
@@ -614,7 +820,7 @@ const ALLOWED_AUDIO_EXTS = new Set([
 ]);
 
 // Formats not natively playable in ALL major browsers.
-// Files with these extensions are transcoded to 256 kbps AAC (M4A) in a
+// Files with these extensions are transcoded to high-bitrate AAC (M4A) in a
 // background job. The lossless original is preserved in R2 so the admin view
 // can eventually support high-res analysis/editing via originalUrl.
 //
@@ -709,14 +915,14 @@ function classifyAudioFormat(fileName, mimetype) {
   return { ok: true, ext, mimeType, requiresTranscode: TRANSCODE_FORMATS.has(ext) };
 }
 
-// transcodeToAac — converts any FFmpeg-readable audio buffer to 256 kbps AAC in
+// transcodeToAac — converts any FFmpeg-readable audio buffer to high-bitrate AAC in
 // an M4A container.  Returns the output as a Node Buffer.
 async function transcodeToAac(inputBuffer) {
   return new Promise((resolve, reject) => {
     const ff = spawn("ffmpeg", [
       "-i",        "pipe:0",
       "-c:a",      "aac",
-      "-b:a",      "256k",
+      "-b:a",      previewAudioBitrate,
       "-movflags", "+frag_keyframe+empty_moov",
       "-f",        "mp4",
       "pipe:1",
@@ -741,56 +947,65 @@ async function transcodeToAac(inputBuffer) {
 // The lossless original is preserved under its original key for admin analysis.
 async function transcodeAndStorePreview(originalKey, previewKey, apiBaseUrl, sessionId, trackId, versionId) {
   try {
-    const r2Obj = await r2Client.send(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }));
-    const chunks = [];
-    for await (const chunk of r2Obj.Body) chunks.push(chunk);
-    const originalBuffer = Buffer.concat(chunks);
-    console.log("[MixReview] Background transcode: fetched original", { originalKey, bytes: originalBuffer.length });
-
-    const previewBuffer = await transcodeToAac(originalBuffer);
-    await r2Client.send(new PutObjectCommand({
-      Bucket: r2Config.bucketName, Key: previewKey,
-      Body: previewBuffer, ContentType: "audio/mp4",
-      CacheControl: "public, max-age=31536000",
-    }));
-
-    const previewUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(previewKey)}`;
-    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
-      playbackUrl: previewUrl,
-      url: previewUrl,
-      audioUrl: previewUrl,
-      previewUrl,
-      previewKey,
-      transcodedAt: new Date().toISOString(),
-    });
+    const originalBuffer = await fetchR2ObjectBuffer(originalKey);
+    await transcodeAndStorePreviewBuffer(originalBuffer, previewKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
     console.log("[MixReview] Background transcode complete", { previewKey, sessionId, trackId });
   } catch (err) {
     console.error("[MixReview] Background transcode failed", { originalKey, error: err.message });
   }
 }
 
-async function patchSessionAudioMetadata(sessionId, trackId, versionId, patch) {
-  const existingDoc = await readSessionDocument(sessionId);
-  if (!existingDoc) return;
+async function transcodeAndStorePreviewBuffer(originalBuffer, previewKey, apiBaseUrl, sessionId, trackId, versionId, originalKey = null) {
+  const previewBuffer = await transcodeToAac(originalBuffer);
+  await r2Client.send(new PutObjectCommand({
+    Bucket: r2Config.bucketName,
+    Key: previewKey,
+    Body: previewBuffer,
+    ContentType: "audio/mp4",
+    CacheControl: "public, max-age=31536000",
+    ContentDisposition: "inline",
+  }));
 
-  const patchedTracks = (existingDoc.tracks || []).map((track) => {
-    if (track.id !== trackId) return track;
-    return {
-      ...track,
-      versions: (track.versions || []).map((version) => {
-        if (version.id !== versionId || !version.audioMetadata) return version;
-        return {
-          ...version,
-          audioMetadata: {
-            ...version.audioMetadata,
-            ...patch,
-          },
-        };
-      }),
-    };
+  const previewUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(previewKey)}`;
+  await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+    playbackUrl: previewUrl,
+    url: previewUrl,
+    audioUrl: previewUrl,
+    previewUrl,
+    previewKey,
+    previewStatus: "ready",
+    previewBitrate: previewAudioBitrate,
+    previewFormat: previewAudioFormat,
+    transcodedAt: new Date().toISOString(),
   });
+  console.log("[MixReview] Preview stored", { originalKey, previewKey, sessionId, trackId });
+}
 
-  await writeSessionDocument(sessionId, { ...existingDoc, tracks: patchedTracks });
+async function patchSessionAudioMetadata(sessionId, trackId, versionId, patch, versionPatch = {}) {
+  return withSessionWrite(sessionId, async () => {
+    const existingDoc = await readSessionDocument(sessionId);
+    if (!existingDoc) return;
+
+    const patchedTracks = (existingDoc.tracks || []).map((track) => {
+      if (track.id !== trackId) return track;
+      return {
+        ...track,
+        versions: (track.versions || []).map((version) => {
+          if (version.id !== versionId || !version.audioMetadata) return version;
+          return {
+            ...version,
+            ...versionPatch,
+            audioMetadata: {
+              ...version.audioMetadata,
+              ...patch,
+            },
+          };
+        }),
+      };
+    });
+
+    await writeSessionDocument(sessionId, { ...existingDoc, tracks: patchedTracks });
+  });
 }
 
 function buildAudioObjectKey(originalName, extension, { sessionId, trackId, versionId } = {}) {
@@ -878,6 +1093,7 @@ async function getSession(req, res, next) {
   }
 
   queueMissingPeakRepairs(session, req);
+  queueStuckProcessingRepairs(session, req);
   return res.json({ session: await refreshSessionPlaybackUrls(session, req) });
 }
 
@@ -890,41 +1106,62 @@ async function saveSession(req, res) {
   const now = new Date().toISOString();
   const incomingSession = isPlainObject(req.body?.session) ? req.body.session : req.body;
 
-  // Guard: read the stored document so we can preserve audio metadata
-  // that the client no longer has (cleared blob URL, stale null, etc.)
-  const storedSession = await readSessionDocument(sessionId).catch(() => null);
-  const mergedSession = preserveAudioMetadata(incomingSession, storedSession);
+  let savedSession;
+  try {
+    savedSession = await withSessionWrite(sessionId, async () => {
+      // Guard: read the stored document so we can preserve audio metadata
+      // that the client no longer has (cleared blob URL, stale null, etc.)
+      const storedSession = await readSessionDocument(sessionId).catch(() => null);
+      const mergedSession = preserveAudioMetadata(incomingSession, storedSession);
 
-  const session = normalizeSessionDocument({
-    ...mergedSession,
-    id: sessionId,
-    updatedAt: now
-  });
+      const session = normalizeSessionDocument({
+        ...mergedSession,
+        id: sessionId,
+        updatedAt: now
+      });
 
-  if (!session) {
-    return res.status(400).json({ error: "Invalid session payload." });
+      if (!session) {
+        const err = new Error("Invalid session payload.");
+        err.statusCode = 400;
+        throw err;
+      }
+
+      // Validation gate — reject before any write if the tracks array contains
+      // duplicate IDs or duplicate active-version audio keys. Either condition
+      // indicates a corrupt or replayed payload that would clobber good data.
+      const duplicateViolation = validateTracksIntegrity(session.tracks);
+      if (duplicateViolation) {
+        console.error("[MixReview] saveSession BLOCKED — duplicate track", duplicateViolation.field, "detected", {
+          sessionId,
+          field: duplicateViolation.field,
+          value: duplicateViolation.value,
+        });
+        const err = new Error(`Duplicate track ${duplicateViolation.field} detected — write aborted to protect data integrity.`);
+        err.statusCode = 400;
+        err.duplicateField = duplicateViolation.field;
+        err.duplicateValue = duplicateViolation.value;
+        throw err;
+      }
+
+      await writeSessionDocument(sessionId, session);
+      await upsertSessionIndex(session);
+      return session;
+    });
+  } catch (err) {
+    if (err.statusCode === 400) {
+      if (err.duplicateField) {
+        return res.status(400).json({
+          error: err.message,
+          field: err.duplicateField,
+          value: err.duplicateValue,
+        });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    throw err;
   }
 
-  // Validation gate — reject before any write if the tracks array contains
-  // duplicate IDs or duplicate active-version audio keys. Either condition
-  // indicates a corrupt or replayed payload that would clobber good data.
-  const duplicateViolation = validateTracksIntegrity(session.tracks);
-  if (duplicateViolation) {
-    console.error("[MixReview] saveSession BLOCKED — duplicate track", duplicateViolation.field, "detected", {
-      sessionId,
-      field: duplicateViolation.field,
-      value: duplicateViolation.value,
-    });
-    return res.status(400).json({
-      error: `Duplicate track ${duplicateViolation.field} detected — write aborted to protect data integrity.`,
-      field: duplicateViolation.field,
-      value: duplicateViolation.value,
-    });
-  }
-
-  await writeSessionDocument(sessionId, session);
-  await upsertSessionIndex(session);
-  return res.json({ session });
+  return res.json({ session: savedSession });
 }
 
 /**
@@ -967,6 +1204,14 @@ function preserveAudioMetadata(incoming, stored) {
           const incomingLostUrl = !(incomingMeta?.playbackUrl || incomingMeta?.url || incomingMeta?.audioUrl);
           const storedHasPreview = typeof storedMeta?.previewUrl === "string" && storedMeta.previewUrl;
           const incomingLostPreview = !incomingMeta?.previewUrl || incomingMeta?.playbackUrl !== storedMeta?.playbackUrl;
+          const storedHasProcessing =
+            Boolean(storedMeta?.peaksUrl) ||
+            typeof storedMeta?.duration === "number" ||
+            Boolean(storedMeta?.processingStatus || storedMeta?.previewStatus || storedMeta?.peaksStatus || storedMeta?.durationStatus);
+          const incomingLostProcessing =
+            !incomingMeta?.peaksUrl ||
+            (typeof storedMeta?.duration === "number" && typeof incomingMeta?.duration !== "number") ||
+            !incomingMeta?.processingStatus;
 
           if (storedHasKey && (incomingLostKey || incomingLostUrl)) {
             console.log("[MixReview] preserveAudioMetadata: restored stored key for", {
@@ -990,8 +1235,37 @@ function preserveAudioMetadata(incoming, stored) {
                 requiresTranscode: storedMeta.requiresTranscode ?? incomingMeta?.requiresTranscode ?? false,
                 previewUrl: storedMeta.previewUrl,
                 previewKey: storedMeta.previewKey || incomingMeta?.previewKey || null,
+                peaksUrl: storedMeta.peaksUrl || incomingMeta?.peaksUrl || null,
+                duration: storedMeta.duration ?? incomingMeta?.duration ?? null,
+                processingStatus: storedMeta.processingStatus || incomingMeta?.processingStatus || null,
+                previewStatus: storedMeta.previewStatus || incomingMeta?.previewStatus || null,
+                peaksStatus: storedMeta.peaksStatus || incomingMeta?.peaksStatus || null,
+                durationStatus: storedMeta.durationStatus || incomingMeta?.durationStatus || null,
+                processingError: storedMeta.processingError || incomingMeta?.processingError || null,
+                previewBitrate: storedMeta.previewBitrate || incomingMeta?.previewBitrate || null,
+                previewFormat: storedMeta.previewFormat || incomingMeta?.previewFormat || null,
                 transcodedAt: storedMeta.transcodedAt || incomingMeta?.transcodedAt || null,
               },
+            };
+          }
+
+          if (storedHasKey && storedHasProcessing && incomingLostProcessing) {
+            return {
+              ...incomingVersion,
+              audioMetadata: {
+                ...incomingMeta,
+                peaksUrl: storedMeta.peaksUrl || incomingMeta?.peaksUrl || null,
+                duration: storedMeta.duration ?? incomingMeta?.duration ?? null,
+                processingStatus: storedMeta.processingStatus || incomingMeta?.processingStatus || null,
+                previewStatus: storedMeta.previewStatus || incomingMeta?.previewStatus || null,
+                peaksStatus: storedMeta.peaksStatus || incomingMeta?.peaksStatus || null,
+                durationStatus: storedMeta.durationStatus || incomingMeta?.durationStatus || null,
+                processingError: storedMeta.processingError || incomingMeta?.processingError || null,
+                previewBitrate: storedMeta.previewBitrate || incomingMeta?.previewBitrate || null,
+                previewFormat: storedMeta.previewFormat || incomingMeta?.previewFormat || null,
+                transcodedAt: storedMeta.transcodedAt || incomingMeta?.transcodedAt || null,
+              },
+              duration: storedVersion?.duration || incomingVersion.duration,
             };
           }
 
@@ -1324,8 +1598,10 @@ function collectTrackAudioKeys(track, keySet) {
     if (!metadata) return;
     addAudioMetadataKey(metadata.key, keySet);
     addAudioMetadataKey(metadata.previewKey, keySet);
+    addAudioMetadataKey(metadata.key ? `${metadata.key}.peaks.json` : null, keySet);
     addAudioMetadataKey(keyFromPlaybackUrl(metadata.originalUrl), keySet);
     addAudioMetadataKey(keyFromPlaybackUrl(metadata.previewUrl), keySet);
+    addAudioMetadataKey(keyFromPlaybackUrl(metadata.peaksUrl), keySet);
   });
 }
 
@@ -1379,91 +1655,102 @@ async function deleteTrackAudioObjects(keySet) {
 }
 
 async function attachAudioToSession(sessionId, audio, versionId, trackId = "track-1") {
-  const now = new Date().toISOString();
-  const existingSession = await readSessionDocument(sessionId);
-  const session = existingSession || {
-    id: sessionId,
-    projectName: "Untitled MixReview Session",
-    tracks: [],
-    versions: [],
-    createdAt: now
-  };
-
-  const tracks = Array.isArray(session.tracks) ? session.tracks : [];
-  const targetTrackId = sanitizePathSegment(trackId || "track-1");
-  const targetVersionId = versionId || "version-v1";
-  const trackIndex = tracks.findIndex((track) => track.id === targetTrackId);
-  const existingTrack = tracks[trackIndex] || {
-    id: targetTrackId,
-    title: path.basename(audio.fileName, path.extname(audio.fileName)) || "Untitled Track",
-    versions: [],
-    activeVersionId: targetVersionId,
-    createdAt: now
-  };
-  const versions = Array.isArray(existingTrack.versions) ? existingTrack.versions : [];
-  const versionIndex = versions.findIndex((version) => version.id === targetVersionId);
-  const audioMetadata = {
-    fileName: audio.fileName,
-    title: path.basename(audio.fileName, path.extname(audio.fileName)) || audio.fileName,
-    size: audio.size,
-    type: audio.contentType,
-    mimeType: audio.contentType,
-    url: audio.playbackUrl,
-    playbackUrl: audio.playbackUrl,
-    audioUrl: audio.playbackUrl,
-    originalUrl: audio.originalUrl || audio.playbackUrl,
-    originalFormat: audio.originalFormat || path.extname(audio.fileName).replace(/^\./, "").toLowerCase() || null,
-    requiresTranscode: Boolean(audio.requiresTranscode),
-    previewUrl: audio.previewUrl || null,
-    previewKey: audio.previewKey || null,
-    peaksUrl: audio.peaksUrl || null,
-    transcodedAt: audio.transcodedAt || null,
-    key: audio.key,
-    storage: audio.storage,
-    uploadedAt: audio.uploadedAt
-  };
-
-  if (versionIndex >= 0) {
-    versions[versionIndex] = {
-      ...versions[versionIndex],
-      audioMetadata
+  return withSessionWrite(sessionId, async () => {
+    const now = new Date().toISOString();
+    const existingSession = await readSessionDocument(sessionId);
+    const session = existingSession || {
+      id: sessionId,
+      projectName: "Untitled MixReview Session",
+      tracks: [],
+      versions: [],
+      createdAt: now
     };
-  } else {
-    versions.unshift({
-      id: targetVersionId,
-      label: labelFromVersionId(targetVersionId),
-      audioMetadata,
-      comments: [],
-      approvalStatus: "Pending Review",
-      approvalHistory: [],
-      activity: [],
-      selectedCommentId: null,
-      selectedTime: 0,
-      duration: 0
-    });
-  }
-  const nextTrack = {
-    ...existingTrack,
-    title: audioMetadata.title || existingTrack.title,
-    activeVersionId: targetVersionId,
-    versions,
-    updatedAt: now
-  };
-  const nextTracks =
-    trackIndex >= 0
-      ? tracks.map((track, index) => (index === trackIndex ? nextTrack : track))
-      : [...tracks, nextTrack];
 
-  const nextSession = normalizeSessionDocument({
-    ...session,
-    tracks: nextTracks,
-    activeTrackId: targetTrackId,
-    activeVersionId: targetVersionId,
-    versions,
-    updatedAt: now
+    const tracks = Array.isArray(session.tracks) ? session.tracks : [];
+    const targetTrackId = sanitizePathSegment(trackId || "track-1");
+    const targetVersionId = versionId || "version-v1";
+    const trackIndex = tracks.findIndex((track) => track.id === targetTrackId);
+    const existingTrack = tracks[trackIndex] || {
+      id: targetTrackId,
+      title: path.basename(audio.fileName, path.extname(audio.fileName)) || "Untitled Track",
+      versions: [],
+      activeVersionId: targetVersionId,
+      createdAt: now
+    };
+    const versions = Array.isArray(existingTrack.versions) ? existingTrack.versions : [];
+    const versionIndex = versions.findIndex((version) => version.id === targetVersionId);
+    const audioMetadata = {
+      fileName: audio.fileName,
+      title: path.basename(audio.fileName, path.extname(audio.fileName)) || audio.fileName,
+      size: audio.size,
+      type: audio.contentType,
+      mimeType: audio.contentType,
+      url: audio.playbackUrl,
+      playbackUrl: audio.playbackUrl,
+      audioUrl: audio.playbackUrl,
+      originalUrl: audio.originalUrl || audio.playbackUrl,
+      originalFormat: audio.originalFormat || path.extname(audio.fileName).replace(/^\./, "").toLowerCase() || null,
+      requiresTranscode: Boolean(audio.requiresTranscode),
+      previewUrl: audio.previewUrl || null,
+      previewKey: audio.previewKey || null,
+      peaksUrl: audio.peaksUrl || null,
+      duration: typeof audio.duration === "number" ? audio.duration : null,
+      processingStatus: audio.processingStatus || "ready",
+      previewStatus: audio.previewStatus || null,
+      peaksStatus: audio.peaksStatus || null,
+      durationStatus: audio.durationStatus || null,
+      processingError: audio.processingError || null,
+      previewBitrate: audio.previewBitrate || null,
+      previewFormat: audio.previewFormat || null,
+      transcodedAt: audio.transcodedAt || null,
+      key: audio.key,
+      storage: audio.storage,
+      uploadedAt: audio.uploadedAt
+    };
+
+    if (versionIndex >= 0) {
+      versions[versionIndex] = {
+        ...versions[versionIndex],
+        audioMetadata,
+        duration: audioMetadata.duration || versions[versionIndex].duration || 0
+      };
+    } else {
+      versions.unshift({
+        id: targetVersionId,
+        label: labelFromVersionId(targetVersionId),
+        audioMetadata,
+        comments: [],
+        approvalStatus: "Pending Review",
+        approvalHistory: [],
+        activity: [],
+        selectedCommentId: null,
+        selectedTime: 0,
+        duration: audioMetadata.duration || 0
+      });
+    }
+    const nextTrack = {
+      ...existingTrack,
+      title: audioMetadata.title || existingTrack.title,
+      activeVersionId: targetVersionId,
+      versions,
+      updatedAt: now
+    };
+    const nextTracks =
+      trackIndex >= 0
+        ? tracks.map((track, index) => (index === trackIndex ? nextTrack : track))
+        : [...tracks, nextTrack];
+
+    const nextSession = normalizeSessionDocument({
+      ...session,
+      tracks: nextTracks,
+      activeTrackId: targetTrackId,
+      activeVersionId: targetVersionId,
+      versions,
+      updatedAt: now
+    });
+    await writeSessionDocument(sessionId, nextSession);
+    await upsertSessionIndex(nextSession);
   });
-  await writeSessionDocument(sessionId, nextSession);
-  await upsertSessionIndex(nextSession);
 }
 
 // R2 key for the session index. Underscore prefix sorts it before any session
@@ -1869,7 +2156,8 @@ async function refreshSessionPlaybackUrls(session, req = null) {
     // audioUrl → url) it always gets a fresh, non-expired value.
     const originalUrl = buildApiPlaybackUrl(req, key);
     const previewKey = version.audioMetadata.previewKey;
-    const freshUrl = previewKey ? buildApiPlaybackUrl(req, previewKey) : originalUrl;
+    const previewReady = version.audioMetadata.previewStatus === "ready";
+    const freshUrl = (previewKey && previewReady) ? buildApiPlaybackUrl(req, previewKey) : originalUrl;
 
     return {
       ...version,
@@ -1879,7 +2167,7 @@ async function refreshSessionPlaybackUrls(session, req = null) {
         playbackUrl: freshUrl,
         audioUrl: freshUrl,
         originalUrl,
-        previewUrl: previewKey ? freshUrl : version.audioMetadata.previewUrl || null,
+        previewUrl: (previewKey && previewReady) ? freshUrl : version.audioMetadata.previewUrl || null,
         peaksUrl: version.audioMetadata.peaksUrl || null,
       }
     };
