@@ -2,7 +2,7 @@
 builder = "NIXPACKS"
 
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+nixPkgs = ["...", "ffmpeg"]
 
 [deploy]
 startCommand = "npm start"
