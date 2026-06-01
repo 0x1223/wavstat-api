@@ -31,6 +31,34 @@ const col = (i) => LANE_COLOURS[i % LANE_COLOURS.length];
 /** Max drift (seconds) before a follower is force-synced to the leader. */
 const DRIFT_THRESHOLD = 0.08;
 
+function getStemPlaybackUrl(stem) {
+  return stem.audioSource?.previewUrl || stem.audioSource?.playbackUrl || stem.audioSource?.url || "";
+}
+
+function fetchStemPeaks(peaksUrl, timeoutMs = 1200) {
+  if (!peaksUrl) return Promise.resolve(null);
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(peaksUrl, { signal: controller.signal })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then((peaks) => {
+      if (!Array.isArray(peaks) || peaks.length === 0) return null;
+      return Array.isArray(peaks[0]) ? peaks : [peaks];
+    })
+    .catch((error) => {
+      if (error?.name !== "AbortError") {
+        console.warn("[MobileStemStack] Peaks fetch failed — falling back to audio decode:", error.message);
+      }
+      return null;
+    })
+    .finally(() => window.clearTimeout(timeoutId));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function MobileStemStack({
@@ -58,7 +86,7 @@ export function MobileStemStack({
   // Stable key derived from stem IDs + URLs so the effect re-runs only when
   // the actual audio files change, not on every parent re-render.
   const stemsKey = stems
-    .map((s) => `${s.id}:${s.audioSource?.playbackUrl || s.audioSource?.url || ""}`)
+    .map((s) => `${s.id}:${getStemPlaybackUrl(s)}:${s.audioSource?.peaksUrl || ""}`)
     .join("|");
 
   // ── Main effect: create / destroy all WaveSurfer instances ─────────────────
@@ -75,7 +103,7 @@ export function MobileStemStack({
     const cleanups = [];
 
     stems.forEach((stem, i) => {
-      const url       = stem.audioSource?.playbackUrl || stem.audioSource?.url;
+      const url       = getStemPlaybackUrl(stem);
       const container = containerRefs.current[i];
 
       if (!url || !container) {
@@ -85,6 +113,7 @@ export function MobileStemStack({
 
       let ws       = null;
       let disposed = false;
+      const peaksFetch = fetchStemPeaks(stem.audioSource?.peaksUrl || null);
 
       // Defer one rAF so the flex container finishes layout before WaveSurfer
       // reads container dimensions.
@@ -93,7 +122,6 @@ export function MobileStemStack({
 
         ws = WaveSurfer.create({
           container:    containerRefs.current[i],
-          url,
           waveColor:    col(i).wave,
           progressColor: col(i).progress,
           cursorColor:  "#f5efe3",
@@ -164,6 +192,21 @@ export function MobileStemStack({
             if (w && idx !== i) w.setTime(newTime);
           });
           cbRef.current.onTimeUpdate?.(newTime);
+        });
+
+        peaksFetch.then((peaks) => {
+          if (disposed || wsRefs.current[i] !== ws) return;
+          const loadPromise = peaks ? ws.load(url, peaks) : ws.load(url);
+          loadPromise.catch((err) => {
+            if (disposed) return;
+            console.warn(`[MobileStemStack] lane ${i} ("${stem.title}") load error:`, err?.message ?? err);
+            setLoadingStates((prev) => { const n = [...prev]; n[i] = false; return n; });
+            setErrorStates((prev)   => { const n = [...prev]; n[i] = "Could not load"; return n; });
+            if (i === 0 && !masterReadyFired.current) {
+              masterReadyFired.current = true;
+              cbRef.current.onReady?.(null);
+            }
+          });
         });
       });
 

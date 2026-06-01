@@ -33,8 +33,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: maxAudioBytes }
 });
-const pendingPeakRepairKeys = new Set();
-let peakRepairChain = Promise.resolve();
 const pendingAudioProcessingKeys = new Set();
 let audioProcessingChain = Promise.resolve();
 const sessionMutexes = new Map();
@@ -489,43 +487,32 @@ async function generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, s
   console.log("[MixReview] Peaks URL attached to session", { sessionId, trackId, versionId, objectKey, peaksKey });
 }
 
-async function generateAndStoreSessionPeaksFromR2(originalKey, peaksKey, apiBaseUrl, sessionId, trackId, versionId) {
-  const r2Obj = await r2Client.send(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }));
-  const chunks = [];
-  for await (const chunk of r2Obj.Body) chunks.push(chunk);
-  const audioBuffer = Buffer.concat(chunks);
-  console.log("[MixReview] Peaks generation: fetched original", { originalKey, bytes: audioBuffer.length });
-  await generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
-}
-
-function queueMissingPeakRepairs(session, req) {
+function queueMissingAudioProcessingRepairs(session, req) {
   if (!hasR2Config || !session?.id) return;
 
   const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
-  const stemTrackIds = new Set(
-    (Array.isArray(session.albums) ? session.albums : [])
-      .filter((album) => album?.type === "stem_project")
-      .flatMap((album) => Array.isArray(album.trackIds) ? album.trackIds : []),
-  );
   const tracks = Array.isArray(session.tracks) ? session.tracks : [];
 
   tracks.forEach((track) => {
-    if (!stemTrackIds.has(track.id)) return;
     const versions = Array.isArray(track.versions) ? track.versions : [];
     const version = versions.find((candidate) => candidate.id === track.activeVersionId) || versions[0];
     const audio = version?.audioMetadata;
-    if (!version?.id || !audio?.key || audio.peaksUrl) return;
+    if (!version?.id || !audio?.key) return;
 
-    const repairId = `${session.id}:${track.id}:${version.id}:${audio.key}`;
-    if (pendingPeakRepairKeys.has(repairId)) return;
-    pendingPeakRepairKeys.add(repairId);
+    const needsPeaks = !audio.peaksUrl || audio.peaksStatus === "failed";
+    const needsDuration = typeof audio.duration !== "number" || audio.duration <= 0 || audio.durationStatus === "failed";
+    const needsPreview = !audio.previewUrl || audio.previewStatus === "failed";
+    if (!needsPeaks && !needsDuration && !needsPreview) return;
 
-    const peaksKey = `${audio.key}.peaks.json`;
-    peakRepairChain = peakRepairChain
-      .catch(() => {})
-      .then(() => generateAndStoreSessionPeaksFromR2(audio.key, peaksKey, apiBaseUrl, session.id, track.id, version.id))
-      .catch((err) => console.error("[MixReview] Missing peaks repair failed", { key: audio.key, error: err.message }))
-      .finally(() => pendingPeakRepairKeys.delete(repairId));
+    enqueueAudioProcessing({
+      originalKey: audio.key,
+      previewKey: audio.previewKey || audio.key.replace(/\.[^.]+$/, `.preview.${previewAudioFormat}`),
+      peaksKey: `${audio.key}.peaks.json`,
+      apiBaseUrl,
+      sessionId: session.id,
+      trackId: track.id,
+      versionId: version.id,
+    });
   });
 }
 
@@ -1109,7 +1096,9 @@ async function getSession(req, res, next) {
     return res.status(404).json({ error: "Session not found." });
   }
 
-  return res.json({ session: await refreshSessionPlaybackUrls(session, req) });
+  const refreshedSession = await refreshSessionPlaybackUrls(session, req);
+  queueMissingAudioProcessingRepairs(refreshedSession, req);
+  return res.json({ session: refreshedSession });
 }
 
 async function saveSession(req, res) {
