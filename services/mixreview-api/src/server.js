@@ -500,7 +500,9 @@ function queueMissingAudioProcessingRepairs(session, req) {
     if (!version?.id || !audio?.key) return;
 
     const needsPeaks = !audio.peaksUrl || audio.peaksStatus === "failed";
-    const needsDuration = typeof audio.duration !== "number" || audio.duration <= 0 || audio.durationStatus === "failed";
+    const needsDuration =
+      audio.durationStatus !== "unavailable" &&
+      (typeof audio.duration !== "number" || audio.duration <= 0 || audio.durationStatus === "failed");
     const needsPreview = !audio.previewUrl || audio.previewStatus === "failed";
     if (!needsPeaks && !needsDuration && !needsPreview) return;
 
@@ -632,10 +634,8 @@ async function processUploadedAudio({
         { duration }
       );
     } catch (err) {
-      failures.push(`duration: ${err.message}`);
       await patchSessionAudioMetadata(sessionId, trackId, versionId, {
-        durationStatus: "failed",
-        processingError: summarizeProcessingErrors(failures)
+        durationStatus: "unavailable",
       });
     }
   }
@@ -702,33 +702,48 @@ async function fetchR2ObjectBuffer(objectKey) {
 
 async function probeAudioDuration(inputBuffer) {
   return new Promise((resolve, reject) => {
-    const ffprobe = spawn("ffprobe", [
-      "-v", "error",
-      "-show_entries", "format=duration",
-      "-of", "default=noprint_wrappers=1:nokey=1",
+    const ff = spawn("ffmpeg", [
+      "-hide_banner",
       "-i",
-      "pipe:0"
+      "pipe:0",
+      "-f",
+      "null",
+      "-"
     ]);
 
-    const out = [];
     const err = [];
-    ffprobe.stdout.on("data", (chunk) => out.push(chunk));
-    ffprobe.stderr.on("data", (chunk) => err.push(chunk));
-    ffprobe.on("close", (code) => {
+    ff.stderr.on("data", (chunk) => err.push(chunk));
+    ff.on("close", (code) => {
+      const stderr = Buffer.concat(err).toString();
       if (code !== 0) {
-        return reject(new Error(`FFprobe exited ${code}: ${Buffer.concat(err).toString().slice(0, 300)}`));
+        return reject(new Error(`FFmpeg duration probe exited ${code}: ${stderr.slice(0, 300)}`));
       }
-      const duration = Number.parseFloat(Buffer.concat(out).toString().trim());
+      const duration = parseFfmpegDuration(stderr);
       if (!Number.isFinite(duration) || duration < 0) {
-        return reject(new Error("FFprobe did not return a valid duration."));
+        return reject(new Error("FFmpeg did not return a valid duration."));
       }
       resolve(duration);
     });
-    ffprobe.on("error", (e) => reject(new Error(`Failed to spawn FFprobe: ${e.message}`)));
-    ffprobe.stdin.on("error", () => {});
-    ffprobe.stdin.write(inputBuffer);
-    ffprobe.stdin.end();
+    ff.on("error", (e) => reject(new Error(`Failed to spawn FFmpeg: ${e.message}`)));
+    ff.stdin.on("error", () => {});
+    ff.stdin.write(inputBuffer);
+    ff.stdin.end();
   });
+}
+
+function parseFfmpegDuration(stderr) {
+  const headerMatch = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+  if (headerMatch) {
+    const [, hours, minutes, seconds] = headerMatch;
+    return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
+  }
+
+  const progressMatches = [...stderr.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)];
+  const lastProgress = progressMatches[progressMatches.length - 1];
+  if (!lastProgress) return Number.NaN;
+
+  const [, hours, minutes, seconds] = lastProgress;
+  return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
 }
 
 // generatePeaksWithFfmpeg — decodes any audio format to mono f32le PCM via
