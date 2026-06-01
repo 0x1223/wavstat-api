@@ -1,6 +1,9 @@
 [build]
 builder = "NIXPACKS"
 
+[phases.setup]
+nixPkgs = ["ffmpeg"]
+
 [deploy]
 startCommand = "npm start"
 healthcheckPath = "/health"
