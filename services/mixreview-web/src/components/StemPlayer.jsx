@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { createDesktopStemAudioEngine } from "../lib/desktopStemAudioEngine.js";
+import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
 
 // ── Visual constants ──────────────────────────────────────────────────────────
@@ -17,6 +17,10 @@ const LANE_COLOURS = [
   { wave: "#5a3535", progress: "#a85050" }, // red
 ];
 const col = (i) => LANE_COLOURS[i % LANE_COLOURS.length];
+
+// Drift threshold for follower re-sync during playback (seconds).
+// Below this, normal clock variance; above it, we force a setTime() correction.
+const DRIFT_THRESHOLD = 0.08;
 
 // ── StemPlayer ────────────────────────────────────────────────────────────────
 //
@@ -44,8 +48,13 @@ export const StemPlayer = memo(function StemPlayer({
 }) {
   // One DOM container ref per stem lane — populated by the ref callbacks below
   const containerRefs = useRef([]);
+  // WaveSurfer instances indexed by stem position
+  const wsRefs = useRef([]);
+  const requestedPlayingRef = useRef(false);
   // Stable ref for callbacks so effects never need to re-run on callback identity changes
   const cbRef = useRef({ onReady, onTimeUpdate, onDurationChange, onPlaybackChange });
+  // Ensures onReady is only fired once per stems set
+  const masterReadyFiredRef = useRef(false);
 
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -72,6 +81,8 @@ export const StemPlayer = memo(function StemPlayer({
 
   useEffect(() => {
     // Reset all state for the new stems set
+    masterReadyFiredRef.current = false;
+    requestedPlayingRef.current = false;
     setLoadingStates(stems.map(() => true));
     setErrorStates(stems.map(() => ""));
     setDuration(0);
@@ -81,43 +92,173 @@ export const StemPlayer = memo(function StemPlayer({
     cbRef.current.onDurationChange(0);
     cbRef.current.onPlaybackChange(false);
 
-    const engine = createDesktopStemAudioEngine({
-      stems,
-      containers: containerRefs.current,
-      laneColors: LANE_COLOURS,
-      laneHeight: LANE_HEIGHT,
-      onLaneReady: (i) => {
+    const cleanups = [];
+
+    stems.forEach((stem, i) => {
+      // Use playbackUrl (same priority as MobileStemStack) — not previewUrl,
+      // which may be null while background processing is running.
+      const url = stem.audioSource?.playbackUrl || stem.audioSource?.url || "";
+      const container = containerRefs.current[i];
+
+      if (!url || !container) {
+        // Stem has no audio yet — mark lane as not-loading so it renders idle
         setLoadingStates((prev) => {
           const next = [...prev];
           next[i] = false;
           return next;
         });
-      },
-      onLaneError: (i, message) => {
-        setLoadingStates((prev) => {
-          const next = [...prev];
-          next[i] = false;
-          return next;
+        return;
+      }
+
+      let ws = null;
+      let disposed = false;
+
+      // Stagger creation so large stem sets do not flood the browser with
+      // simultaneous network requests. Pairs of stems share a slot so the
+      // maximum delay for 7 stems is 150 ms — imperceptible to the user but
+      // enough to let each batch begin rendering before the next starts.
+      let rafId = null;
+      const timerId = window.setTimeout(() => {
+        rafId = requestAnimationFrame(() => {
+          if (disposed || !containerRefs.current[i]) return;
+
+          // Pass `url` directly so audio starts loading the moment the
+          // instance is created.  Previously, audio was gated on a separate
+          // fetchPeaks() HTTP request (up to 1 200 ms) which meant stems
+          // with peaks data loaded audio far later than stems without, causing
+          // some to still be loading when the user first pressed Play.
+          ws = WaveSurfer.create({
+            container: containerRefs.current[i],
+            url,
+            waveColor: col(i).wave,
+            progressColor: col(i).progress,
+            cursorColor: "#f5efe3",
+            cursorWidth: 2,
+            height: LANE_HEIGHT,
+            barWidth: 2,
+            barGap: 2,
+            barRadius: 2,
+            autoScroll: false,
+            autoCenter: false,
+            normalize: true,
+            dragToSeek: true,
+            fillParent: true,
+            pixelRatio: 1,
+            minPxPerSec: 1,
+          });
+
+          wsRefs.current[i] = ws;
+
+          // ── Ready ────────────────────────────────────────────────────────
+          ws.on("ready", () => {
+            if (disposed) return;
+
+            const mediaEl = ws.getMediaElement?.();
+            if (mediaEl) { mediaEl.muted = false; mediaEl.volume = 1; mediaEl.preload = "auto"; }
+
+            setLoadingStates((prev) => {
+              const next = [...prev];
+              next[i] = false;
+              return next;
+            });
+
+            // The leader (index 0) determines the shared duration and fires
+            // the master onReady so the Transport Bar becomes active.
+            if (i === 0 && !masterReadyFiredRef.current) {
+              masterReadyFiredRef.current = true;
+              const dur = ws.getDuration();
+              setDuration(dur);
+              cbRef.current.onDurationChange(dur);
+              cbRef.current.onReady(buildMasterControls(wsRefs, requestedPlayingRef));
+            } else if (requestedPlayingRef.current) {
+              // Playback is already running — sync this late-joining stem to
+              // the leader's position.  Do NOT call ws.play() here: each
+              // WaveSurfer v7 instance owns its own AudioContext and calling
+              // play() outside a user-gesture callback cannot resume a
+              // suspended context, causing the stem to load but stay silent.
+              // buildMasterControls.play() calls all().map(ws => ws.play())
+              // so the stem will join on the user's very next transport action.
+              const leaderTime = wsRefs.current[0]?.getCurrentTime?.() || 0;
+              ws.setTime(leaderTime);
+            }
+          });
+
+          // ── Error ────────────────────────────────────────────────────────
+          ws.on("error", (err) => {
+            if (disposed) return;
+            console.warn(`[StemPlayer] Lane ${i} ("${stem.title}") error:`, err?.message ?? err);
+            setLoadingStates((prev) => {
+              const next = [...prev];
+              next[i] = false;
+              return next;
+            });
+            setErrorStates((prev) => {
+              const next = [...prev];
+              next[i] = "Could not decode";
+              return next;
+            });
+            // Prevent the app from hanging if the leader fails to decode
+            if (i === 0 && !masterReadyFiredRef.current) {
+              masterReadyFiredRef.current = true;
+              cbRef.current.onReady(null);
+            }
+          });
+
+          // ── Leader-only: clock + playback state ──────────────────────────
+          if (i === 0) {
+            ws.on("timeupdate", (t) => {
+              if (disposed) return;
+              setCurrentTime(t);
+              cbRef.current.onTimeUpdate(t);
+              // Periodic drift correction — snap any follower that has wandered
+              // more than DRIFT_THRESHOLD seconds back to the leader's position
+              if (ws.isPlaying?.()) {
+                wsRefs.current.forEach((w, idx) => {
+                  if (!w || idx === 0) return;
+                  const ft = w.getCurrentTime?.() ?? 0;
+                  if (Math.abs(ft - t) > DRIFT_THRESHOLD) w.setTime(t);
+                });
+              }
+            });
+
+            ws.on("play",   () => { if (!disposed) { requestedPlayingRef.current = true; cbRef.current.onPlaybackChange(true); } });
+            ws.on("pause",  () => { if (!disposed) { requestedPlayingRef.current = false; cbRef.current.onPlaybackChange(false); } });
+            ws.on("finish", () => { if (!disposed) { requestedPlayingRef.current = false; cbRef.current.onPlaybackChange(false); } });
+          }
+
+          // ── Any lane: user seek → broadcast to all other lanes ──────────
+          // WaveSurfer fires "interaction" when the user clicks or drags the
+          // waveform. We catch it here and seek every other instance to the
+          // same position so the playhead stays unified across all stems.
+          ws.on("interaction", (newTime) => {
+            if (disposed) return;
+            wsRefs.current.forEach((w, idx) => {
+              if (w && idx !== i) w.setTime(newTime);
+            });
+            // Drive the shared time display even if this isn't the leader
+            setCurrentTime(newTime);
+            cbRef.current.onTimeUpdate(newTime);
+          });
         });
-        setErrorStates((prev) => {
-          const next = [...prev];
-          next[i] = message;
-          return next;
-        });
-      },
-      onReady: (controls) => cbRef.current.onReady(controls),
-      onTimeUpdate: (time) => {
-        setCurrentTime(time);
-        cbRef.current.onTimeUpdate(time);
-      },
-      onDurationChange: (nextDuration) => {
-        setDuration(nextDuration);
-        cbRef.current.onDurationChange(nextDuration);
-      },
-      onPlaybackChange: (playing) => cbRef.current.onPlaybackChange(playing),
+      }, Math.floor(i / 2) * 50);
+
+      cleanups.push(() => {
+        disposed = true;
+        window.clearTimeout(timerId);
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        if (ws) {
+          if (wsRefs.current[i] === ws) wsRefs.current[i] = null;
+          ws.pause?.();
+          ws.unAll?.();
+          ws.destroy();
+        }
+      });
     });
 
-    return () => engine.destroy();
+    return () => {
+      cleanups.forEach((fn) => fn());
+      wsRefs.current = [];
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stemsKey]);
 
@@ -167,3 +308,51 @@ export const StemPlayer = memo(function StemPlayer({
     </section>
   );
 });
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Build the master controls object. wsRefs is always current (it's a ref) so
+// all methods automatically include stems that finished loading after onReady.
+function buildMasterControls(wsRefs, requestedPlayingRef) {
+  const all = () => wsRefs.current.filter(Boolean);
+
+  return {
+    // play / pause / playPause broadcast to every loaded instance
+    play: async () => {
+      requestedPlayingRef.current = true;
+      await Promise.allSettled(all().map((ws) => ws.play()));
+    },
+    pause: () => {
+      requestedPlayingRef.current = false;
+      all().forEach((ws) => ws.pause());
+    },
+    playPause: async () => {
+      const leader = wsRefs.current[0];
+      if (!leader) return;
+      if (leader.isPlaying?.()) {
+        requestedPlayingRef.current = false;
+        all().forEach((ws) => ws.pause());
+      } else {
+        requestedPlayingRef.current = true;
+        await Promise.allSettled(all().map((ws) => ws.play()));
+      }
+    },
+    // skip advances by ±N seconds from the leader's current position
+    skip: (seconds) => {
+      const leader = wsRefs.current[0];
+      if (!leader) return;
+      const next = Math.min(
+        Math.max((leader.getCurrentTime?.() || 0) + seconds, 0),
+        leader.getDuration?.() || 0,
+      );
+      all().forEach((ws) => ws.setTime(next));
+    },
+    // seekToTime is the same seek used by TransportBar prev/next and comment clicks
+    seekToTime: (time) => {
+      all().forEach((ws) => {
+        const dur = ws.getDuration?.() || Infinity;
+        ws.setTime(Math.min(Math.max(time, 0), dur));
+      });
+    },
+  };
+}

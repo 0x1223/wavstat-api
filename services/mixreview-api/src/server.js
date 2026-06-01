@@ -33,6 +33,8 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: maxAudioBytes }
 });
+const pendingPeakRepairKeys = new Set();
+let peakRepairChain = Promise.resolve();
 const pendingAudioProcessingKeys = new Set();
 let audioProcessingChain = Promise.resolve();
 const sessionMutexes = new Map();
@@ -487,37 +489,43 @@ async function generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, s
   console.log("[MixReview] Peaks URL attached to session", { sessionId, trackId, versionId, objectKey, peaksKey });
 }
 
-function queueMissingAudioProcessingRepairs(session, req) {
+async function generateAndStoreSessionPeaksFromR2(originalKey, peaksKey, apiBaseUrl, sessionId, trackId, versionId) {
+  const r2Obj = await r2Client.send(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }));
+  const chunks = [];
+  for await (const chunk of r2Obj.Body) chunks.push(chunk);
+  const audioBuffer = Buffer.concat(chunks);
+  console.log("[MixReview] Peaks generation: fetched original", { originalKey, bytes: audioBuffer.length });
+  await generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
+}
+
+function queueMissingPeakRepairs(session, req) {
   if (!hasR2Config || !session?.id) return;
 
   const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
+  const stemTrackIds = new Set(
+    (Array.isArray(session.albums) ? session.albums : [])
+      .filter((album) => album?.type === "stem_project")
+      .flatMap((album) => Array.isArray(album.trackIds) ? album.trackIds : []),
+  );
   const tracks = Array.isArray(session.tracks) ? session.tracks : [];
 
   tracks.forEach((track) => {
+    if (!stemTrackIds.has(track.id)) return;
     const versions = Array.isArray(track.versions) ? track.versions : [];
     const version = versions.find((candidate) => candidate.id === track.activeVersionId) || versions[0];
     const audio = version?.audioMetadata;
-    if (!version?.id || !audio?.key) return;
+    if (!version?.id || !audio?.key || audio.peaksUrl) return;
 
-    const needsPeaks = !audio.peaksUrl || audio.peaksStatus === "failed";
-    const needsDuration =
-      audio.durationStatus !== "unavailable" &&
-      (typeof audio.duration !== "number" || audio.duration <= 0 || audio.durationStatus === "failed");
-    const needsPreview = !audio.previewUrl || audio.previewStatus === "failed";
-    if (!needsPeaks && !needsDuration && !needsPreview) return;
+    const repairId = `${session.id}:${track.id}:${version.id}:${audio.key}`;
+    if (pendingPeakRepairKeys.has(repairId)) return;
+    pendingPeakRepairKeys.add(repairId);
 
-    enqueueAudioProcessing({
-      originalKey: audio.key,
-      previewKey: audio.previewKey || audio.key.replace(/\.[^.]+$/, `.preview.${previewAudioFormat}`),
-      peaksKey: `${audio.key}.peaks.json`,
-      apiBaseUrl,
-      sessionId: session.id,
-      trackId: track.id,
-      versionId: version.id,
-      needsDuration,
-      needsPeaks,
-      needsPreview,
-    });
+    const peaksKey = `${audio.key}.peaks.json`;
+    peakRepairChain = peakRepairChain
+      .catch(() => {})
+      .then(() => generateAndStoreSessionPeaksFromR2(audio.key, peaksKey, apiBaseUrl, session.id, track.id, version.id))
+      .catch((err) => console.error("[MixReview] Missing peaks repair failed", { key: audio.key, error: err.message }))
+      .finally(() => pendingPeakRepairKeys.delete(repairId));
   });
 }
 
@@ -607,61 +615,45 @@ function enqueueAudioProcessing(job) {
     .finally(() => pendingAudioProcessingKeys.delete(processingId));
 }
 
-async function processUploadedAudio({
-  audioBuffer,
-  originalKey,
-  previewKey,
-  peaksKey,
-  apiBaseUrl,
-  sessionId,
-  trackId,
-  versionId,
-  needsDuration = true,
-  needsPeaks = true,
-  needsPreview = true,
-}) {
+async function processUploadedAudio({ audioBuffer, originalKey, previewKey, peaksKey, apiBaseUrl, sessionId, trackId, versionId }) {
   const sourceBuffer = audioBuffer || await fetchR2ObjectBuffer(originalKey);
   const failures = [];
 
-  if (needsDuration) {
-    try {
-      const duration = await probeAudioDuration(sourceBuffer);
-      await patchSessionAudioMetadata(
-        sessionId,
-        trackId,
-        versionId,
-        { duration, durationStatus: "ready" },
-        { duration }
-      );
-    } catch (err) {
-      await patchSessionAudioMetadata(sessionId, trackId, versionId, {
-        durationStatus: "unavailable",
-      });
-    }
+  try {
+    const duration = await probeAudioDuration(sourceBuffer);
+    await patchSessionAudioMetadata(
+      sessionId,
+      trackId,
+      versionId,
+      { duration, durationStatus: "ready" },
+      { duration }
+    );
+  } catch (err) {
+    failures.push(`duration: ${err.message}`);
+    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+      durationStatus: "failed",
+      processingError: summarizeProcessingErrors(failures)
+    });
   }
 
-  if (needsPeaks) {
-    try {
-      await generateAndStoreSessionPeaks(sourceBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
-    } catch (err) {
-      failures.push(`peaks: ${err.message}`);
-      await patchSessionAudioMetadata(sessionId, trackId, versionId, {
-        peaksStatus: "failed",
-        processingError: summarizeProcessingErrors(failures)
-      });
-    }
+  try {
+    await generateAndStoreSessionPeaks(sourceBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
+  } catch (err) {
+    failures.push(`peaks: ${err.message}`);
+    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+      peaksStatus: "failed",
+      processingError: summarizeProcessingErrors(failures)
+    });
   }
 
-  if (needsPreview) {
-    try {
-      await transcodeAndStorePreviewBuffer(sourceBuffer, previewKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
-    } catch (err) {
-      failures.push(`preview: ${err.message}`);
-      await patchSessionAudioMetadata(sessionId, trackId, versionId, {
-        previewStatus: "failed",
-        processingError: summarizeProcessingErrors(failures)
-      });
-    }
+  try {
+    await transcodeAndStorePreviewBuffer(sourceBuffer, previewKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
+  } catch (err) {
+    failures.push(`preview: ${err.message}`);
+    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+      previewStatus: "failed",
+      processingError: summarizeProcessingErrors(failures)
+    });
   }
 
   await patchSessionAudioMetadata(sessionId, trackId, versionId, {
@@ -702,48 +694,32 @@ async function fetchR2ObjectBuffer(objectKey) {
 
 async function probeAudioDuration(inputBuffer) {
   return new Promise((resolve, reject) => {
-    const ff = spawn("ffmpeg", [
-      "-hide_banner",
-      "-i",
-      "pipe:0",
-      "-f",
-      "null",
-      "-"
+    const ffprobe = spawn("ffprobe", [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      "pipe:0"
     ]);
 
+    const out = [];
     const err = [];
-    ff.stderr.on("data", (chunk) => err.push(chunk));
-    ff.on("close", (code) => {
-      const stderr = Buffer.concat(err).toString();
+    ffprobe.stdout.on("data", (chunk) => out.push(chunk));
+    ffprobe.stderr.on("data", (chunk) => err.push(chunk));
+    ffprobe.on("close", (code) => {
       if (code !== 0) {
-        return reject(new Error(`FFmpeg duration probe exited ${code}: ${stderr.slice(0, 300)}`));
+        return reject(new Error(`FFprobe exited ${code}: ${Buffer.concat(err).toString().slice(0, 300)}`));
       }
-      const duration = parseFfmpegDuration(stderr);
+      const duration = Number.parseFloat(Buffer.concat(out).toString().trim());
       if (!Number.isFinite(duration) || duration < 0) {
-        return reject(new Error("FFmpeg did not return a valid duration."));
+        return reject(new Error("FFprobe did not return a valid duration."));
       }
       resolve(duration);
     });
-    ff.on("error", (e) => reject(new Error(`Failed to spawn FFmpeg: ${e.message}`)));
-    ff.stdin.on("error", () => {});
-    ff.stdin.write(inputBuffer);
-    ff.stdin.end();
+    ffprobe.on("error", (e) => reject(new Error(`Failed to spawn FFprobe: ${e.message}`)));
+    ffprobe.stdin.on("error", () => {});
+    ffprobe.stdin.write(inputBuffer);
+    ffprobe.stdin.end();
   });
-}
-
-function parseFfmpegDuration(stderr) {
-  const headerMatch = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
-  if (headerMatch) {
-    const [, hours, minutes, seconds] = headerMatch;
-    return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
-  }
-
-  const progressMatches = [...stderr.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)];
-  const lastProgress = progressMatches[progressMatches.length - 1];
-  if (!lastProgress) return Number.NaN;
-
-  const [, hours, minutes, seconds] = lastProgress;
-  return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
 }
 
 // generatePeaksWithFfmpeg — decodes any audio format to mono f32le PCM via
@@ -1133,9 +1109,7 @@ async function getSession(req, res, next) {
     return res.status(404).json({ error: "Session not found." });
   }
 
-  const refreshedSession = await refreshSessionPlaybackUrls(session, req);
-  queueMissingAudioProcessingRepairs(refreshedSession, req);
-  return res.json({ session: refreshedSession });
+  return res.json({ session: await refreshSessionPlaybackUrls(session, req) });
 }
 
 async function saveSession(req, res) {
@@ -1153,7 +1127,7 @@ async function saveSession(req, res) {
       // Guard: read the stored document so we can preserve audio metadata
       // that the client no longer has (cleared blob URL, stale null, etc.)
       const storedSession = await readSessionDocument(sessionId).catch(() => null);
-      const mergedSession = preserveStoredSessionMetadata(incomingSession, storedSession);
+      const mergedSession = preserveAudioMetadata(incomingSession, storedSession);
 
       const session = normalizeSessionDocument({
         ...mergedSession,
@@ -1218,34 +1192,6 @@ async function saveSession(req, res) {
  * file no longer available": the client race-writes a stale snapshot that
  * overwrites the valid key the server just wrote via POST /audio.
  */
-function preserveStoredSessionMetadata(incoming, stored) {
-  return preserveAlbumTypes(preserveAudioMetadata(incoming, stored), stored);
-}
-
-function preserveAlbumTypes(incoming, stored) {
-  if (!isPlainObject(stored) || !Array.isArray(incoming?.albums) || !Array.isArray(stored.albums)) {
-    return incoming;
-  }
-
-  const storedAlbumTypes = new Map(
-    stored.albums
-      .filter((album) => album?.id && album.type === "stem_project")
-      .map((album) => [album.id, album.type])
-  );
-
-  if (storedAlbumTypes.size === 0) return incoming;
-
-  return {
-    ...incoming,
-    albums: incoming.albums.map((album) => {
-      if (album?.id && storedAlbumTypes.get(album.id) === "stem_project" && album.type !== "stem_project") {
-        return { ...album, type: "stem_project" };
-      }
-      return album;
-    }),
-  };
-}
-
 function preserveAudioMetadata(incoming, stored) {
   if (!isPlainObject(stored) || !Array.isArray(incoming?.tracks) || !Array.isArray(stored.tracks)) {
     return incoming;

@@ -2371,16 +2371,13 @@ export default function App({ onFirstRender } = {}) {
           )}
 
           {/* Player selection:
-              1. Admin + stem project
-                 + desktop viewport             → StemPlayer (desktop multi-lane)
+              1. Admin + stem project           → StemPlayer (desktop multi-lane)
               2. Reviewer + stem project selected
                  + mobile viewport              → MobileStemStack
-              3. Admin + stem project
-                 + mobile viewport              → MobileStemStack
-              4. Everything else                → WaveformReview (single track)
+              3. Everything else                → WaveformReview (single track)
               key={…?.id} forces a clean remount on project switch so stale
               WaveSurfer instances are fully torn down before new ones start. */}
-          {isEngineerMode && isActiveStemProject && !isMobileViewport() ? (
+          {isEngineerMode && isActiveStemProject ? (
             <StemPlayer
               key={activeAlbum?.id}
               stems={stemTracks}
@@ -2391,13 +2388,10 @@ export default function App({ onFirstRender } = {}) {
               onDurationChange={updateDuration}
               onPlaybackChange={setIsPlaying}
             />
-          ) : isMobileViewport() && (
-            (isReviewerMode && isReviewerStemProject) ||
-            (isEngineerMode && isActiveStemProject)
-          ) ? (
+          ) : isReviewerMode && isReviewerStemProject && isMobileViewport() ? (
             <MobileStemStack
-              key={(isEngineerMode ? activeAlbum : reviewerAlbum)?.id}
-              stems={isEngineerMode ? stemTracks : reviewerStemTracks}
+              key={reviewerAlbum?.id}
+              stems={reviewerStemTracks}
               onReady={handlePlayerReady}
               onTimeUpdate={handlePlaybackTimeUpdate}
               onDurationChange={updateDuration}

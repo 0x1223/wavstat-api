@@ -3,7 +3,7 @@ builder = "nixpacks"
 buildCommand = "cd services/mixreview-api && npm install"
 
 [phases.setup]
-nixPkgs = ["...", "ffmpeg"]
+nixPkgs = ["ffmpeg"]
 
 [deploy]
 startCommand = "cd services/mixreview-api && npm start"
