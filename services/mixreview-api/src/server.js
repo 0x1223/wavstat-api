@@ -512,6 +512,9 @@ function queueMissingAudioProcessingRepairs(session, req) {
       sessionId: session.id,
       trackId: track.id,
       versionId: version.id,
+      needsDuration,
+      needsPeaks,
+      needsPreview,
     });
   });
 }
@@ -602,45 +605,63 @@ function enqueueAudioProcessing(job) {
     .finally(() => pendingAudioProcessingKeys.delete(processingId));
 }
 
-async function processUploadedAudio({ audioBuffer, originalKey, previewKey, peaksKey, apiBaseUrl, sessionId, trackId, versionId }) {
+async function processUploadedAudio({
+  audioBuffer,
+  originalKey,
+  previewKey,
+  peaksKey,
+  apiBaseUrl,
+  sessionId,
+  trackId,
+  versionId,
+  needsDuration = true,
+  needsPeaks = true,
+  needsPreview = true,
+}) {
   const sourceBuffer = audioBuffer || await fetchR2ObjectBuffer(originalKey);
   const failures = [];
 
-  try {
-    const duration = await probeAudioDuration(sourceBuffer);
-    await patchSessionAudioMetadata(
-      sessionId,
-      trackId,
-      versionId,
-      { duration, durationStatus: "ready" },
-      { duration }
-    );
-  } catch (err) {
-    failures.push(`duration: ${err.message}`);
-    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
-      durationStatus: "failed",
-      processingError: summarizeProcessingErrors(failures)
-    });
+  if (needsDuration) {
+    try {
+      const duration = await probeAudioDuration(sourceBuffer);
+      await patchSessionAudioMetadata(
+        sessionId,
+        trackId,
+        versionId,
+        { duration, durationStatus: "ready" },
+        { duration }
+      );
+    } catch (err) {
+      failures.push(`duration: ${err.message}`);
+      await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+        durationStatus: "failed",
+        processingError: summarizeProcessingErrors(failures)
+      });
+    }
   }
 
-  try {
-    await generateAndStoreSessionPeaks(sourceBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
-  } catch (err) {
-    failures.push(`peaks: ${err.message}`);
-    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
-      peaksStatus: "failed",
-      processingError: summarizeProcessingErrors(failures)
-    });
+  if (needsPeaks) {
+    try {
+      await generateAndStoreSessionPeaks(sourceBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
+    } catch (err) {
+      failures.push(`peaks: ${err.message}`);
+      await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+        peaksStatus: "failed",
+        processingError: summarizeProcessingErrors(failures)
+      });
+    }
   }
 
-  try {
-    await transcodeAndStorePreviewBuffer(sourceBuffer, previewKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
-  } catch (err) {
-    failures.push(`preview: ${err.message}`);
-    await patchSessionAudioMetadata(sessionId, trackId, versionId, {
-      previewStatus: "failed",
-      processingError: summarizeProcessingErrors(failures)
-    });
+  if (needsPreview) {
+    try {
+      await transcodeAndStorePreviewBuffer(sourceBuffer, previewKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
+    } catch (err) {
+      failures.push(`preview: ${err.message}`);
+      await patchSessionAudioMetadata(sessionId, trackId, versionId, {
+        previewStatus: "failed",
+        processingError: summarizeProcessingErrors(failures)
+      });
+    }
   }
 
   await patchSessionAudioMetadata(sessionId, trackId, versionId, {
@@ -685,6 +706,7 @@ async function probeAudioDuration(inputBuffer) {
       "-v", "error",
       "-show_entries", "format=duration",
       "-of", "default=noprint_wrappers=1:nokey=1",
+      "-i",
       "pipe:0"
     ]);
 
