@@ -2032,6 +2032,29 @@ h2 {
     box-shadow 180ms ease;
 }
 
+/* Active track name pill overlaid on the waveform canvas.
+   Hidden by default; revealed only in the landscape reviewer media query. */
+.waveform-track-label {
+  display: none;
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  z-index: 10;
+  pointer-events: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.52);
+  color: rgba(245, 197, 24, 0.75);
+  font-family: ui-monospace, monospace;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: calc(100% - 16px);
+}
+
 .waveform-stage:hover {
   border-color: rgba(215, 173, 98, 0.28);
   box-shadow:
@@ -4430,5 +4453,86 @@ body:has(.app-shell.reviewer-mode) {
   /* Reduce top padding now that there is no header above the content */
   .app-shell.reviewer-mode {
     padding-top: 4px;
+  }
+
+  /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     LANDSCAPE LAYOUT REFACTOR
+     New order (top → bottom):
+       1. Project/Album header bar  ← .mobile-project-selector (full-width)
+       2. Track chip strip          ← .mobile-track-nav-list (horizontal)
+       3. Waveform + REVIEW button  ← .waveform-panel (flex: 1)
+       4. Transport (fixed, bottom)
+     The static song-title row (.mix-strip) is replaced by an overlay pill
+     rendered directly on the waveform canvas (.waveform-track-label).
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+  /* ── Order swap: track nav rises above waveform panel ─────────────── */
+  /* Overrides the first landscape block which put waveform at order:0   */
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .mobile-track-nav {
+    order: 0;
+    flex-shrink: 0;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
+    order: 1;
+  }
+
+  /* Allow the project-selector dropdown to escape the nav's 34px height */
+  .reviewer-mode .mobile-track-nav {
+    overflow: visible;
+    gap: 0;
+  }
+
+  /* ── Project / Album header bar ────────────────────────────────────── */
+  /* The selector fills the full nav width and acts as a sticky header.
+     "PROJECT [name]" sits on the left (name has flex:1); the ALBUM type
+     badge, X/Y counter, and chevron stack to the right naturally.        */
+  .reviewer-mode .mobile-project-selector {
+    width: 100%;
+    margin-bottom: 0;
+    border-bottom: 1px solid rgba(215, 173, 98, 0.15);
+  }
+
+  .reviewer-mode .mobile-project-selector-btn {
+    width: 100%;
+    min-height: 28px;
+    padding: 3px 10px;
+    background: rgba(10, 8, 6, 0.92);
+    border: none;
+    border-radius: 0;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
+  /* Show both the "PROJECT" eyebrow label and the project name in the bar */
+  .reviewer-mode .mobile-project-selector-eyebrow {
+    display: inline;
+    font-size: 0.55rem;
+  }
+
+  .reviewer-mode .mobile-project-selector-name {
+    display: inline;
+    font-size: 0.72rem;
+  }
+
+  /* Nav is now at the TOP — dropdown must open downward, not upward.
+     Overrides the first landscape block's upward direction.              */
+  .reviewer-mode .mobile-project-dropdown {
+    top: calc(100% + 2px);
+    bottom: auto;
+  }
+
+  /* A small breathing gap between the header bar and the chip strip     */
+  .reviewer-mode .mobile-track-nav-list {
+    padding: 3px 4px;
+  }
+
+  /* ── Remove static song-title row; show name on waveform instead ───── */
+  .reviewer-mode .mix-strip {
+    display: none;
+  }
+
+  .reviewer-mode .waveform-track-label {
+    display: block;
   }
 }
