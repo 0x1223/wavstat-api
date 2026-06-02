@@ -4472,4 +4472,66 @@ body:has(.app-shell.reviewer-mode) {
   .reviewer-mode .waveform-track-label {
     display: block;
   }
+
+  /* ── Fix 1: Hide the song title bar (mix-strip) ──────────────────────
+     The full-width h2 title row between the track chips and waveform is
+     redundant in landscape — the waveform-track-label overlay already
+     shows the track name. Hiding it recovers vertical space for the
+     waveform. */
+  .reviewer-mode .mix-strip {
+    display: none;
+  }
+
+  /* ── Fix 2: Float the ALBUM selector over the track chip strip ───────
+     In landscape the nav is at the top (order:0) so `overflow:hidden`
+     on the nav container would clip the dropdown. Set overflow:visible
+     so the dropdown can escape the 34px nav strip and render over the
+     waveform below. The chip list controls its own overflow-x:auto so
+     pill scrolling is unaffected. */
+  .reviewer-mode .mobile-track-nav {
+    position: relative;
+    overflow: visible;
+  }
+
+  /* Selector floats absolute in top-right of the nav strip */
+  .reviewer-mode .mobile-project-selector {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    margin: 0;
+  }
+
+  /* Compact button — only ALBUM badge + counter + chevron remain visible */
+  .reviewer-mode .mobile-project-selector-btn {
+    height: 100%;
+    min-height: 0;
+    width: auto;
+    padding: 0 8px;
+    background: rgba(10, 8, 6, 0.9);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(215, 173, 98, 0.32);
+    border-radius: 6px;
+  }
+
+  /* Hide "Project" label and project name — only type-tag+counter+chevron show */
+  .reviewer-mode .mobile-project-selector-eyebrow,
+  .reviewer-mode .mobile-project-selector-name {
+    display: none;
+  }
+
+  /* Nav is now at the top of the screen so dropdown must open downward
+     (overrides the first landscape block's upward direction) */
+  .reviewer-mode .mobile-project-dropdown {
+    top: calc(100% + 4px);
+    bottom: auto;
+  }
+
+  /* Reserve space on the right of the chip list so pills don't scroll
+     under the floating selector button (~72px covers "ALBUM 2/3 ▼") */
+  .reviewer-mode .mobile-track-nav-list {
+    padding-right: 72px;
+  }
 }
