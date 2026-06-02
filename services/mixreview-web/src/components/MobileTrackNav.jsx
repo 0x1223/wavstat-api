@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { getStemColor } from "../lib/stemColors.js";
 
 const BAR_HEIGHTS = [4, 7, 11, 16, 19, 13, 17, 10, 8, 14, 18, 12, 6, 15, 5, 9, 20, 3, 16, 11, 7, 14, 18, 4, 10, 16, 6, 13, 19, 8, 11, 15, 5, 17, 9, 12, 7, 20, 4, 14];
 
@@ -25,11 +26,17 @@ function TrackButton({ track, index, isActive, onTrackSelect, activeRef }) {
   const activeVersion =
     track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
   const commentCount = activeVersion?.comments?.length ?? 0;
+  const trackColor = getStemColor(index);
+
   return (
     <button
       ref={isActive ? activeRef : null}
       type="button"
       className={`mobile-track-nav-item${isActive ? " active" : ""}`}
+      style={{
+        "--stem-wave-color": trackColor.wave,
+        "--stem-progress-color": trackColor.progress,
+      }}
       onClick={() => onTrackSelect(track.id)}
       aria-pressed={isActive}
     >

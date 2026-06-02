@@ -13,20 +13,9 @@
  */
 import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
+import { getStemColor } from "../lib/stemColors.js";
 
 const LANE_HEIGHT = 54; // px per stem waveform row
-
-const LANE_COLOURS = [
-  { wave: "#6d6457", progress: "#d6a354" }, // gold   — leader lane
-  { wave: "#415869", progress: "#6ea8c8" }, // blue
-  { wave: "#416348", progress: "#6eb87a" }, // green
-  { wave: "#5e4569", progress: "#b06ec8" }, // purple
-  { wave: "#634535", progress: "#c87a5a" }, // orange
-  { wave: "#5e5630", progress: "#c8b550" }, // amber
-  { wave: "#305f5f", progress: "#50a8a8" }, // teal
-  { wave: "#5a3535", progress: "#a85050" }, // red
-];
-const col = (i) => LANE_COLOURS[i % LANE_COLOURS.length];
 
 /** Max drift (seconds) before a follower is force-synced to the leader. */
 const DRIFT_THRESHOLD = 0.08;
@@ -90,12 +79,13 @@ export function MobileStemStack({
       // reads container dimensions.
       const rafId = requestAnimationFrame(() => {
         if (disposed || !containerRefs.current[i]) return;
+        const laneColor = getStemColor(i);
 
         ws = WaveSurfer.create({
           container:    containerRefs.current[i],
           url,
-          waveColor:    col(i).wave,
-          progressColor: col(i).progress,
+          waveColor:    laneColor.wave,
+          progressColor: laneColor.progress,
           cursorColor:  "#f5efe3",
           cursorWidth:  2,
           height:       LANE_HEIGHT,
@@ -208,42 +198,49 @@ export function MobileStemStack({
 
       {/* Scrollable vertical stack — one row per stem (order:2 from CSS) */}
       <div className="mobile-stem-stack-lanes">
-        {stems.map((stem, i) => (
-          <div
-            key={stem.id}
-            className={`mobile-stem-stack-lane${isMarkerToolActive ? " marker-mode" : ""}`}
-            onClick={(e) => {
-              if (!isMarkerToolActive) return;
-              const container = containerRefs.current[i];
-              if (!container) return;
-              const bounds = container.getBoundingClientRect();
-              const ratio  = Math.min(1, Math.max(0, (e.clientX - bounds.left) / bounds.width));
-              const dur    = wsRefs.current[0]?.getDuration?.() ?? 0;
-              if (dur > 0) {
-                cbRef.current.onMobileNoteRequest?.(ratio * dur);
-                setIsMarkerToolActive(false);
-              }
-            }}
-          >
-            <div className="mobile-stem-stack-lane-header">
-              <span className="mobile-stem-stack-lane-title">
-                {stem.title || `Stem ${i + 1}`}
-              </span>
-              {loadingStates[i] && (
-                <span className="mobile-stem-stack-lane-status">Loading…</span>
-              )}
-              {!loadingStates[i] && errorStates[i] && (
-                <span className="mobile-stem-stack-lane-error">{errorStates[i]}</span>
-              )}
-            </div>
-
-            {/* WaveSurfer mounts here */}
+        {stems.map((stem, i) => {
+          const laneColor = getStemColor(i);
+          return (
             <div
-              ref={(el) => { containerRefs.current[i] = el; }}
-              className="mobile-stem-stack-lane-waveform"
-            />
-          </div>
-        ))}
+              key={stem.id}
+              className={`mobile-stem-stack-lane${isMarkerToolActive ? " marker-mode" : ""}`}
+              style={{
+                "--stem-wave-color": laneColor.wave,
+                "--stem-progress-color": laneColor.progress,
+              }}
+              onClick={(e) => {
+                if (!isMarkerToolActive) return;
+                const container = containerRefs.current[i];
+                if (!container) return;
+                const bounds = container.getBoundingClientRect();
+                const ratio  = Math.min(1, Math.max(0, (e.clientX - bounds.left) / bounds.width));
+                const dur    = wsRefs.current[0]?.getDuration?.() ?? 0;
+                if (dur > 0) {
+                  cbRef.current.onMobileNoteRequest?.(ratio * dur);
+                  setIsMarkerToolActive(false);
+                }
+              }}
+            >
+              <div className="mobile-stem-stack-lane-header">
+                <span className="mobile-stem-stack-lane-title">
+                  {stem.title || `Stem ${i + 1}`}
+                </span>
+                {loadingStates[i] && (
+                  <span className="mobile-stem-stack-lane-status">Loading…</span>
+                )}
+                {!loadingStates[i] && errorStates[i] && (
+                  <span className="mobile-stem-stack-lane-error">{errorStates[i]}</span>
+                )}
+              </div>
+
+              {/* WaveSurfer mounts here */}
+              <div
+                ref={(el) => { containerRefs.current[i] = el; }}
+                className="mobile-stem-stack-lane-waveform"
+              />
+            </div>
+          );
+        })}
       </div>
 
     </section>

@@ -3414,10 +3414,12 @@ body:has(.app-shell.reviewer-mode) {
     gap: 6px;
     min-height: 36px;
     padding: 0 6px;
-    border: 1px solid rgba(200, 50, 50, 0.55);
+    border: 1px solid color-mix(in srgb, var(--stem-progress-color, #d6a354) 54%, rgba(255, 255, 255, 0.12));
     border-radius: 6px;
-    color: #d94444;
-    background: rgba(180, 40, 40, 0.08);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 20%, transparent) 0 3px, transparent 3px),
+      linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 19%, transparent), rgba(255, 255, 255, 0.035));
     cursor: pointer;
     text-align: left;
     width: 100%;
@@ -3429,10 +3431,15 @@ body:has(.app-shell.reviewer-mode) {
   }
 
   .mobile-track-nav-item.active {
-    border-color: rgba(215, 173, 98, 0.82);
-    background: rgba(215, 173, 98, 0.1);
-    box-shadow: 0 0 0 1px rgba(215, 173, 98, 0.28), inset 0 0 16px rgba(215, 173, 98, 0.09), 0 2px 8px rgba(215, 173, 98, 0.12);
-    color: #d7ad62;
+    border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 82%, #ffffff);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 34%, transparent) 0 3px, transparent 3px),
+      linear-gradient(180deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 16%, transparent), rgba(255, 255, 255, 0.045));
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--stem-progress-color, #d6a354) 30%, transparent),
+      inset 0 0 16px color-mix(in srgb, var(--stem-progress-color, #d6a354) 10%, transparent),
+      0 2px 8px color-mix(in srgb, var(--stem-progress-color, #d6a354) 12%, transparent);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 88%, #ffffff);
   }
 
   .mobile-track-nav-badge {
@@ -3445,13 +3452,13 @@ body:has(.app-shell.reviewer-mode) {
     flex-shrink: 0;
     font-size: 0.64rem;
     font-weight: 800;
-    background: rgba(180, 40, 40, 0.2);
-    color: rgba(240, 110, 110, 0.85);
+    background: color-mix(in srgb, var(--stem-progress-color, #d6a354) 22%, transparent);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 82%, #ffffff);
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-badge {
-    background: rgba(215, 173, 98, 0.22);
-    color: #ffd889;
+    background: color-mix(in srgb, var(--stem-progress-color, #d6a354) 28%, transparent);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 86%, #ffffff);
   }
 
   .mobile-track-nav-name {
@@ -3460,14 +3467,14 @@ body:has(.app-shell.reviewer-mode) {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: rgba(230, 90, 90, 0.85);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
     min-width: 76px;
     max-width: 76px;
     flex-shrink: 0;
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-name {
-    color: #ffd889;
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 88%, #ffffff);
   }
 
   .mobile-track-nav-lane {
@@ -3479,11 +3486,15 @@ body:has(.app-shell.reviewer-mode) {
     align-items: center;
     overflow: hidden;
     border-radius: 3px;
-    background: rgba(180, 40, 40, 0.07);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 16%, transparent), transparent 58%),
+      color-mix(in srgb, var(--stem-wave-color, #6d6457) 12%, transparent);
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-lane {
-    background: rgba(215, 173, 98, 0.06);
+    background:
+      linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 22%, transparent), transparent 62%),
+      color-mix(in srgb, var(--stem-wave-color, #6d6457) 15%, transparent);
   }
 
   .mobile-track-nav-lane-label {
@@ -3495,13 +3506,13 @@ body:has(.app-shell.reviewer-mode) {
     font-weight: 800;
     letter-spacing: 0.03em;
     white-space: nowrap;
-    color: rgba(220, 80, 80, 0.35);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 42%, transparent);
     z-index: 2;
     pointer-events: none;
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-lane-label {
-    color: rgba(215, 173, 98, 0.38);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 52%, transparent);
   }
 
   .mobile-track-nav-bars {
@@ -3534,18 +3545,18 @@ body:has(.app-shell.reviewer-mode) {
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid rgba(200, 50, 50, 0.4);
+    border: 1px solid color-mix(in srgb, var(--stem-progress-color, #d6a354) 38%, transparent);
     border-radius: 3px;
     padding: 0 3px;
     font-size: 0.6rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
-    color: rgba(230, 90, 90, 0.7);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 72%, #ffffff);
   }
 
   .mobile-track-nav-item.active .mobile-track-nav-count {
-    border-color: rgba(215, 173, 98, 0.3);
-    color: rgba(215, 173, 98, 0.7);
+    border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 46%, transparent);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 82%, #ffffff);
   }
 
   /* ── Project selector (multi-album switcher) ────────────────────────── */
@@ -3739,7 +3750,7 @@ body:has(.app-shell.reviewer-mode) {
   /* Individual stem row */
   .mobile-stem-stack-lane {
     padding: 4px 0 2px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid color-mix(in srgb, var(--stem-progress-color, #d6a354) 24%, rgba(255, 255, 255, 0.05));
   }
 
   .mobile-stem-stack-lane:last-child {
@@ -3765,7 +3776,7 @@ body:has(.app-shell.reviewer-mode) {
     font-weight: 800;
     letter-spacing: 0.07em;
     text-transform: uppercase;
-    color: rgba(215, 173, 98, 0.5);
+    color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 74%, rgba(255, 255, 255, 0.46));
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3785,6 +3796,8 @@ body:has(.app-shell.reviewer-mode) {
 
   .mobile-stem-stack-lane-waveform {
     width: 100%;
+    border-left: 3px solid var(--stem-progress-color, #d6a354);
+    padding-left: 6px;
   }
 
   /* Hide the compact TrackList when the premium MobileTrackNav is active */
