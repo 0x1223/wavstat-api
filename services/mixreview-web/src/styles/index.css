@@ -4471,16 +4471,29 @@ body:has(.app-shell.reviewer-mode) {
   .app-shell.reviewer-mode:has(.mobile-track-nav) .mobile-track-nav {
     order: 0;
     flex-shrink: 0;
+    position: relative;
+    z-index: 1200;
+    pointer-events: auto;
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
     order: 1;
+    position: relative;
+    z-index: 1;
+    overflow: visible;
+  }
+
+  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
+    z-index: 0;
   }
 
   /* Allow the project-selector dropdown to escape the nav's 34px height */
   .reviewer-mode .mobile-track-nav {
+    position: relative;
+    z-index: 1200;
     overflow: visible;
     gap: 0;
+    pointer-events: auto;
   }
 
   /* ── Project / Album header bar ────────────────────────────────────── */
@@ -4488,9 +4501,12 @@ body:has(.app-shell.reviewer-mode) {
      "PROJECT [name]" sits on the left (name has flex:1); the ALBUM type
      badge, X/Y counter, and chevron stack to the right naturally.        */
   .reviewer-mode .mobile-project-selector {
+    position: relative;
+    z-index: 1210;
     width: 100%;
     margin-bottom: 0;
     border-bottom: 1px solid rgba(215, 173, 98, 0.15);
+    pointer-events: auto;
   }
 
   .reviewer-mode .mobile-project-selector-btn {
@@ -4518,8 +4534,17 @@ body:has(.app-shell.reviewer-mode) {
   /* Nav is now at the TOP — dropdown must open downward, not upward.
      Overrides the first landscape block's upward direction.              */
   .reviewer-mode .mobile-project-dropdown {
+    position: absolute;
     top: calc(100% + 2px);
     bottom: auto;
+    z-index: 1220;
+    pointer-events: auto;
+    touch-action: manipulation;
+  }
+
+  .reviewer-mode .mobile-project-dropdown .mobile-project-option {
+    pointer-events: auto;
+    touch-action: manipulation;
   }
 
   /* A small breathing gap between the header bar and the chip strip     */
