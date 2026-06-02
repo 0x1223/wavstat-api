@@ -702,6 +702,9 @@ export function WaveformReview({
           }}
           onClick={handleWaveformClick}
         >
+          {trackTitle && (
+            <span className="waveform-track-label">{trackTitle}</span>
+          )}
           {/* ── Zoom wrapper ─────────────────────────────────────────────────────
               translateX pans the canvas and marker layer together (same GPU
               composite frame).  scaleX is NOT applied here — the waveform canvas
