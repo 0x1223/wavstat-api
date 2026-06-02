@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatTimecode } from "../lib/time.js";
 
 export function CommentSidebar({
@@ -15,6 +15,20 @@ export function CommentSidebar({
 }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState("");
+  const listRef = useRef(null);
+  const selectedCardRef = useRef(null);
+
+  useEffect(() => {
+    if (!selectedCommentId || !listRef.current || !selectedCardRef.current) {
+      return;
+    }
+
+    selectedCardRef.current.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+      behavior: "smooth"
+    });
+  }, [selectedCommentId]);
 
   function startEditing(comment) {
     setEditingId(comment.id);
@@ -42,7 +56,7 @@ export function CommentSidebar({
         <span>{comments.length}</span>
       </div>
 
-      <div className="comment-list">
+      <div className="comment-list" ref={listRef}>
         {comments.length === 0 && (
           <div className="empty-state">
             <strong>No notes on this version yet.</strong>
@@ -59,6 +73,7 @@ export function CommentSidebar({
             <article
               className={`comment-card${isSelected ? " selected" : ""}`}
               key={comment.id}
+              ref={isSelected ? selectedCardRef : null}
             >
               <button
                 type="button"

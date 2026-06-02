@@ -50,7 +50,7 @@ export function Header({
       </div>
 
       <div className="project-controls">
-        <div className="header-center-actions">
+        <div className="header-action-cluster">
           <div className="review-count">
             <span>{unresolvedCount}</span>
             open notes
@@ -60,30 +60,29 @@ export function Header({
               Export
             </button>
           )}
+
+          <div className="permission-badge">{permissions.label}</div>
+
+          {showAdminActions && (
+            <div className="session-actions">
+              <button type="button" onClick={handleBackClick}>
+                {backLabel}
+              </button>
+              <button type="button" onClick={onShareSession} disabled={!permissions.canShare}>
+                Share Session
+              </button>
+              <button type="button" onClick={onNewSession}>
+                New Session
+              </button>
+              <button type="button" onClick={onClearSession}>
+                Clear Session
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="permission-badge">{permissions.label}</div>
-
-        {showAdminActions && (
-          <div className="session-actions">
-            <button type="button" onClick={handleBackClick}>
-              {backLabel}
-            </button>
-            <button type="button" onClick={onShareSession} disabled={!permissions.canShare}>
-              Share Session
-            </button>
-            <button type="button" onClick={onNewSession}>
-              New Session
-            </button>
-            <button type="button" onClick={onClearSession}>
-              Clear Session
-            </button>
-          </div>
-        )}
-
         {permissions.canReview && (
-          <div className="review-status-cluster">
-            <span className="review-status-label">Review</span>
+          <div className="header-status-zone">
             <div className="status-switch approval-switch" aria-label="Approval status">
               {approvalStates.map((state) => (
                 <button
