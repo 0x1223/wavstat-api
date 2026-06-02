@@ -625,6 +625,36 @@ const ALLOWED_AUDIO_EXTS = new Set([
 //   OGG/Opus  — Safari (macOS + iOS) does not support Vorbis/Opus
 const TRANSCODE_FORMATS = new Set([".aiff", ".aif", ".alac", ".wma", ".w64", ".ogg", ".opus"]);
 
+function resolvePlaybackContentType(objectKey, storedContentType = "") {
+  const keyWithoutQuery = objectKey.split("?")[0].toLowerCase();
+
+  if (keyWithoutQuery.endsWith(".peaks.json")) {
+    return {
+      contentType: "application/json",
+      extension: "peaks.json",
+      source: "extension",
+    };
+  }
+
+  const extMatch = keyWithoutQuery.match(/\.([a-z0-9]+)$/);
+  const extension = extMatch?.[1] || "";
+  const extensionContentType = extension ? AUDIO_MIME_BY_EXT[extension] : null;
+
+  if (extensionContentType) {
+    return {
+      contentType: extensionContentType,
+      extension,
+      source: "extension",
+    };
+  }
+
+  return {
+    contentType: storedContentType || "application/octet-stream",
+    extension: extension || "(none)",
+    source: storedContentType ? "stored" : "fallback",
+  };
+}
+
 async function streamAudioPlayback(req, res, next) {
   try {
     const objectKey = decodeURIComponent(req.params.encodedKey || "");
@@ -632,13 +662,8 @@ async function streamAudioPlayback(req, res, next) {
       return res.status(400).json({ error: "Valid audio key is required." });
     }
 
-    // Derive a content-type from the file extension as a guaranteed fallback.
-    const extMatch = objectKey.match(/\.([a-z0-9]+)(?:\?|$)/i);
-    const extContentType = extMatch ? (AUDIO_MIME_BY_EXT[extMatch[1].toLowerCase()] ?? null) : null;
-
     console.log("[MixReview] Playback request", {
       objectKey,
-      extension: extMatch?.[1] ?? "(none)",
       range: req.headers.range ?? "(none)",
     });
 
@@ -658,12 +683,21 @@ async function streamAudioPlayback(req, res, next) {
     res.status(statusCode);
     res.setHeader("Accept-Ranges", "bytes");
 
-    // Prefer R2's stored ContentType; fall back to extension-derived type;
-    // last resort application/octet-stream.
-    const contentType = response.ContentType || extContentType || "application/octet-stream";
+    // R2 metadata can drift when objects are uploaded by older/newer builds.
+    // Browser decoders trust the response header, so known playback assets must
+    // be served from their key extension, not from stale stored ContentType.
+    const contentTypeInfo = resolvePlaybackContentType(objectKey, response.ContentType);
+    const { contentType } = contentTypeInfo;
     res.setHeader("Content-Type", contentType);
 
-    console.log("[MixReview] Playback serving", { objectKey, contentType, statusCode });
+    console.log("[MixReview] Playback serving", {
+      objectKey,
+      contentType,
+      contentTypeSource: contentTypeInfo.source,
+      extension: contentTypeInfo.extension,
+      storedContentType: response.ContentType || "(none)",
+      statusCode
+    });
 
     if (response.ContentLength) {
       res.setHeader("Content-Length", response.ContentLength);
@@ -1865,11 +1899,15 @@ async function refreshSessionPlaybackUrls(session, req = null) {
     }
 
     // Rebuild all three URL aliases at once so that whichever field the
-    // frontend reads first (normalizeAudioUrl priority: playbackUrl →
-    // audioUrl → url) it always gets a fresh, non-expired value.
+    // frontend reads first it gets a fresh, non-expired value. Only expose a
+    // preview URL when the original format truly requires a browser-native
+    // transcode; older clients prefer previewUrl first and will otherwise load
+    // stale .m4a previews for perfectly native MP3/WAV assets.
     const originalUrl = buildApiPlaybackUrl(req, key);
     const previewKey = version.audioMetadata.previewKey;
-    const freshUrl = previewKey ? buildApiPlaybackUrl(req, previewKey) : originalUrl;
+    const shouldUsePreview = Boolean(previewKey && version.audioMetadata.requiresTranscode);
+    const previewUrl = shouldUsePreview ? buildApiPlaybackUrl(req, previewKey) : null;
+    const freshUrl = previewUrl || originalUrl;
 
     return {
       ...version,
@@ -1879,7 +1917,7 @@ async function refreshSessionPlaybackUrls(session, req = null) {
         playbackUrl: freshUrl,
         audioUrl: freshUrl,
         originalUrl,
-        previewUrl: previewKey ? freshUrl : version.audioMetadata.previewUrl || null,
+        previewUrl,
         peaksUrl: version.audioMetadata.peaksUrl || null,
       }
     };
