@@ -2657,6 +2657,108 @@ h2 {
   color: #ddd4c5;
 }
 
+@media (min-width: 981px) {
+  html:has(.app-shell:not(.setup-shell):not(.admin-shell)),
+  body:has(.app-shell:not(.setup-shell):not(.admin-shell)) {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .top-stack,
+  .app-shell:not(.setup-shell):not(.admin-shell) .topbar,
+  .app-shell:not(.setup-shell):not(.admin-shell) .transport {
+    flex: 0 0 auto;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .project-controls {
+    justify-content: flex-end;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .approval-switch {
+    margin-left: auto;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .review-layout {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .review-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .review-side {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .track-list-panel {
+    flex: 0 0 auto;
+    grid-template-rows: auto minmax(0, 1fr);
+    max-height: clamp(150px, 24dvh, 300px);
+    overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .track-list-albums {
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .upload-panel {
+    flex: 0 0 auto;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel.stem-player {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .stem-player-lanes {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .waveform-stage {
+    min-height: 0;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .marker-layer {
+    overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .review-dashboard,
+  .app-shell:not(.setup-shell):not(.admin-shell) .comment-sidebar {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .comment-list {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
 @media (max-width: 980px) {
   .start-hero {
     grid-template-columns: 1fr;
