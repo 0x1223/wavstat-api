@@ -2032,27 +2032,6 @@ h2 {
     box-shadow 180ms ease;
 }
 
-.waveform-track-label {
-  display: none;
-  position: absolute;
-  top: 7px;
-  left: 8px;
-  z-index: 10;
-  pointer-events: none;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.52);
-  color: rgba(245, 197, 24, 0.75);
-  font-family: ui-monospace, monospace;
-  font-size: 0.65rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: calc(100% - 16px);
-}
-
 .waveform-stage:hover {
   border-color: rgba(215, 173, 98, 0.28);
   box-shadow:
@@ -4451,25 +4430,5 @@ body:has(.app-shell.reviewer-mode) {
   /* Reduce top padding now that there is no header above the content */
   .app-shell.reviewer-mode {
     padding-top: 4px;
-  }
-
-  /* ── Track nav to top: flip order so pills appear above the waveform ──
-     The first landscape block sets waveform-panel to order:0 and
-     mobile-track-nav to order:1 (waveform first, nav below). Override
-     here to put the track chip strip at the top of review-main so the
-     reviewer can always see and switch tracks without scrolling. */
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .mobile-track-nav {
-    order: 0;
-  }
-
-  .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-panel {
-    order: 1;
-  }
-
-  /* ── Track title overlay on the waveform stage ───────────────────────
-     Shows the active track name as a gold monospace pill anchored to the
-     top-left of the waveform. Hidden on all other viewports/orientations. */
-  .reviewer-mode .waveform-track-label {
-    display: block;
   }
 }
