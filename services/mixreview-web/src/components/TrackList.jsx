@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, memo, useCallback } from "react";
 import { apiUrl } from "../config/api.js";
+import { getStemColor } from "../lib/stemColors.js";
 
 const AUDIO_ACCEPT = [
   ".flac",
@@ -52,10 +53,19 @@ const TrackRow = memo(function TrackRow({
   onDragStart,
   onDragEnd,
   isDeleting,
+  stemColor,
 }) {
   return (
     <div
-      className="track-row"
+      className={`track-row${stemColor ? " stem-track-row" : ""}`}
+      style={
+        stemColor
+          ? {
+              "--stem-wave-color": stemColor.wave,
+              "--stem-progress-color": stemColor.progress,
+            }
+          : undefined
+      }
       draggable={canEdit}
       onDragStart={canEdit ? (e) => onDragStart(e, track.id) : undefined}
       onDragEnd={onDragEnd}
@@ -428,6 +438,7 @@ export const TrackList = memo(function TrackList({
                         onDragStart={handleDragStart}
                         onDragEnd={handleDragEnd}
                         isDeleting={deletingTrackId === track.id}
+                        stemColor={isStemProject ? getStemColor(index) : null}
                       />
                     ))}
                     {visibleAlbumTracks.length < albumTracks.length && (

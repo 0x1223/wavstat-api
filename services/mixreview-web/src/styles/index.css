@@ -371,13 +371,17 @@ body {
 .topbar {
   min-height: 86px;
   border-radius: 8px;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(0, auto);
   align-items: center;
-  justify-content: space-between;
   gap: 20px;
   padding: 18px 22px;
   backdrop-filter: blur(18px);
   animation: rise-in 420ms ease both;
+}
+
+.topbar-title {
+  min-width: 0;
 }
 
 .eyebrow {
@@ -426,6 +430,13 @@ h2 {
   flex-wrap: wrap;
 }
 
+.header-center-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
 .review-count {
   min-width: 112px;
   display: grid;
@@ -434,6 +445,36 @@ h2 {
   font-size: 0.76rem;
   text-align: right;
   text-transform: uppercase;
+}
+
+.header-export-button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #cfc6b6;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
+    #121212;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 800;
+  white-space: nowrap;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.header-export-button:hover {
+  color: #fffaf0;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.header-export-button:active {
+  transform: translateY(1px);
 }
 
 .review-count span {
@@ -469,6 +510,30 @@ h2 {
 
 .approval-switch {
   grid-template-columns: repeat(2, minmax(112px, 1fr));
+}
+
+.review-status-cluster {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.review-status-label {
+  min-height: 38px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid rgba(215, 173, 98, 0.28);
+  border-radius: 6px;
+  padding: 0 12px;
+  color: #ffe0a3;
+  background:
+    linear-gradient(180deg, rgba(215, 173, 98, 0.11), rgba(215, 173, 98, 0.05)),
+    rgba(12, 10, 7, 0.92);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .status-switch button,
@@ -1042,6 +1107,36 @@ h2 {
 .track-row {
   position: relative;
   min-width: 180px;
+}
+
+.stem-track-row button {
+  position: relative;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--stem-progress-color) 42%, rgba(255, 255, 255, 0.1));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color) 23%, transparent) 0 4px, transparent 4px),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color) 22%, transparent), rgba(255, 255, 255, 0.035));
+}
+
+.stem-track-row button::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  height: 4px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, var(--stem-progress-color), color-mix(in srgb, var(--stem-wave-color) 65%, transparent));
+  opacity: 0.88;
+}
+
+.stem-track-row button:hover,
+.stem-track-row button.active {
+  border-color: color-mix(in srgb, var(--stem-progress-color) 72%, #ffffff);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color) 30%, transparent) 0 4px, transparent 4px),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-progress-color) 18%, transparent), rgba(255, 255, 255, 0.045));
 }
 
 .track-row-actions {
@@ -1846,7 +1941,7 @@ h2 {
   display: flex;
   flex-direction: column;
   padding: 8px 0 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid color-mix(in srgb, var(--stem-progress-color, #d6a354) 24%, rgba(255, 255, 255, 0.05));
   cursor: crosshair; /* signals the lane is seekable */
 }
 
@@ -1855,7 +1950,9 @@ h2 {
 }
 
 .stem-player-lane:hover {
-  background: rgba(255, 255, 255, 0.015);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 12%, transparent), transparent 42%),
+    rgba(255, 255, 255, 0.015);
 }
 
 .stem-player-lane-header {
@@ -1872,7 +1969,7 @@ h2 {
   font-weight: 800;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: rgba(215, 173, 98, 0.55);
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 74%, rgba(255, 255, 255, 0.46));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1895,6 +1992,8 @@ h2 {
 .stem-player-lane-waveform {
   /* WaveSurfer injects a <div> containing a <canvas> here */
   width: 100%;
+  border-left: 3px solid var(--stem-progress-color, #d6a354);
+  padding-left: 8px;
 }
 
 .mix-strip,
@@ -2001,15 +2100,18 @@ h2 {
 
 .marker-layer {
   position: absolute;
-  inset: 18px 18px;
+  top: calc((100% - 180px) / 2);
+  right: 18px;
+  bottom: calc((100% - 180px) / 2);
+  left: 18px;
   z-index: 3;
   pointer-events: none;
 }
 
 .wave-marker {
   position: absolute;
-  top: 16px;
-  bottom: 16px;
+  top: 0;
+  bottom: 0;
   width: 2px;
   border: 0;
   border-radius: 2px;

@@ -1,22 +1,10 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
+import { getStemColor } from "../lib/stemColors.js";
 import { formatTimecode } from "../lib/time.js";
 
 // ── Visual constants ──────────────────────────────────────────────────────────
 const LANE_HEIGHT = 72; // px — each stem waveform row
-
-// Distinct wave/progress colour pairs per lane so stems are visually separable
-const LANE_COLOURS = [
-  { wave: "#6d6457", progress: "#d6a354" }, // gold    — matches the main player
-  { wave: "#415869", progress: "#6ea8c8" }, // blue
-  { wave: "#416348", progress: "#6eb87a" }, // green
-  { wave: "#5e4569", progress: "#b06ec8" }, // purple
-  { wave: "#634535", progress: "#c87a5a" }, // orange
-  { wave: "#5e5630", progress: "#c8b550" }, // amber
-  { wave: "#305f5f", progress: "#50a8a8" }, // teal
-  { wave: "#5a3535", progress: "#a85050" }, // red
-];
-const col = (i) => LANE_COLOURS[i % LANE_COLOURS.length];
 
 // Drift threshold for follower re-sync during playback (seconds).
 // Below this, normal clock variance; above it, we force a setTime() correction.
@@ -145,12 +133,13 @@ export const StemPlayer = memo(function StemPlayer({
       const timerId = window.setTimeout(() => {
         rafId = requestAnimationFrame(() => {
           if (disposed || !containerRefs.current[i]) return;
+          const laneColor = getStemColor(i);
 
           ws = WaveSurfer.create({
             container: containerRefs.current[i],
             backend: "MediaElement",
-            waveColor: col(i).wave,
-            progressColor: col(i).progress,
+            waveColor: laneColor.wave,
+            progressColor: laneColor.progress,
             cursorColor: "#f5efe3",
             cursorWidth: 2,
             height: LANE_HEIGHT,
@@ -318,30 +307,40 @@ export const StemPlayer = memo(function StemPlayer({
 
       {/* Vertical stack — one row per stem */}
       <div className="stem-player-lanes">
-        {stems.map((stem, i) => (
-          <div key={stem.id} className="stem-player-lane">
-
-            <div className="stem-player-lane-header">
-              <span className="stem-player-lane-title">
-                {stem.title || `Stem ${i + 1}`}
-              </span>
-
-              {loadingStates[i] && (
-                <span className="stem-player-lane-status">Loading…</span>
-              )}
-              {!loadingStates[i] && errorStates[i] && (
-                <span className="stem-player-lane-error">{errorStates[i]}</span>
-              )}
-            </div>
-
-            {/* WaveSurfer mounts into this div */}
+        {stems.map((stem, i) => {
+          const laneColor = getStemColor(i);
+          return (
             <div
-              ref={(el) => { containerRefs.current[i] = el; }}
-              className="stem-player-lane-waveform"
-            />
+              key={stem.id}
+              className="stem-player-lane"
+              style={{
+                "--stem-wave-color": laneColor.wave,
+                "--stem-progress-color": laneColor.progress,
+              }}
+            >
 
-          </div>
-        ))}
+              <div className="stem-player-lane-header">
+                <span className="stem-player-lane-title">
+                  {stem.title || `Stem ${i + 1}`}
+                </span>
+
+                {loadingStates[i] && (
+                  <span className="stem-player-lane-status">Loading…</span>
+                )}
+                {!loadingStates[i] && errorStates[i] && (
+                  <span className="stem-player-lane-error">{errorStates[i]}</span>
+                )}
+              </div>
+
+              {/* WaveSurfer mounts into this div */}
+              <div
+                ref={(el) => { containerRefs.current[i] = el; }}
+                className="stem-player-lane-waveform"
+              />
+
+            </div>
+          );
+        })}
       </div>
 
     </section>

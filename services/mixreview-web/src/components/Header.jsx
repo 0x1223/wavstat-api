@@ -37,7 +37,7 @@ export function Header({
 
   return (
     <header className="topbar">
-      <div>
+      <div className="topbar-title">
         <p className="eyebrow">MixReview</p>
         <div className="mobile-session-title">
           <h1>{projectName}</h1>
@@ -50,10 +50,18 @@ export function Header({
       </div>
 
       <div className="project-controls">
-        <div className="review-count">
-          <span>{unresolvedCount}</span>
-          open notes
+        <div className="header-center-actions">
+          <div className="review-count">
+            <span>{unresolvedCount}</span>
+            open notes
+          </div>
+          {showAdminActions && (
+            <button type="button" className="header-export-button" onClick={onExportSession}>
+              Export
+            </button>
+          )}
         </div>
+
         <div className="permission-badge">{permissions.label}</div>
 
         {showAdminActions && (
@@ -70,33 +78,33 @@ export function Header({
             <button type="button" onClick={onClearSession}>
               Clear Session
             </button>
-            <button type="button" onClick={onExportSession}>
-              Export
-            </button>
           </div>
         )}
 
         {permissions.canReview && (
-          <div className="status-switch approval-switch" aria-label="Approval status">
-            {approvalStates.map((state) => (
-              <button
-                type="button"
-                disabled={
-                  !statusState?.[state]?.enabled ||
-                  (state === "Pending Review" && !reviewSummary?.needsReview)
-                }
-                className={`${statusState?.[state]?.active || state === approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}${state === "Pending Review" ? " pending-review-summary" : ""}${state === "Pending Review" && !reviewSummary?.needsReview ? " muted" : ""}`}
-                key={state}
-                onClick={() => onStatusChange(state)}
-              >
-                {state === "Pending Review" ? (
-                  <>
-                    <span>Pending Reviews</span>
-                    <small>{reviewSummary?.needsReview || 0}/{reviewSummary?.total || 0}</small>
-                  </>
-                ) : state}
-              </button>
-            ))}
+          <div className="review-status-cluster">
+            <span className="review-status-label">Review</span>
+            <div className="status-switch approval-switch" aria-label="Approval status">
+              {approvalStates.map((state) => (
+                <button
+                  type="button"
+                  disabled={
+                    !statusState?.[state]?.enabled ||
+                    (state === "Pending Review" && !reviewSummary?.needsReview)
+                  }
+                  className={`${statusState?.[state]?.active || state === approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}${state === "Pending Review" ? " pending-review-summary" : ""}${state === "Pending Review" && !reviewSummary?.needsReview ? " muted" : ""}`}
+                  key={state}
+                  onClick={() => onStatusChange(state)}
+                >
+                  {state === "Pending Review" ? (
+                    <>
+                      <span>Pending Reviews</span>
+                      <small>{reviewSummary?.needsReview || 0}/{reviewSummary?.total || 0}</small>
+                    </>
+                  ) : state}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
