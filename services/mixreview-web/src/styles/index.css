@@ -1051,7 +1051,7 @@ h2 {
 
 .track-list button {
   min-width: 180px;
-  min-height: 62px;
+  min-height: 68px;
   display: grid;
   align-content: start;
   gap: 6px;
@@ -1060,7 +1060,7 @@ h2 {
   border-radius: 8px;
   color: #e7dcc8;
   background: rgba(255, 255, 255, 0.045);
-  padding: 11px 12px 26px;
+  padding: 11px 12px 30px;
   cursor: pointer;
   transition:
     border-color 160ms ease,
@@ -1103,7 +1103,7 @@ h2 {
   color: var(--soft);
 }
 
-/* ── Track row: container for the card + hover-only actions ─────────────── */
+/* ── Track row: container for the card + persistent actions ─────────────── */
 .track-row {
   position: relative;
   min-width: 180px;
@@ -1116,19 +1116,6 @@ h2 {
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color) 23%, transparent) 0 4px, transparent 4px),
     linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color) 22%, transparent), rgba(255, 255, 255, 0.035));
-}
-
-.colored-track-row button::after {
-  content: "";
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 12px;
-  height: 4px;
-  border-radius: 999px;
-  background:
-    linear-gradient(90deg, var(--stem-progress-color), color-mix(in srgb, var(--stem-wave-color) 65%, transparent));
-  opacity: 0.88;
 }
 
 .colored-track-row button:hover,
@@ -1148,20 +1135,15 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 140ms ease;
-}
-
-.track-list .track-row:hover .track-row-actions {
   opacity: 1;
   pointer-events: auto;
+  z-index: 2;
 }
 
 .track-row-replace {
   position: relative;
   display: inline-flex;
-  color: rgba(215, 173, 98, 0.72);
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 76%, rgba(255, 255, 255, 0.55));
   font-size: 0.67rem;
   font-weight: 800;
   letter-spacing: 0.025em;
@@ -1190,7 +1172,7 @@ h2 {
   display: inline;
   font-size: 0.67rem;
   font-family: inherit;
-  color: rgba(255, 100, 80, 0.65);
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 40%, rgba(255, 100, 80, 0.84));
   cursor: pointer;
   letter-spacing: 0.025em;
   transition: color 140ms ease;
@@ -2455,17 +2437,23 @@ h2 {
 .comment-sidebar {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  max-height: 100%;
   padding: 22px 20px;
   overflow: hidden;
 }
 
 .comment-list {
   min-height: 0;
+  max-height: 100%;
   display: grid;
+  grid-auto-rows: max-content;
   align-content: start;
   gap: 14px;
   margin-top: 20px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   padding: 2px 5px 2px 0;
   scrollbar-color: rgba(215, 173, 98, 0.45) rgba(255, 255, 255, 0.04);
 }
@@ -2497,6 +2485,8 @@ h2 {
 }
 
 .comment-card {
+  min-height: max-content;
+  flex-shrink: 0;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   background:

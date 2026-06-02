@@ -11,6 +11,7 @@ import { TransportBar } from "./components/TransportBar.jsx";
 import { WaveformReview } from "./components/WaveformReview.jsx";
 import { StemPlayer } from "./components/StemPlayer.jsx";
 import { MobileStemStack } from "./components/MobileStemStack.jsx";
+import { getStemColor } from "./lib/stemColors.js";
 import {
   deleteAlbumFromApi,
   deleteSessionFromApi,
@@ -322,6 +323,17 @@ export default function App({ onFirstRender } = {}) {
   );
   const activeAudioUrl = normalizeAudioUrl(activeVersion?.audioSource);
   const activeTrackIndex = tracks.findIndex((t) => t.id === activeTrackId);
+  const activeProjectTrackIndex = useMemo(() => {
+    if (!activeTrackId || !activeAlbum) {
+      return Math.max(0, activeTrackIndex);
+    }
+    const albumIndex = (activeAlbum.trackIds || []).indexOf(activeTrackId);
+    return albumIndex >= 0 ? albumIndex : Math.max(0, activeTrackIndex);
+  }, [activeAlbum, activeTrackId, activeTrackIndex]);
+  const activeTrackColor = useMemo(
+    () => getStemColor(activeProjectTrackIndex),
+    [activeProjectTrackIndex],
+  );
   const hasPrev =
     activeTrackIndex > 0 ||
     (repeatMode === "all" && tracks.length > 1);
@@ -2378,6 +2390,7 @@ export default function App({ onFirstRender } = {}) {
               selectedTime={selectedTime}
               previewMarkerTime={isReviewerMode ? mobileNoteDraft?.time : null}
               trackTitle={activeTrack?.title}
+              trackColor={activeTrackColor}
               onTimestampCreate={handleWaveformTimestamp}
               onMarkerSelect={activateComment}
               onReady={handlePlayerReady}

@@ -737,7 +737,8 @@ if (typeof document !== "undefined") {
  *
  * handlers: {
  *   onReady, onWaveformUnavailable, onError,
- *   onDurationChange, onTimeUpdate, onPlaybackChange
+ *   onDurationChange, onTimeUpdate, onPlaybackChange,
+ *   waveColor, progressColor
  * }
  *
  * onReady            — waveform decoded and rendered successfully
@@ -752,6 +753,8 @@ export function mountMobileEngine(container, url, handlers) {
   // When present we fetch the pre-generated peaks JSON from R2 and hand it
   // to WaveSurfer so it can skip client-side audio decoding entirely.
   const peaksUrl = handlers?.peaksUrl ?? null;
+  const waveColor = handlers?.waveColor || "#6d6457";
+  const progressColor = handlers?.progressColor || "#d6a354";
 
   if (_url === url && _ws) {
     return _ws;
@@ -857,8 +860,8 @@ export function mountMobileEngine(container, url, handlers) {
       ws = WaveSurfer.create({
         container,
         backend: "MediaElement",
-        waveColor: "#6d6457",
-        progressColor: "#d6a354",
+        waveColor,
+        progressColor,
         cursorColor: "#f5efe3",
         cursorWidth: 2,
         height: 180,

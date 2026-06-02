@@ -51,6 +51,7 @@ export function WaveformReview({
   selectedTime,
   previewMarkerTime = null,
   trackTitle,
+  trackColor = null,
   onTimestampCreate,
   onMarkerSelect,
   onReady,
@@ -270,6 +271,8 @@ export function WaveformReview({
     callbacksRef.current.onPlaybackChange(false);
 
     const playbackUrl = getPlaybackUrl(audioSource);
+    const resolvedWaveColor = trackColor?.wave || "#6d6457";
+    const resolvedProgressColor = trackColor?.progress || "#d6a354";
 
     // ── Load-start logging ──────────────────────────────────────────────
     const ext = (playbackUrl ?? "").split("?")[0].split(".").pop().toLowerCase();
@@ -300,6 +303,8 @@ export function WaveformReview({
       console.log("[WaveformReview] Mobile decode start", { url: playbackUrl.slice(0, 100) });
       const ws = mountMobileEngine(containerRef.current, playbackUrl, {
         peaksUrl: audioSource?.peaksUrl || null,
+        waveColor: resolvedWaveColor,
+        progressColor: resolvedProgressColor,
         onReady: (player) => {
           console.log("[WaveformReview] Mobile decode success");
           setIsLoading(false);
@@ -375,8 +380,8 @@ export function WaveformReview({
       wavesurfer = WaveSurfer.create({
         container: containerRef.current,
         backend: "MediaElement",
-        waveColor: "#6d6457",
-        progressColor: "#d6a354",
+        waveColor: resolvedWaveColor,
+        progressColor: resolvedProgressColor,
         cursorColor: "#f5efe3",
         cursorWidth: 2,
         height: 180,
@@ -589,7 +594,14 @@ export function WaveformReview({
       }
       resizeObserver.disconnect();
     };
-  }, [audioSource?.previewUrl, audioSource?.playbackUrl, audioSource?.url, audioSource?.peaksUrl]);
+  }, [
+    audioSource?.previewUrl,
+    audioSource?.playbackUrl,
+    audioSource?.url,
+    audioSource?.peaksUrl,
+    trackColor?.wave,
+    trackColor?.progress,
+  ]);
 
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
