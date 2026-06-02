@@ -53,16 +53,16 @@ const TrackRow = memo(function TrackRow({
   onDragStart,
   onDragEnd,
   isDeleting,
-  stemColor,
+  trackColor,
 }) {
   return (
     <div
-      className={`track-row${stemColor ? " stem-track-row" : ""}`}
+      className={`track-row${trackColor ? " colored-track-row" : ""}`}
       style={
-        stemColor
+        trackColor
           ? {
-              "--stem-wave-color": stemColor.wave,
-              "--stem-progress-color": stemColor.progress,
+              "--stem-wave-color": trackColor.wave,
+              "--stem-progress-color": trackColor.progress,
             }
           : undefined
       }
@@ -438,7 +438,7 @@ export const TrackList = memo(function TrackList({
                         onDragStart={handleDragStart}
                         onDragEnd={handleDragEnd}
                         isDeleting={deletingTrackId === track.id}
-                        stemColor={isStemProject ? getStemColor(index) : null}
+                        trackColor={getStemColor(index)}
                       />
                     ))}
                     {visibleAlbumTracks.length < albumTracks.length && (
@@ -468,6 +468,7 @@ export const TrackList = memo(function TrackList({
                   onDragStart={handleDragStart}
                   onDragEnd={handleDragEnd}
                   isDeleting={false}
+                  trackColor={getStemColor(index)}
                 />
               ))}
             </div>

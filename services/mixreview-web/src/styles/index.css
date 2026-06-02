@@ -1109,7 +1109,7 @@ h2 {
   min-width: 180px;
 }
 
-.stem-track-row button {
+.colored-track-row button {
   position: relative;
   overflow: hidden;
   border-color: color-mix(in srgb, var(--stem-progress-color) 42%, rgba(255, 255, 255, 0.1));
@@ -1118,7 +1118,7 @@ h2 {
     linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color) 22%, transparent), rgba(255, 255, 255, 0.035));
 }
 
-.stem-track-row button::after {
+.colored-track-row button::after {
   content: "";
   position: absolute;
   left: 12px;
@@ -1131,8 +1131,8 @@ h2 {
   opacity: 0.88;
 }
 
-.stem-track-row button:hover,
-.stem-track-row button.active {
+.colored-track-row button:hover,
+.colored-track-row button.active {
   border-color: color-mix(in srgb, var(--stem-progress-color) 72%, #ffffff);
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color) 30%, transparent) 0 4px, transparent 4px),
