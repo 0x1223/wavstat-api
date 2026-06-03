@@ -54,6 +54,12 @@ const TrackRow = memo(function TrackRow({
   onDragEnd,
   isDeleting,
   trackColor,
+  // Stem-specific: show Solo/Mute toggles and pass state from parent
+  isStemTrack,
+  isSoloed,
+  isMuted,
+  onToggleSolo,
+  onToggleMute,
 }) {
   return (
     <div
@@ -92,6 +98,28 @@ const TrackRow = memo(function TrackRow({
             />
             <span>Replace</span>
           </label>
+          {isStemTrack && (
+            <>
+              <button
+                type="button"
+                className={`track-row-solo${isSoloed ? " active" : ""}`}
+                onClick={(e) => { e.stopPropagation(); onToggleSolo?.(track.id); }}
+                aria-label={isSoloed ? "Unsolo" : "Solo"}
+                tabIndex={-1}
+              >
+                S
+              </button>
+              <button
+                type="button"
+                className={`track-row-mute${isMuted ? " active" : ""}`}
+                onClick={(e) => { e.stopPropagation(); onToggleMute?.(track.id); }}
+                aria-label={isMuted ? "Unmute" : "Mute"}
+                tabIndex={-1}
+              >
+                M
+              </button>
+            </>
+          )}
           <button
             type="button"
             className={`track-row-delete${isDeleting ? " is-deleting" : ""}`}
@@ -144,6 +172,8 @@ export const TrackList = memo(function TrackList({
   const [deletingTrackId, setDeletingTrackId] = useState(null);
   const [deleteError,     setDeleteError]     = useState("");
   const [showTypePicker,  setShowTypePicker]  = useState(false);
+  const [soloedTracks,    setSoloedTracks]    = useState(() => new Set());
+  const [mutedTracks,     setMutedTracks]     = useState(() => new Set());
 
   const visibleTracks = useMemo(
     () => tracks.filter((track) => !deletedTrackIds.has(track.id)),
@@ -244,6 +274,22 @@ export const TrackList = memo(function TrackList({
   }, [onMoveTrack]);
 
   const handleDragEnd = useCallback(() => setDragOverAlbumId(null), []);
+
+  const handleToggleSolo = useCallback((trackId) => {
+    setSoloedTracks((prev) => {
+      const next = new Set(prev);
+      if (next.has(trackId)) next.delete(trackId); else next.add(trackId);
+      return next;
+    });
+  }, []);
+
+  const handleToggleMute = useCallback((trackId) => {
+    setMutedTracks((prev) => {
+      const next = new Set(prev);
+      if (next.has(trackId)) next.delete(trackId); else next.add(trackId);
+      return next;
+    });
+  }, []);
 
   const handleTrackDelete = useCallback(async (trackId) => {
     if (!canEdit || !trackId || deletingTrackId) return;
@@ -439,6 +485,11 @@ export const TrackList = memo(function TrackList({
                         onDragEnd={handleDragEnd}
                         isDeleting={deletingTrackId === track.id}
                         trackColor={getStemColor(index)}
+                        isStemTrack={isStemProject}
+                        isSoloed={soloedTracks.has(track.id)}
+                        isMuted={mutedTracks.has(track.id)}
+                        onToggleSolo={handleToggleSolo}
+                        onToggleMute={handleToggleMute}
                       />
                     ))}
                     {visibleAlbumTracks.length < albumTracks.length && (

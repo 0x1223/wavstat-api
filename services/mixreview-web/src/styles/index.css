@@ -564,6 +564,14 @@ h2 {
   background: linear-gradient(180deg, #c44833, #8f241f);
 }
 
+/* Review Dashboard override: always vivid bright red (not the muted dark-red) */
+.approval-state-grid button.pending-review-summary {
+  color: #fff0ee;
+  border-color: rgba(255, 55, 35, 0.7);
+  background: linear-gradient(180deg, #ff4433, #cc1a0a);
+  box-shadow: 0 4px 14px rgba(220, 30, 20, 0.3);
+}
+
 .status-switch button.pending-review-summary small,
 .approval-state-grid button.pending-review-summary small {
   font-size: 0.72rem;
@@ -579,6 +587,15 @@ h2 {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.045), transparent),
     #121212;
+}
+
+/* Review Dashboard muted override: keep it visibly red even at 0/N count */
+.approval-state-grid button.pending-review-summary.muted,
+.approval-state-grid button.pending-review-summary.muted:hover {
+  color: rgba(255, 236, 232, 0.65);
+  border-color: rgba(255, 55, 35, 0.32);
+  background: linear-gradient(180deg, rgba(255, 68, 51, 0.42), rgba(204, 26, 10, 0.42));
+  box-shadow: none;
 }
 
 .status-switch button:hover,
@@ -1127,9 +1144,73 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  /* Hidden by default; revealed on row hover or keyboard focus */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+  z-index: 2;
+}
+
+.track-row:hover .track-row-actions,
+.track-row:focus-within .track-row-actions {
   opacity: 1;
   pointer-events: auto;
-  z-index: 2;
+}
+
+/* ── Solo / Mute inline toggle buttons ───────────────────────────────── */
+.track-row-solo,
+.track-row-mute {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 4px;
+  padding: 0;
+  min-width: 18px;
+  min-height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.62rem;
+  font-weight: 900;
+  font-family: inherit;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.track-row-solo {
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 72%, rgba(255, 255, 255, 0.5));
+  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 36%, transparent);
+}
+
+.track-row-mute {
+  color: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.track-row-solo:hover {
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 90%, #ffffff);
+  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 60%, transparent);
+}
+
+.track-row-mute:hover {
+  color: rgba(255, 255, 255, 0.7);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+/* Active (toggled on) states */
+.track-row-solo.active {
+  color: #130d04;
+  background: var(--stem-progress-color, #d6a354);
+  border-color: var(--stem-progress-color, #d6a354);
+}
+
+.track-row-mute.active {
+  color: #fff3ea;
+  background: rgba(255, 75, 55, 0.72);
+  border-color: rgba(255, 75, 55, 0.5);
 }
 
 .track-row-replace {
