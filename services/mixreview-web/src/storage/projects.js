@@ -279,7 +279,7 @@ function ensureVersionSet(versions) {
       label,
       audioMetadata: null,
       comments: [],
-      approvalStatus: "Pending Review",
+      approvalStatus: "Needs Review",
       approvalHistory: [],
       activity: [],
       selectedCommentId: null,
@@ -360,14 +360,14 @@ function resolveApprovalStatus(status, comments, approvalHistory) {
   );
 
   if (submittedReviewComments.length === 0) {
-    return status || "Pending Review";
+    return status || "Needs Review";
   }
 
   if (submittedReviewComments.every((comment) => comment.resolved)) {
     return "Approved";
   }
 
-  return "Needs Review";
+  return "Pending Review";
 }
 
 function normalizeApprovalHistory(history) {

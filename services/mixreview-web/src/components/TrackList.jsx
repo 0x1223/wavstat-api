@@ -217,12 +217,14 @@ export const TrackList = memo(function TrackList({
     });
   }, [effectiveAlbums, trackMap]);
 
+  // renderResetKey must only change when the SET OF VISIBLE TRACKS changes
+  // (a track was added or deleted). It must NOT react to album structure changes
+  // such as creating an empty album — doing so resets renderedTrackLimit to 14,
+  // which makes every album after the first render 0 cards until the progressive
+  // timeout catches back up (~100 ms later, but visually looks like data loss).
   const renderResetKey = useMemo(
-    () => [
-      albumBuckets.map(({ album }) => `${album.id}:${(album.trackIds || []).join(",")}`).join("|"),
-      unassignedTracks.map((track) => track.id).join(","),
-    ].join("::"),
-    [albumBuckets, unassignedTracks],
+    () => visibleTracks.map((t) => t.id).join(","),
+    [visibleTracks],
   );
 
   const totalTrackRows = useMemo(

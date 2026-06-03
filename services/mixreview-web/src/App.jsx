@@ -237,6 +237,13 @@ export default function App({ onFirstRender } = {}) {
   // Guards against a stale in-flight hydration resolving after beginNewSession has
   // already reset state. Set to null in beginNewSession so the callback is ignored.
   const hydrationGuardRef = useRef(routeSessionId);
+  // Refs that mirror volatile state so reconnect/applyStoredSession callbacks
+  // can read current values without being in their dependency arrays (preventing
+  // spurious re-creations that would abort in-flight network requests).
+  const isEngineerUnlockedRef = useRef(isEngineerUnlocked);
+  const isDirtyRef             = useRef(false);
+  const sessionSnapshotRef     = useRef(null);
+  const isSessionHydratingRef  = useRef(false);
   // Mobile auto-play-next refs (mobile reviewer only).
   // userHasPlayedRef:       true once the user has tapped Play at least once.
   // autoPlayNextRef:        true when a track ends naturally → play next when ready.
@@ -459,7 +466,10 @@ export default function App({ onFirstRender } = {}) {
     );
     setCurrentReviewer(
       reviewerOverride ||
-      (session.currentReviewer === "Engineer" && !isEngineerUnlocked
+      // Read via ref so this callback never changes reference when isEngineerUnlocked
+      // changes — the initial-hydration effect depends on applyStoredSession and would
+      // otherwise re-run (causing a spurious second API load) on every engineer toggle.
+      (session.currentReviewer === "Engineer" && !isEngineerUnlockedRef.current
         ? "Artist"
         : session.currentReviewer || "Artist"),
     );
@@ -472,7 +482,7 @@ export default function App({ onFirstRender } = {}) {
     setIsSessionSynced(true);
     setIsDirty(false);
     playerRef.current = null;
-  }, [isEngineerUnlocked]);
+  }, []);
 
   const sessionSnapshot = useMemo(
     () => {
@@ -508,6 +518,22 @@ export default function App({ onFirstRender } = {}) {
   useEffect(() => {
     activeTrackIdRef.current = activeTrackId;
   }, [activeTrackId]);
+
+  useEffect(() => {
+    isEngineerUnlockedRef.current = isEngineerUnlocked;
+  }, [isEngineerUnlocked]);
+
+  useEffect(() => {
+    sessionSnapshotRef.current = sessionSnapshot;
+  }, [sessionSnapshot]);
+
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
+
+  useEffect(() => {
+    isSessionHydratingRef.current = isSessionHydrating;
+  }, [isSessionHydrating]);
 
   useEffect(() => {
     return () => {
@@ -605,7 +631,12 @@ export default function App({ onFirstRender } = {}) {
     return () => {
       isCancelled = true;
     };
-  }, [applyStoredSession, forceStartScreen, isEngineerUnlocked, routeMode, routeSessionId]);
+  // isEngineerUnlocked intentionally omitted — applyStoredSession now reads it via
+  // isEngineerUnlockedRef so its reference is stable and this effect never re-runs
+  // just because the engineer lock state changed (which was causing a spurious
+  // second API load that could overwrite locally-edited state with older server data).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyStoredSession, forceStartScreen, routeMode, routeSessionId]);
 
   useEffect(() => {
     if (!hasStarted || isSessionHydrating) {
@@ -713,7 +744,12 @@ export default function App({ onFirstRender } = {}) {
   }, [routeMode]);
 
   const reconnectAndHydrateSession = useCallback(async (reason = "reconnect") => {
-    if (reconnectInFlightRef.current || isSessionHydrating || forceStartScreen) {
+    // Read volatile state via refs so this callback never changes reference due to
+    // isDirty / sessionSnapshot / isSessionHydrating fluctuating between renders.
+    // A changing reference would cause the event-listener effect to re-register,
+    // whose cleanup calls reconnectAbortRef.current?.abort() — self-aborting the
+    // very request this function just started.
+    if (reconnectInFlightRef.current || isSessionHydratingRef.current || forceStartScreen) {
       return;
     }
 
@@ -724,20 +760,22 @@ export default function App({ onFirstRender } = {}) {
     }
 
     const accessState = loadAccessState();
+    const snapshot = sessionSnapshotRef.current;
     const targetSessionId =
       routeSessionId ||
-      (hasStarted && sessionSnapshot?.id ? sessionSnapshot.id : null) ||
+      (snapshot?.hasStarted && snapshot?.id ? snapshot.id : null) ||
       accessState?.sessionId ||
       shareId;
 
     if (!targetSessionId) {
-      if (appView === "admin" && isEngineerUnlocked) {
+      if (appView === "admin" && isEngineerUnlockedRef.current) {
         refreshAdminSessions();
       }
       return;
     }
 
     reconnectInFlightRef.current = true;
+    isSessionHydratingRef.current = true;
     reconnectAbortRef.current?.abort();
     const controller = new AbortController();
     reconnectAbortRef.current = controller;
@@ -745,22 +783,26 @@ export default function App({ onFirstRender } = {}) {
 
     try {
       const canFlushLocalChanges =
-        isDirty &&
-        sessionSnapshot?.id === targetSessionId &&
-        hasSessionContent(sessionSnapshot) &&
+        isDirtyRef.current &&
+        snapshot?.id === targetSessionId &&
+        hasSessionContent(snapshot) &&
         !isSessionDeleted(targetSessionId) &&
-        !findDuplicateAudioKey(sessionSnapshot.tracks);
+        !findDuplicateAudioKey(snapshot.tracks);
 
       if (canFlushLocalChanges) {
         try {
-          await saveSessionToApi(sessionSnapshot);
+          await saveSessionToApi(snapshot);
           setIsSessionSynced(true);
           setIsDirty(false);
         } catch (error) {
-          console.warn("[MixReview] Reconnect save flush failed before hydrate", {
+          console.warn("[MixReview] Reconnect save flush failed — skipping reload to preserve local state", {
             reason,
             message: error?.message,
           });
+          // Safety: if we cannot persist local changes, do NOT reload from the API.
+          // Loading stale server data would overwrite the user's unsaved work (e.g.
+          // recently uploaded tracks or a new project that was just created).
+          return;
         }
       }
 
@@ -784,6 +826,21 @@ export default function App({ onFirstRender } = {}) {
         setAppView("start");
         setSessionMessage("This review session no longer exists.");
         replaceWithLandingRoute();
+        return;
+      }
+
+      // Guard: never replace local state with a server snapshot that has fewer
+      // tracks. This prevents a race where the API hasn't received the most recent
+      // save yet (e.g. the user just uploaded tracks and immediately triggered a
+      // reconnect) from silently discarding the user's work.
+      const localTrackCount = (snapshot?.tracks ?? []).length;
+      const serverTrackCount = (storedSession.tracks ?? []).length;
+      if (serverTrackCount < localTrackCount) {
+        console.warn("[MixReview] Reconnect: server has fewer tracks than local state — skipping apply to preserve local data", {
+          localTrackCount,
+          serverTrackCount,
+        });
+        setIsSessionSynced(false);
         return;
       }
 
@@ -824,20 +881,20 @@ export default function App({ onFirstRender } = {}) {
         reconnectAbortRef.current = null;
       }
       reconnectInFlightRef.current = false;
+      isSessionHydratingRef.current = false;
       setIsSessionHydrating(false);
     }
   }, [
+    // Only truly stable values that don't fluctuate during a session. Volatile state
+    // (isDirty, sessionSnapshot, isSessionHydrating, isEngineerUnlocked) is read via
+    // refs above so that the callback identity stays stable and doesn't cause the
+    // event-listener effect to re-register (which would abort in-flight requests).
     appView,
     applyStoredSession,
     forceStartScreen,
     getReconnectReviewer,
-    hasStarted,
-    isDirty,
-    isEngineerUnlocked,
-    isSessionHydrating,
     refreshAdminSessions,
     routeSessionId,
-    sessionSnapshot,
     shareId,
   ]);
 
@@ -975,7 +1032,11 @@ export default function App({ onFirstRender } = {}) {
             : version,
         );
         const nextTrack = createTrack(title, nextVersions, targetTrackId);
-        setTracks([nextTrack]);
+        // SAFETY GUARD: only replace the full tracks array when the session is
+        // truly empty. If tracks already exist (reconnect race, stale activeTrackId
+        // after a tab-restore, etc.) APPEND the new track rather than wiping the
+        // entire list — the old setTracks([nextTrack]) form was catastrophic.
+        setTracks((prev) => prev.length === 0 ? [nextTrack] : [...prev, nextTrack]);
         setAlbums((prevAlbums) => prevAlbums.map((album, idx) =>
           idx === 0 ? { ...album, trackIds: [...album.trackIds, targetTrackId] } : album
         ));

@@ -1,3 +1,4 @@
+// Needs Review = default/waiting state; Pending Review = reviewer submitted, engineer must act
 const approvalStates = [
   "Needs Review",
   "Pending Review",

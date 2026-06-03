@@ -1,11 +1,19 @@
 import { apiUrl } from "../config/api.js";
 
-export async function loadSessionFromApi(sessionId) {
+export async function loadSessionFromApi(sessionId, options = {}) {
   if (!sessionId) {
     return null;
   }
 
-  const response = await fetch(apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}`));
+  const { signal, reconnect = false } = options;
+  const reconnectQuery = reconnect ? `?reconnect=${Date.now()}` : "";
+  const response = await fetch(
+    apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}${reconnectQuery}`),
+    {
+      cache: "no-store",
+      signal,
+    },
+  );
   if (response.status === 404) {
     return null;
   }
@@ -46,6 +54,7 @@ export async function saveSessionToApi(session) {
   const response = await fetch(apiUrl(`/api/sessions/${encodeURIComponent(session.id)}`), {
     method: "PUT",
     headers,
+    cache: "no-store",
     body: JSON.stringify({ session })
   });
 
