@@ -1373,26 +1373,42 @@ export default function App({ onFirstRender } = {}) {
   // incorrectly blocking the post-deletion server sync.
   const handleTrackDeleteById = useCallback(async (trackId) => {
     if (!permissions.canEdit || !trackId) return;
+    // Throws on API failure — TrackList.handleTrackDelete catches and shows deleteError.
     await deleteTrackFromApi(trackId);
-    setTracks((prev) => prev.filter((t) => t.id !== trackId));
-    setAlbums((prev) =>
-      prev.map((a) => ({ ...a, trackIds: (a.trackIds || []).filter((id) => id !== trackId) }))
-    );
-    if (activeTrackIdRef.current === trackId) {
-      const remaining = tracksRef.current.filter((t) => t.id !== trackId);
-      if (remaining.length > 0) {
-        selectTrackRef.current?.(remaining[0].id);
-      } else {
-        setActiveTrackId(null);
-        setActiveStemPreviewAlbumId(null);
-        setVersions(createEmptyVersions());
-        setActiveVersionId("version-v1");
+    // State is only mutated after the API call succeeds, keeping sessionSnapshot
+    // consistent so the auto-save payload never resurrects the deleted track.
+    try {
+      setTracks((prev) => prev.filter((t) => t.id !== trackId));
+      setAlbums((prev) =>
+        prev.map((a) => ({ ...a, trackIds: (a.trackIds || []).filter((id) => id !== trackId) }))
+      );
+      if (activeTrackIdRef.current === trackId) {
+        const remaining = tracksRef.current.filter((t) => t.id !== trackId);
+        if (remaining.length > 0) {
+          selectTrackRef.current?.(remaining[0].id);
+        } else {
+          setActiveTrackId(null);
+          setActiveStemPreviewAlbumId(null);
+          setVersions(createEmptyVersions());
+          setActiveVersionId("version-v1");
+        }
       }
+    } catch (stateError) {
+      // Extremely unlikely — state updaters don't normally throw — but surface it
+      // rather than leaving the UI inconsistent.
+      console.error("[MixReview] Track state cleanup failed after delete", stateError);
+      setSessionMessage("Track was deleted from storage but the UI could not fully update. Please refresh.");
     }
   }, [permissions.canEdit]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const beginNewSession = useCallback(() => {
+    // Abort any in-flight reconnect so its applyStoredSession callback does not
+    // fire after we have already reset state for the new session.
+    reconnectAbortRef.current?.abort();
+    reconnectInFlightRef.current = false;
+    isSessionHydratingRef.current = false;
+    setIsSessionHydrating(false);
     revokeVersionUrls(versionsRef.current);
     const nextSessionId = createSessionId();
     hydrationGuardRef.current = null;
@@ -1837,6 +1853,12 @@ export default function App({ onFirstRender } = {}) {
   }, [refreshAdminSessions]);
 
   const returnToStart = useCallback(() => {
+    // Abort any in-flight reconnect so it cannot call applyStoredSession after
+    // we have fully reset to the start screen.
+    reconnectAbortRef.current?.abort();
+    reconnectInFlightRef.current = false;
+    isSessionHydratingRef.current = false;
+    setIsSessionHydrating(false);
     playerRef.current?.pause();
     setIsPlaying(false);
     setIsPlayerReady(false);
@@ -2173,6 +2195,13 @@ export default function App({ onFirstRender } = {}) {
 
     autoplayAttemptedRef.current = true;
     const el = mediaElement; // capture — may change if another track is selected mid-await
+    // cancelled + stallTimerId let the cleanup function stop the stall check if
+    // the effect re-runs (track changed) before the 800 ms window closes.
+    // Without this, the timer could fire on the newly-loaded track's <audio>
+    // element and incorrectly pause it when currentTime is still near 0.
+    let cancelled   = false;
+    let stallTimerId = null;
+
     (async () => {
       // Track whether 'playing' fires so we can detect a stall.
       let playingFired = false;
@@ -2186,9 +2215,9 @@ export default function App({ onFirstRender } = {}) {
         // and currentTime has not advanced after 800 ms, the audio is stuck
         // (AudioContext suspended, iOS blocked internally, etc.).
         // Reset to Play state rather than leaving a fake Pause showing.
-        setTimeout(() => {
+        stallTimerId = setTimeout(() => {
           el?.removeEventListener("playing", onPlayingOnce);
-          if (!playingFired && el && !el.paused && el.currentTime < 0.05) {
+          if (!cancelled && !playingFired && el && !el.paused && el.currentTime < 0.05) {
             console.log("[MixReview] Stall detected — play() resolved but audio did not start; resetting to Play state");
             try { el.pause(); } catch (_) {}
           }
@@ -2202,6 +2231,11 @@ export default function App({ onFirstRender } = {}) {
         try { el?.pause(); } catch (_) {}
       }
     })();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(stallTimerId); // no-op if the timer hasn't been assigned yet
+    };
   }, [isPlayerReady, isReviewerMode, activeTrackId, activeVersionId]);
 
   // ── Track-end state machine (all modes, all platforms) ───────────────────
