@@ -830,19 +830,31 @@ export default function App({ onFirstRender } = {}) {
         return;
       }
 
-      // Guard: never replace local state with a server snapshot that has fewer
-      // tracks. This prevents a race where the API hasn't received the most recent
-      // save yet (e.g. the user just uploaded tracks and immediately triggered a
-      // reconnect) from silently discarding the user's work.
-      const localTrackCount = (snapshot?.tracks ?? []).length;
-      const serverTrackCount = (storedSession.tracks ?? []).length;
-      if (serverTrackCount < localTrackCount) {
-        console.warn("[MixReview] Reconnect: server has fewer tracks than local state — skipping apply to preserve local data", {
-          localTrackCount,
-          serverTrackCount,
-        });
-        setIsSessionSynced(false);
-        return;
+      // Guard: if we still have unsaved local changes after the flush attempt
+      // AND the server returned fewer tracks than we hold locally, the server
+      // document is stale (e.g. a concurrent confirm-audio call raced ahead and
+      // overwrote it). Do not apply — keep local state and let the debounced
+      // auto-save win the next time it fires.
+      //
+      // We intentionally do NOT guard purely on track count here. A simple
+      // serverCount < localCount check fires during the React commit window
+      // between setTracks(filter) and the sessionSnapshotRef sync-effect, which
+      // is exactly when a deletion-triggered focus event arrives. That window
+      // makes the guard block legitimate intentional deletions. The save-fail
+      // guard above (return on throw) already covers the primary race; this
+      // secondary guard only triggers on the narrower case where isDirty is
+      // still true after a failed flush AND the server count is lower.
+      if (isDirtyRef.current) {
+        const localTrackCount  = (snapshot?.tracks ?? []).length;
+        const serverTrackCount = (storedSession.tracks ?? []).length;
+        if (serverTrackCount < localTrackCount) {
+          console.warn("[MixReview] Reconnect: server has fewer tracks than unsaved local state — skipping apply to preserve in-flight work", {
+            localTrackCount,
+            serverTrackCount,
+          });
+          setIsSessionSynced(false);
+          return;
+        }
       }
 
       const reviewerOverride = getReconnectReviewer(accessState, storedSession);
