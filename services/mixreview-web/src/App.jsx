@@ -435,23 +435,54 @@ export default function App({ onFirstRender } = {}) {
     });
   }, [activeAudioUrl, activeTrack, activeVersion]);
 
-  const applyStoredSession = useCallback((session, reviewerOverride = null) => {
+  // preservePlayback=true is used by reconnectAndHydrateSession so that focus,
+  // visibility-restore, and online events never interrupt active playback.
+  // When true: the currently playing track, its loaded versions, activeVersionId,
+  // player ready state, and playerRef are all left untouched. Only session
+  // metadata (tracks list, albums, project title) is refreshed from the server.
+  const applyStoredSession = useCallback((session, reviewerOverride = null, preservePlayback = false) => {
     if (!session) {
       return;
     }
 
     const nextTracks = buildInitialTracks(session, buildInitialVersions(session));
-    // Mirror the module-level policy: honour an explicit ?track= URL param if valid,
-    // otherwise default to tracks[0].  Never fall back to session.activeTrackId so
-    // that the post-hydration state exactly matches the pre-hydration initial state —
-    // preventing a mid-mount WaveSurfer re-init caused by an activeTrackId change.
-    const nextActiveTrackId =
-      (routeTrackId && nextTracks.some((track) => track.id === routeTrackId))
-        ? routeTrackId
-        : nextTracks[0]?.id || null;
+
+    // Determine which track to activate after applying the session.
+    // preservePlayback path: keep the current track if it still exists in the
+    // refreshed list. Fall back to full-reset behaviour (tracks[0]) only when
+    // the active track was deleted on the server — and clear preservePlayback so
+    // the version/player state is also reset for the fallback track.
+    let shouldPreservePlayback = preservePlayback && Boolean(activeTrackIdRef.current);
+    let nextActiveTrackId;
+    if (shouldPreservePlayback) {
+      const currentStillExists = nextTracks.some((t) => t.id === activeTrackIdRef.current);
+      if (currentStillExists) {
+        nextActiveTrackId = activeTrackIdRef.current;
+      } else {
+        // Active track was removed on the server — fall back gracefully.
+        shouldPreservePlayback = false;
+        nextActiveTrackId = nextTracks[0]?.id || null;
+      }
+    } else {
+      // Mirror the module-level policy: honour an explicit ?track= URL param if
+      // valid, otherwise default to tracks[0].  Never fall back to
+      // session.activeTrackId so the post-hydration state exactly matches the
+      // pre-hydration initial state — preventing a mid-mount WaveSurfer re-init.
+      nextActiveTrackId =
+        (routeTrackId && nextTracks.some((track) => track.id === routeTrackId))
+          ? routeTrackId
+          : nextTracks[0]?.id || null;
+    }
+
     const nextActiveTrack = nextTracks.find((track) => track.id === nextActiveTrackId) || nextTracks[0] || null;
     const nextVersions = nextActiveTrack?.versions || createEmptyVersions();
-    revokeVersionUrls(versionsRef.current);
+
+    // Revoking blob: URLs during a playback-preserving reconnect would silently
+    // kill locally-uploaded audio that hasn't been fully persisted yet.
+    if (!shouldPreservePlayback) {
+      revokeVersionUrls(versionsRef.current);
+    }
+
     setSessionId(session.id || createSessionId());
     setProjectTitle(session.projectName || emptyProjectName);
     setSessionDetails(buildSessionDetails(session));
@@ -459,12 +490,25 @@ export default function App({ onFirstRender } = {}) {
     setAlbums(buildInitialAlbums(session));
     setActiveTrackId(nextActiveTrackId);
     setActiveStemPreviewAlbumId(null);
-    setVersions(nextVersions);
-    setActiveVersionId(
-      routeVersionId && nextVersions.some((version) => version.id === routeVersionId)
-        ? routeVersionId
-        : nextActiveTrack?.activeVersionId || session.activeVersionId || nextVersions[0].id,
-    );
+
+    if (!shouldPreservePlayback) {
+      // Full reset — new session or active track no longer exists on server.
+      setVersions(nextVersions);
+      setActiveVersionId(
+        routeVersionId && nextVersions.some((version) => version.id === routeVersionId)
+          ? routeVersionId
+          : nextActiveTrack?.activeVersionId || session.activeVersionId || nextVersions[0].id,
+      );
+      setCurrentTime(0);
+      setIsPlaying(false);
+      setIsPlayerReady(false);
+      setMobileNoteDraft(null);
+      playerRef.current = null;
+    }
+    // When shouldPreservePlayback=true: versions, activeVersionId, currentTime,
+    // isPlaying, isPlayerReady, and playerRef are all left as-is so the audio
+    // element continues playing without any interruption.
+
     setCurrentReviewer(
       reviewerOverride ||
       // Read via ref so this callback never changes reference when isEngineerUnlocked
@@ -475,14 +519,9 @@ export default function App({ onFirstRender } = {}) {
         : session.currentReviewer || "Artist"),
     );
     setShareId(session.shareId || session.id || null);
-    setCurrentTime(0);
-    setIsPlaying(false);
-    setIsPlayerReady(false);
-    setMobileNoteDraft(null);
     setHasStarted(true);
     setIsSessionSynced(true);
     setIsDirty(false);
-    playerRef.current = null;
   }, []);
 
   const sessionSnapshot = useMemo(
@@ -858,7 +897,11 @@ export default function App({ onFirstRender } = {}) {
       }
 
       const reviewerOverride = getReconnectReviewer(accessState, storedSession);
-      applyStoredSession(storedSession, reviewerOverride);
+      // preservePlayback=true: focus/visibility/online events must never reset the
+      // active track or interrupt the media element. applyStoredSession only
+      // refreshes metadata (tracks list, albums, project title) and leaves all
+      // playback state (activeTrackId, versions, isPlaying, playerRef) untouched.
+      applyStoredSession(storedSession, reviewerOverride, true);
       setAppView("workspace");
       setHasStarted(true);
       setIsSessionSynced(true);
@@ -873,11 +916,13 @@ export default function App({ onFirstRender } = {}) {
         sessionId: storedSession.id,
         role: reviewerOverride || storedSession.currentReviewer || "Artist",
       });
+      // Use the local active track/version refs so the URL reflects what is
+      // actually playing rather than the server's last-saved position.
       setReviewRoute(
         reviewerOverride === "Engineer" ? "admin" : "reviewer",
-        storedSession.activeVersionId || "version-v1",
+        sessionSnapshotRef.current?.activeVersionId || storedSession.activeVersionId || "version-v1",
         storedSession.id,
-        storedSession.activeTrackId,
+        activeTrackIdRef.current || storedSession.activeTrackId,
       );
     } catch (error) {
       if (error?.name === "AbortError") {
@@ -2320,9 +2365,20 @@ export default function App({ onFirstRender } = {}) {
       const mode = repeatModeRef.current;
 
       // ── Repeat One ──────────────────────────────────────────────────────
+      // Defer by 80 ms so WaveSurfer finishes its own internal ended/finish
+      // handling before we seek back to 0 and restart.  Read playerRef inside
+      // the callback (not captured outside) so if the user manually switches
+      // tracks during that window we operate on the correct instance — or on
+      // null, which the optional-chain safely skips.  The loopTrackId guard
+      // ensures we never accidentally loop a different track that was selected
+      // while the timer was pending.
       if (mode === "one") {
-        playerRef.current?.seekToTime(0);
-        playerRef.current?.play()?.catch?.(() => {});
+        const loopTrackId = activeTrackIdRef.current;
+        setTimeout(() => {
+          if (activeTrackIdRef.current !== loopTrackId) return;
+          playerRef.current?.seekToTime(0);
+          playerRef.current?.play()?.catch?.(() => {});
+        }, 80);
         return;
       }
 
