@@ -174,3 +174,18 @@ export async function deleteAlbumFromApi(sessionId, albumId) {
     throw new Error(payload.error || "Project could not be deleted.");
   }
 }
+
+export async function deleteTrackFromApi(trackId) {
+  const adminKey = import.meta.env.VITE_ADMIN_API_KEY;
+  const response = await fetch(
+    apiUrl(`/api/tracks/${encodeURIComponent(trackId)}`),
+    {
+      method: "DELETE",
+      headers: adminKey ? { Authorization: `Bearer ${adminKey}` } : {},
+    }
+  );
+  if (!response.ok && response.status !== 204) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || "Track could not be deleted.");
+  }
+}

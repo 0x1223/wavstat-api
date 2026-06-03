@@ -15,6 +15,7 @@ import { getStemColor } from "./lib/stemColors.js";
 import {
   deleteAlbumFromApi,
   deleteSessionFromApi,
+  deleteTrackFromApi,
   listSessionsFromApi,
   loadSessionFromApi,
   saveSessionToApi,
@@ -1364,6 +1365,31 @@ export default function App({ onFirstRender } = {}) {
       setSessionMessage(error.message || "Project could not be deleted.");
     }
   }, [activeTrackId, albums, permissions.canEdit, sessionId, tracks]);
+
+  // Deletes a single track: calls the API, then immediately removes the track
+  // from `tracks` state and all album trackIds so sessionSnapshot is correct
+  // before the next auto-save fires. This prevents the debounced auto-save from
+  // resurrecting a deleted track and keeps the reconnect track-count guard from
+  // incorrectly blocking the post-deletion server sync.
+  const handleTrackDeleteById = useCallback(async (trackId) => {
+    if (!permissions.canEdit || !trackId) return;
+    await deleteTrackFromApi(trackId);
+    setTracks((prev) => prev.filter((t) => t.id !== trackId));
+    setAlbums((prev) =>
+      prev.map((a) => ({ ...a, trackIds: (a.trackIds || []).filter((id) => id !== trackId) }))
+    );
+    if (activeTrackIdRef.current === trackId) {
+      const remaining = tracksRef.current.filter((t) => t.id !== trackId);
+      if (remaining.length > 0) {
+        selectTrackRef.current?.(remaining[0].id);
+      } else {
+        setActiveTrackId(null);
+        setActiveStemPreviewAlbumId(null);
+        setVersions(createEmptyVersions());
+        setActiveVersionId("version-v1");
+      }
+    }
+  }, [permissions.canEdit]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const beginNewSession = useCallback(() => {
@@ -2586,6 +2612,7 @@ export default function App({ onFirstRender } = {}) {
             activeTrackId={activeTrackId}
             canEdit={canUploadAudio}
             onTrackSelect={selectProjectTrack}
+            onTrackDelete={handleTrackDeleteById}
             onTrackReplace={handleTrackReplaceUpload}
             onTrackUpload={handleTrackUpload}
             onCreateAlbum={handleCreateAlbum}

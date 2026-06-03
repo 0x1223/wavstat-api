@@ -1,5 +1,4 @@
 import { useEffect, useState, useMemo, memo, useCallback } from "react";
-import { apiUrl } from "../config/api.js";
 import { getStemColor } from "../lib/stemColors.js";
 
 const AUDIO_ACCEPT = [
@@ -156,6 +155,7 @@ export const TrackList = memo(function TrackList({
   activeTrackId,
   canEdit,
   onTrackSelect,
+  onTrackDelete,
   onTrackReplace,
   onTrackUpload,
   onCreateAlbum,
@@ -168,16 +168,17 @@ export const TrackList = memo(function TrackList({
   const [renamingAlbumId, setRenamingAlbumId] = useState(null);
   const [renameValue,     setRenameValue]     = useState("");
   const [dragOverAlbumId, setDragOverAlbumId] = useState(null);
-  const [deletedTrackIds, setDeletedTrackIds] = useState(() => new Set());
   const [deletingTrackId, setDeletingTrackId] = useState(null);
   const [deleteError,     setDeleteError]     = useState("");
   const [showTypePicker,  setShowTypePicker]  = useState(false);
   const [soloedTracks,    setSoloedTracks]    = useState(() => new Set());
   const [mutedTracks,     setMutedTracks]     = useState(() => new Set());
 
+  // App.jsx owns track removal — after onTrackDelete resolves it filters
+  // the track out of the `tracks` prop, so no local deletedTrackIds set needed.
   const visibleTracks = useMemo(
-    () => tracks.filter((track) => !deletedTrackIds.has(track.id)),
-    [deletedTrackIds, tracks],
+    () => tracks,
+    [tracks],
   );
 
   const effectiveAlbums = useMemo(
@@ -301,32 +302,18 @@ export const TrackList = memo(function TrackList({
     setDeleteError("");
     setDeletingTrackId(trackId);
     try {
-      const adminKey = import.meta.env.VITE_ADMIN_API_KEY;
-      const response = await fetch(apiUrl(`/api/tracks/${encodeURIComponent(trackId)}`), {
-        method: "DELETE",
-        headers: adminKey ? { Authorization: `Bearer ${adminKey}` } : {},
-      });
-      if (!response.ok && response.status !== 204) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload.error || "Track could not be deleted.");
-      }
-
-      setDeletedTrackIds((current) => {
-        const next = new Set(current);
-        next.add(trackId);
-        return next;
-      });
-
-      if (trackId === activeTrackId) {
-        const fallbackTrack = visibleTracks.find((track) => track.id !== trackId);
-        if (fallbackTrack) onTrackSelect(fallbackTrack.id);
-      }
+      // Delegates the API call, tracks-state filter, album-trackIds update, and
+      // active-track fallback selection to App.jsx via onTrackDelete. This keeps
+      // sessionSnapshot consistent immediately after deletion so the auto-save
+      // payload never resurects the deleted track, and the reconnect track-count
+      // guard never sees a local-vs-server discrepancy caused by an intentional delete.
+      await onTrackDelete?.(trackId);
     } catch (error) {
       setDeleteError(error.message || "Track could not be deleted.");
     } finally {
       setDeletingTrackId(null);
     }
-  }, [activeTrackId, canEdit, deletingTrackId, onTrackSelect, visibleTracks]);
+  }, [canEdit, deletingTrackId, onTrackDelete]);
 
   const handleCreateProject = useCallback((title, type) => {
     onCreateAlbum?.(title, type);
