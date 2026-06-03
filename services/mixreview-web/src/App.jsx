@@ -39,8 +39,8 @@ import {
 
 const versionLabels = ["V1", "V2", "Master", "Radio Edit"];
 const approvalStates = [
-  "Pending Review",
   "Needs Review",
+  "Pending Review",
   "Approved"
 ];
 const reviewerIdentities = ["Artist", "Engineer", "Manager", "Label"];
@@ -231,6 +231,9 @@ export default function App({ onFirstRender } = {}) {
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
+  const reconnectInFlightRef = useRef(false);
+  const reconnectAbortRef = useRef(null);
+  const lastReconnectAtRef = useRef(0);
   // Guards against a stale in-flight hydration resolving after beginNewSession has
   // already reset state. Set to null in beginNewSession so the callback is ignored.
   const hydrationGuardRef = useRef(routeSessionId);
@@ -354,7 +357,7 @@ export default function App({ onFirstRender } = {}) {
     [activeVersion?.audioSource],
   );
   const duration = activeVersion?.duration || 0;
-  const approvalStatus = activeVersion?.approvalStatus || "Pending Review";
+  const approvalStatus = activeVersion?.approvalStatus || "Needs Review";
   const selectedCommentId = activeVersion?.selectedCommentId || null;
   const selectedTime = activeVersion?.selectedTime || 0;
   const projectName = projectTitle;
@@ -688,6 +691,192 @@ export default function App({ onFirstRender } = {}) {
       refreshAdminSessions();
     }
   }, [appView, isEngineerUnlocked, refreshAdminSessions]);
+
+  const getReconnectReviewer = useCallback((accessState, storedSession) => {
+    const requestedMode = routeMode || accessState?.mode;
+    if (requestedMode === "admin" || accessState?.role === "Engineer") {
+      window.sessionStorage.setItem(ADMIN_UNLOCK_SESSION_KEY, "true");
+      setIsEngineerUnlocked(true);
+      return "Engineer";
+    }
+
+    setIsEngineerUnlocked(false);
+    if (accessState?.role && accessState.role !== "Engineer") {
+      return accessState.role;
+    }
+    if (requestedMode === "reviewer") {
+      return "Artist";
+    }
+    return storedSession?.currentReviewer === "Engineer"
+      ? "Artist"
+      : storedSession?.currentReviewer || null;
+  }, [routeMode]);
+
+  const reconnectAndHydrateSession = useCallback(async (reason = "reconnect") => {
+    if (reconnectInFlightRef.current || isSessionHydrating || forceStartScreen) {
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setIsSessionSynced(false);
+      setSessionMessage("Session changes are cached locally. Reconnect to sync.");
+      return;
+    }
+
+    const accessState = loadAccessState();
+    const targetSessionId =
+      routeSessionId ||
+      (hasStarted && sessionSnapshot?.id ? sessionSnapshot.id : null) ||
+      accessState?.sessionId ||
+      shareId;
+
+    if (!targetSessionId) {
+      if (appView === "admin" && isEngineerUnlocked) {
+        refreshAdminSessions();
+      }
+      return;
+    }
+
+    reconnectInFlightRef.current = true;
+    reconnectAbortRef.current?.abort();
+    const controller = new AbortController();
+    reconnectAbortRef.current = controller;
+    setIsSessionHydrating(true);
+
+    try {
+      const canFlushLocalChanges =
+        isDirty &&
+        sessionSnapshot?.id === targetSessionId &&
+        hasSessionContent(sessionSnapshot) &&
+        !isSessionDeleted(targetSessionId) &&
+        !findDuplicateAudioKey(sessionSnapshot.tracks);
+
+      if (canFlushLocalChanges) {
+        try {
+          await saveSessionToApi(sessionSnapshot);
+          setIsSessionSynced(true);
+          setIsDirty(false);
+        } catch (error) {
+          console.warn("[MixReview] Reconnect save flush failed before hydrate", {
+            reason,
+            message: error?.message,
+          });
+        }
+      }
+
+      const storedSession = await loadSessionFromApi(targetSessionId, {
+        reconnect: true,
+        signal: controller.signal,
+      });
+
+      if (!storedSession || isSessionDeleted(storedSession?.id ?? targetSessionId)) {
+        addDeletedSessionId(targetSessionId);
+        clearSessionCache(targetSessionId);
+        clearSharedSession(targetSessionId);
+        setTracks([]);
+        setActiveTrackId(null);
+        setActiveStemPreviewAlbumId(null);
+        setVersions(createEmptyVersions());
+        setActiveVersionId("version-v1");
+        setHasStarted(false);
+        setIsSessionSynced(false);
+        setIsDirty(false);
+        setAppView("start");
+        setSessionMessage("This review session no longer exists.");
+        replaceWithLandingRoute();
+        return;
+      }
+
+      const reviewerOverride = getReconnectReviewer(accessState, storedSession);
+      applyStoredSession(storedSession, reviewerOverride);
+      setAppView("workspace");
+      setHasStarted(true);
+      setIsSessionSynced(true);
+      setIsDirty(false);
+      setSessionMessage("");
+      saveSessionCache(storedSession);
+      if (storedSession.shareId) {
+        saveSharedSession(storedSession.shareId, storedSession);
+      }
+      saveAccessState({
+        mode: reviewerOverride === "Engineer" ? "admin" : "reviewer",
+        sessionId: storedSession.id,
+        role: reviewerOverride || storedSession.currentReviewer || "Artist",
+      });
+      setReviewRoute(
+        reviewerOverride === "Engineer" ? "admin" : "reviewer",
+        storedSession.activeVersionId || "version-v1",
+        storedSession.id,
+        storedSession.activeTrackId,
+      );
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return;
+      }
+      console.warn("[MixReview] Reconnect hydrate failed", {
+        reason,
+        message: error?.message,
+      });
+      setIsSessionSynced(false);
+      setSessionMessage("Session could not be reconnected. Check your connection.");
+    } finally {
+      if (reconnectAbortRef.current === controller) {
+        reconnectAbortRef.current = null;
+      }
+      reconnectInFlightRef.current = false;
+      setIsSessionHydrating(false);
+    }
+  }, [
+    appView,
+    applyStoredSession,
+    forceStartScreen,
+    getReconnectReviewer,
+    hasStarted,
+    isDirty,
+    isEngineerUnlocked,
+    isSessionHydrating,
+    refreshAdminSessions,
+    routeSessionId,
+    sessionSnapshot,
+    shareId,
+  ]);
+
+  useEffect(() => {
+    const runReconnect = (reason) => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        return;
+      }
+
+      const now = Date.now();
+      if (now - lastReconnectAtRef.current < 1500) {
+        return;
+      }
+      lastReconnectAtRef.current = now;
+      reconnectAndHydrateSession(reason);
+    };
+
+    const handleFocus = () => runReconnect("focus");
+    const handleOnline = () => runReconnect("online");
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        runReconnect("visibility");
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("online", handleOnline);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("online", handleOnline);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      reconnectAbortRef.current?.abort();
+    };
+  }, [reconnectAndHydrateSession]);
 
   const updateActiveVersion = useCallback((updater) => {
     setVersions((currentVersions) =>
@@ -2255,11 +2444,12 @@ export default function App({ onFirstRender } = {}) {
         )}
         {isEngineerMode && hasStarted && (
           <div style={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "0.82rem" }}>
-            <span style={{ opacity: 0.55 }}>
+            {/* Save status and Save Changes hidden from view; state management runs unchanged */}
+            <span style={{ display: "none", opacity: 0.55 }}>
               {isSessionSaving ? "Saving…" : isDirty ? "Unsaved changes" : "Saved"}
             </span>
             <div className="session-actions">
-              <button type="button" onClick={handleForceSave} disabled={isSessionSaving || !isDirty}>
+              <button type="button" onClick={handleForceSave} disabled={isSessionSaving || !isDirty} style={{ display: "none" }}>
                 Save Changes
               </button>
               <button
@@ -2632,21 +2822,18 @@ function AdminDashboard({
   onRefresh,
   onLogout
 }) {
-  const dashboardStates = ["Draft", ...approvalStates];
+  // Explicit order: Pending Review (urgent — reviewer submitted feedback) first,
+  // then Needs Review (waiting for reviewer), then Approved.
+  const dashboardStates = ["Draft", "Pending Review", "Needs Review", "Approved"];
   const sortedSessions = sortSessionSummaries(sessions);
   const buckets = dashboardStates.reduce((groups, status) => {
     groups[status] = sortedSessions.filter((session) => (session.status || "Draft") === status);
     return groups;
   }, {});
   const draftSessions = buckets.Draft || [];
+  const pendingReviewSessions = buckets["Pending Review"] || [];
   const needsReviewSessions = buckets["Needs Review"] || [];
   const approvedSessions = buckets.Approved || [];
-  // Count non-approved tracks across all sessions so the tile reflects
-  // individual track workload, not just session count.
-  const pendingTrackCount = sessions.reduce(
-    (sum, s) => sum + Math.max(0, (s.trackCount || 0) - (s.approvedTrackCount || 0)),
-    0
-  );
 
   return (
     <main className="app-shell admin-shell">
@@ -2681,7 +2868,7 @@ function AdminDashboard({
       <section className="admin-dashboard" aria-label="Admin dashboard">
         <div className="summary-grid">
           <SummaryTile label="Draft" value={draftSessions.length} />
-          <SummaryTile label="Pending Reviews" value={pendingTrackCount} />
+          <SummaryTile label="Pending Review" value={pendingReviewSessions.length} attention />
           <SummaryTile label="Needs Review" value={needsReviewSessions.length} />
           <SummaryTile label="Approved" value={approvedSessions.length} />
         </div>
@@ -2707,7 +2894,7 @@ function AdminDashboard({
                   (buckets[status] || []).map((session) => (
                     <article className={`admin-session-row${session.isPriority ? " priority" : ""}`} key={session.id}>
                       <div>
-                        <p className="eyebrow">{session.isPriority ? "Priority" : status}</p>
+                        <p className={`eyebrow${status === "Pending Review" ? " attention" : ""}`}>{session.isPriority ? "Priority" : status}</p>
                         <h2>{session.projectName || "Untitled MixReview Session"}</h2>
                         <p>
                           {session.artistName || "No artist"} · {session.reviewerName || session.reviewerClientId || "No reviewer"}
@@ -2807,9 +2994,9 @@ function SessionSetup({ details, error, onBack, onChange, onSubmit }) {
   );
 }
 
-function SummaryTile({ label, value }) {
+function SummaryTile({ label, value, attention }) {
   return (
-    <div className="summary-metric">
+    <div className={`summary-metric${attention ? " attention" : ""}`}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -3007,16 +3194,16 @@ function deriveSessionStatus(details, tracks) {
 
   const statuses = importedTracks.map((track) => {
     const activeVersion = track.versions.find((version) => version.id === track.activeVersionId) || track.versions[0];
-    return activeVersion?.approvalStatus || "Pending Review";
+    return activeVersion?.approvalStatus || "Needs Review";
   });
 
   if (statuses.length > 0 && statuses.every((status) => status === "Approved")) {
     return "Approved";
   }
-  if (statuses.some((status) => status === "Needs Review")) {
-    return "Needs Review";
+  if (statuses.some((status) => status === "Pending Review")) {
+    return "Pending Review";
   }
-  return "Pending Review";
+  return "Needs Review";
 }
 
 function buildInitialVersions(session) {
@@ -3217,7 +3404,7 @@ function getTrackApprovalSummary(tracks) {
     }).length,
     needsReview: importedTracks.filter((track) => {
       const activeVersion = getActiveVersion(track);
-      return activeVersion?.approvalStatus === "Needs Review" || hasUnresolvedReview(activeVersion);
+      return activeVersion?.approvalStatus === "Pending Review" || hasUnresolvedReview(activeVersion);
     }).length,
     total: importedTracks.length
   };
@@ -3279,7 +3466,7 @@ function normalizeApprovalStatus(status) {
     return "Needs Review";
   }
 
-  return approvalStates.includes(status) ? status : "Pending Review";
+  return approvalStates.includes(status) ? status : "Needs Review";
 }
 
 function resolveApprovalStatus(status, comments, approvalHistory) {
@@ -3309,17 +3496,17 @@ function getReviewStatusState(version) {
     states[state] = {
       active: state === activeStatus,
       enabled:
-        state === "Pending Review"
+        state === "Needs Review"
           ? !hasSubmittedReview
-          : state === "Needs Review"
+          : state === "Pending Review"
             ? hasSubmittedReview && !allReviewItemsResolved
             : allReviewItemsResolved,
       tone:
         state === "Approved"
           ? "approved"
-          : state === "Pending Review" || state === "Needs Review"
+          : state === "Pending Review"
             ? "attention"
-            : "neutral"
+            : ""
     };
     return states;
   }, {});
@@ -3329,14 +3516,14 @@ function deriveReviewStatus(version) {
   const submittedReviewComments = getSubmittedReviewComments(version.comments);
 
   if (submittedReviewComments.length === 0) {
-    return "Pending Review";
+    return "Needs Review";
   }
 
   if (submittedReviewComments.every((comment) => comment.resolved)) {
     return "Approved";
   }
 
-  return "Needs Review";
+  return "Pending Review";
 }
 
 function getSubmittedReviewComments(comments = []) {
@@ -3447,6 +3634,15 @@ function hasPersistedRealAudio(session) {
       track.versions?.some((version) => version.audioMetadata?.url),
     ) ||
     session?.versions?.some((version) => version.audioMetadata?.url),
+  );
+}
+
+function hasSessionContent(session) {
+  return Boolean(
+    session?.sessionName?.trim() ||
+    session?.projectName?.trim() ||
+    (Array.isArray(session?.tracks) && session.tracks.length > 0) ||
+    (Array.isArray(session?.versions) && session.versions.some((version) => version.audioMetadata)),
   );
 }
 
