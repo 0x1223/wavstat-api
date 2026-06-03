@@ -20,7 +20,7 @@ export function Header({
     "Needs Review",
     "Pending Review",
     "Approved"
-  ];
+  ]; // Needs Review = default/waiting; Pending Review = reviewer submitted, engineer must act
   const isBackToStart = backLabel === "Back to Start";
   const showAdminActions = permissions.canEdit;
 
@@ -42,8 +42,15 @@ export function Header({
         <div className="mobile-session-title">
           <h1>{projectName}</h1>
           {!permissions.canEdit && permissions.canReview && (
-            <span className={`mobile-status-badge ${statusState?.[approvalStatus]?.tone || ""}`}>
-              {approvalStatus}
+            <span
+              className={`mobile-status-badge${reviewSummary ? " with-count" : ""} ${statusState?.[approvalStatus]?.tone || ""}`}
+            >
+              {reviewSummary ? (
+                <>
+                  <span>{approvalStatus}</span>
+                  <small>{reviewSummary.needsReview || 0}/{reviewSummary.total || 0}</small>
+                </>
+              ) : approvalStatus}
             </span>
           )}
         </div>

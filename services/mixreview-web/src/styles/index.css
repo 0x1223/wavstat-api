@@ -842,9 +842,10 @@ h2 {
 
 .status-switch button.active.attention,
 .approval-state-grid button.active.attention {
-  color: #fff3ea;
-  border-color: rgba(255, 109, 85, 0.54);
-  background: linear-gradient(180deg, #c44833, #8f241f);
+  color: #fff0ee;
+  border-color: rgba(255, 55, 35, 0.65);
+  background: linear-gradient(180deg, #ff4433, #cc1a0a);
+  box-shadow: 0 6px 18px rgba(220, 30, 20, 0.4);
 }
 
 .status-switch button.active.approved,
@@ -1824,10 +1825,20 @@ h2 {
   background: linear-gradient(180deg, #f2c875, #d4a14d);
 }
 
+/* "Needs Review" has no tone class — target active button with neither
+   .attention nor .approved to apply the neutral/grayed-out appearance. */
+.approval-state-grid button.active:not(.attention):not(.approved) {
+  color: #8a8378;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent), #181818;
+  box-shadow: none;
+}
+
 .approval-state-grid button.active.attention {
-  color: #fff3ea;
-  border-color: rgba(255, 109, 85, 0.54);
-  background: linear-gradient(180deg, #c44833, #8f241f);
+  color: #fff0ee;
+  border-color: rgba(255, 55, 35, 0.65);
+  background: linear-gradient(180deg, #ff4433, #cc1a0a);
+  box-shadow: 0 6px 18px rgba(220, 30, 20, 0.4);
 }
 
 .approval-state-grid button.active.approved {
@@ -2978,26 +2989,62 @@ body:has(.app-shell.reviewer-mode) {
     gap: 10px;
   }
 
+  /* ── Reviewer status badge (top-right of mobile topbar) ──────────────
+     "Needs Review"  = bright gold  (no tone class)
+     "Pending Review"= vivid red    (.attention)
+     "Approved"      = green        (.approved)                          */
   .reviewer-mode .mobile-status-badge {
     min-height: 28px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    border: 1px solid rgba(255, 109, 85, 0.36);
+    border: 1px solid rgba(215, 173, 98, 0.55);
     border-radius: 999px;
     padding: 0 10px;
-    color: #ffe7df;
-    background: rgba(196, 72, 51, 0.18);
+    color: #130d04;
+    background: linear-gradient(180deg, #ffd889, #d6a354);
+    box-shadow: 0 4px 14px rgba(215, 173, 98, 0.22);
     font-size: 0.68rem;
     font-weight: 900;
     white-space: nowrap;
+  }
+
+  /* "Pending Review" — reviewer has submitted feedback, engineer must act */
+  .reviewer-mode .mobile-status-badge.attention {
+    color: #fff0ee;
+    border-color: rgba(255, 55, 35, 0.65);
+    background: linear-gradient(180deg, #ff4433, #cc1a0a);
+    box-shadow: 0 4px 14px rgba(220, 30, 20, 0.3);
   }
 
   .reviewer-mode .mobile-status-badge.approved {
     color: #07160f;
     border-color: rgba(127, 210, 145, 0.42);
     background: #79d28d;
+    box-shadow: none;
+  }
+
+  /* Count display: switches to grid so label sits above the X/Y fraction */
+  .reviewer-mode .mobile-status-badge.with-count {
+    display: inline-grid;
+    gap: 0;
+    align-content: center;
+    justify-items: center;
+    min-height: 36px;
+    padding: 4px 12px;
+    line-height: 1.25;
+  }
+
+  .reviewer-mode .mobile-status-badge.with-count span {
+    font-size: 0.66rem;
+    font-weight: 900;
+  }
+
+  .reviewer-mode .mobile-status-badge.with-count small {
+    font-size: 0.62rem;
+    font-weight: 900;
+    opacity: 0.85;
   }
 
   .reviewer-mode .project-controls {
