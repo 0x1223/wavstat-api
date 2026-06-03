@@ -1355,14 +1355,28 @@ export default function App({ onFirstRender } = {}) {
     if (!confirmed) return;
 
     const trackIdsToRemove = new Set(album.trackIds || []);
+    const nextTracks = tracks.filter((t) => !trackIdsToRemove.has(t.id));
+    const nextAlbums = albums.filter((a) => a.id !== albumId);
 
-    setAlbums((prev) => prev.filter((a) => a.id !== albumId));
-    setTracks((prev) => prev.filter((t) => !trackIdsToRemove.has(t.id)));
+    // Anchor the post-deletion snapshot in both refs BEFORE React batches the
+    // state updates. Any reconnect or visibility event that fires in the React
+    // commit window will read this snapshot, see isDirty=true, and flush to the
+    // server rather than overwriting local state with the stale pre-deletion doc.
+    const postDeleteSnapshot = {
+      ...sessionSnapshotRef.current,
+      tracks: nextTracks.map(toStoredTrack),
+      albums: nextAlbums,
+      updatedAt: new Date().toISOString(),
+    };
+    sessionSnapshotRef.current = postDeleteSnapshot;
+    isDirtyRef.current = true;
+
+    setAlbums(nextAlbums);
+    setTracks(nextTracks);
 
     if (trackIdsToRemove.has(activeTrackId)) {
-      const remaining = tracks.filter((t) => !trackIdsToRemove.has(t.id));
-      if (remaining.length > 0) {
-        selectTrackRef.current?.(remaining[0].id);
+      if (nextTracks.length > 0) {
+        selectTrackRef.current?.(nextTracks[0].id);
       } else {
         setActiveTrackId(null);
         setActiveStemPreviewAlbumId(null);
@@ -1371,18 +1385,28 @@ export default function App({ onFirstRender } = {}) {
       }
     }
 
-    try {
-      await deleteAlbumFromApi(sessionId, albumId);
-    } catch (error) {
-      setSessionMessage(error.message || "Project could not be deleted.");
-    }
+    // Fire the session PUT and the album-level DELETE (R2 audio cleanup) in
+    // parallel. The eager PUT anchors server state before the 450ms debounced
+    // auto-save fires so any reconnect that arrives sees the correct document.
+    await Promise.allSettled([
+      saveSessionToApi(postDeleteSnapshot)
+        .then(() => { setIsSessionSynced(true); setIsDirty(false); })
+        .catch((error) => {
+          setSessionMessage(error.message || "Project could not sync after deletion.");
+        }),
+      deleteAlbumFromApi(sessionId, albumId).catch((error) => {
+        // If the PUT above was processed first the album will already be absent
+        // from the session document — suppress that expected 404.
+        if (!error?.message?.includes("not found")) {
+          setSessionMessage(error.message || "Project audio files could not be cleaned up.");
+        }
+      }),
+    ]);
   }, [activeTrackId, albums, permissions.canEdit, sessionId, tracks]);
 
-  // Deletes a single track: calls the API, then immediately removes the track
-  // from `tracks` state and all album trackIds so sessionSnapshot is correct
-  // before the next auto-save fires. This prevents the debounced auto-save from
-  // resurrecting a deleted track and keeps the reconnect track-count guard from
-  // incorrectly blocking the post-deletion server sync.
+  // Deletes a single track: calls the API, removes the track from global state
+  // arrays and all album trackIds, then immediately persists the post-deletion
+  // snapshot so the server stays aligned before the debounced auto-save fires.
   const handleTrackDeleteById = useCallback(async (trackId) => {
     if (!permissions.canEdit || !trackId) return;
     // Throws on API failure — TrackList.handleTrackDelete catches and shows deleteError.
@@ -1405,6 +1429,28 @@ export default function App({ onFirstRender } = {}) {
           setActiveVersionId("version-v1");
         }
       }
+
+      // Anchor the post-deletion snapshot from the current ref BEFORE the React
+      // state updates commit. A reconnect or visibility event that fires in the
+      // commit window will then see isDirty=true and flush the correct document
+      // instead of loading and applying stale pre-deletion server data.
+      const postDeleteSnapshot = {
+        ...sessionSnapshotRef.current,
+        tracks: (sessionSnapshotRef.current?.tracks ?? []).filter((t) => t.id !== trackId),
+        albums: (sessionSnapshotRef.current?.albums ?? []).map((a) => ({
+          ...a,
+          trackIds: (a.trackIds || []).filter((id) => id !== trackId),
+        })),
+        updatedAt: new Date().toISOString(),
+      };
+      sessionSnapshotRef.current = postDeleteSnapshot;
+      isDirtyRef.current = true;
+
+      // Immediately persist so the server document is updated before the 450ms
+      // debounced auto-save fires and before any reconnect can reload stale data.
+      saveSessionToApi(postDeleteSnapshot)
+        .then(() => { setIsSessionSynced(true); setIsDirty(false); })
+        .catch(() => {});
     } catch (stateError) {
       // Extremely unlikely — state updaters don't normally throw — but surface it
       // rather than leaving the UI inconsistent.
