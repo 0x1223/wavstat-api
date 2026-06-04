@@ -442,37 +442,15 @@ export const TrackList = memo(function TrackList({
           {deleteError && <p className="upload-error">{deleteError}</p>}
         </div>
 
-        {/* ── Desktop "Add Track" — aligned with top border of Review Dashboard ─
-            Visible only on desktop (≥981 px). Mobile retains the button below.  */}
-        {!multiAlbum && canEdit && hasUserProject && (() => {
-          const singleAlbum    = effectiveAlbums[0];
-          const isStemProject  = singleAlbum?.type === "stem_project";
-          return (
-            <label className="upload-button compact desktop-add-track-btn">
-              <input
-                type="file"
-                accept={AUDIO_ACCEPT}
-                multiple
-                onChange={(event) => {
-                  const files = Array.from(event.target.files || []);
-                  if (files.length > 0) onTrackUpload(files);
-                  event.target.value = "";
-                }}
-              />
-              <span>{isStemProject ? "Upload Stems" : "Add Track"}</span>
-            </label>
-          );
-        })()}
       </div>
 
-      {!isEmpty ? (
+      {(multiAlbum || hasUserProject) ? (
         <div className="track-list-albums">
 
-          {/* ── Desktop project selector ──────────────────────────────────────
-              Shown when the session has more than one album/project.
-              Replaces the accordion-style album headers with a single dropdown
-              so the user can switch projects without leaving the track list.   */}
-          {multiAlbum && (
+          {/* ── Project selector bar — sticky, shown for every session that has a project.
+              Multi-album: full dropdown to switch between projects.
+              Single-album: static display bar (same visual weight, no dropdown). */}
+          {multiAlbum ? (
             <div className="desktop-project-selector" ref={desktopSelectorRef}>
 
               {/* Top row: dropdown trigger + inline edit actions */}
@@ -639,36 +617,80 @@ export const TrackList = memo(function TrackList({
                 </div>
               )}
             </div>
-          )}
-
-          {/* ── Section label (single-album edit controls) ─────────────────── */}
-          {!multiAlbum && canEdit && effectiveAlbums.length > 0 && (() => {
-            const singleAlbum  = effectiveAlbums[0];
-            const isStemProject = singleAlbum?.type === "stem_project";
-            return (
-              <div className="track-list-single-album-actions">
-                <TypeBadge type={singleAlbum?.type} />
-                <label className="upload-button compact">
-                  <input
-                    type="file"
-                    accept={AUDIO_ACCEPT}
-                    multiple
-                    onChange={(event) => {
-                      const files = Array.from(event.target.files || []);
-                      if (files.length > 0) onTrackUpload(files);
-                      event.target.value = "";
-                    }}
-                  />
-                  <span>{isStemProject ? "Upload Stems" : "Add Track"}</span>
-                </label>
+          ) : desktopSelectedAlbum ? (
+            <div className="desktop-project-selector">
+              <div className="desktop-project-selector-row">
+                <div className="desktop-project-selector-btn desktop-project-selector-btn--static">
+                  <span className="desktop-project-selector-eyebrow">Project</span>
+                  {renamingAlbumId === desktopSelectedAlbum.id ? (
+                    <input
+                      className="album-rename-input desktop-project-rename-input"
+                      value={renameValue}
+                      autoFocus
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") {
+                          setRenamingAlbumId(null);
+                          setRenameValue("");
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span
+                      className="desktop-project-selector-name"
+                      title={canEdit ? "Double-click to rename" : undefined}
+                      onDoubleClick={() =>
+                        canEdit && startRename(desktopSelectedAlbum)
+                      }
+                    >
+                      {desktopSelectedAlbum.title}
+                    </span>
+                  )}
+                  <TypeBadge type={desktopSelectedAlbum.type} />
+                </div>
+                {canEdit && (
+                  <div className="desktop-project-edit-actions">
+                    <label className="upload-button compact small">
+                      <input
+                        type="file"
+                        accept={AUDIO_ACCEPT}
+                        multiple
+                        onChange={(event) => {
+                          const files = Array.from(event.target.files || []);
+                          if (files.length > 0)
+                            onTrackUpload(files, desktopSelectedAlbum.id);
+                          event.target.value = "";
+                        }}
+                      />
+                      <span>
+                        {desktopSelectedAlbum.type === "stem_project"
+                          ? "Upload Stems"
+                          : "Add Track"}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      className="album-delete-btn desktop-album-delete-btn"
+                      onClick={() => onDeleteProject?.(desktopSelectedAlbum.id)}
+                      title="Delete project"
+                      aria-label="Delete project"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
               </div>
-            );
-          })()}
+            </div>
+          ) : null}
 
-          {/* ── Track buckets ─────────────────────────────────────────────────
+          {/* ── Track buckets OR empty-project state ──────────────────────────
               In multi-album mode: displayBuckets contains only the selected
               album (previousTrackCount reset to 0).
               In single-album mode: displayBuckets === albumBuckets.            */}
+          {!isEmpty ? (
+            <>
           {displayBuckets.map(({ album, albumTracks, previousTrackCount }) => {
             const visibleAlbumTracks = albumTracks.slice(
               0,
@@ -753,11 +775,13 @@ export const TrackList = memo(function TrackList({
                   ))}
               </div>
             )}
-        </div>
-      ) : hasUserProject ? (
-        <div className="empty-state compact">
-          <strong>No tracks imported.</strong>
-          <p>Add a track to start this client review session.</p>
+            </>
+          ) : (
+            <div className="empty-state compact">
+              <strong>No tracks imported.</strong>
+              <p>Add a track to start this client review session.</p>
+            </div>
+          )}
         </div>
       ) : null}
 

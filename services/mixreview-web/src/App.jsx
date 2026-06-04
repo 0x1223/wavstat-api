@@ -241,7 +241,8 @@ export default function App({ onFirstRender } = {}) {
   // Refs that mirror volatile state so reconnect/applyStoredSession callbacks
   // can read current values without being in their dependency arrays (preventing
   // spurious re-creations that would abort in-flight network requests).
-  const isEngineerUnlockedRef = useRef(isEngineerUnlocked);
+  const appViewRef             = useRef(appView);
+  const isEngineerUnlockedRef  = useRef(isEngineerUnlocked);
   const isDirtyRef             = useRef(false);
   const sessionSnapshotRef     = useRef(null);
   const isSessionHydratingRef  = useRef(false);
@@ -560,6 +561,10 @@ export default function App({ onFirstRender } = {}) {
   }, [activeTrackId]);
 
   useEffect(() => {
+    appViewRef.current = appView;
+  }, [appView]);
+
+  useEffect(() => {
     isEngineerUnlockedRef.current = isEngineerUnlocked;
   }, [isEngineerUnlocked]);
 
@@ -799,22 +804,31 @@ export default function App({ onFirstRender } = {}) {
       return;
     }
 
-    // Admin dashboard must never auto-navigate into a session on focus/visibility
-    // events. accessState may still point to the last-opened session, but while
-    // the user is on the dashboard that pointer must not trigger a workspace jump.
-    // Only refresh the session list.
-    if (appView === "admin") {
+    // Admin and setup views must never auto-navigate into a session on focus/
+    // visibility events. Read via ref so we always see the committed view value
+    // without the callback needing to be recreated on every view transition
+    // (which would abort in-flight reconnect requests via the cleanup).
+    const currentView = appViewRef.current;
+    if (currentView === "admin") {
       console.log("[session-nav] reconnect suppressed on admin dashboard");
       if (isEngineerUnlockedRef.current) {
         refreshAdminSessions();
       }
       return;
     }
+    if (currentView === "setup") {
+      return;
+    }
 
     const accessState = loadAccessState();
     const snapshot = sessionSnapshotRef.current;
+    // Only honour the module-level routeSessionId when the hydration guard still
+    // points at it. beginNewSession() nulls the guard to prevent a stale page-load
+    // session URL from being reconnected after the user has already moved on.
+    const validRouteSessionId =
+      hydrationGuardRef.current === routeSessionId ? routeSessionId : null;
     const targetSessionId =
-      routeSessionId ||
+      validRouteSessionId ||
       (snapshot?.hasStarted && snapshot?.id ? snapshot.id : null) ||
       accessState?.sessionId ||
       shareId;
@@ -953,10 +967,9 @@ export default function App({ onFirstRender } = {}) {
     }
   }, [
     // Only truly stable values that don't fluctuate during a session. Volatile state
-    // (isDirty, sessionSnapshot, isSessionHydrating, isEngineerUnlocked) is read via
-    // refs above so that the callback identity stays stable and doesn't cause the
-    // event-listener effect to re-register (which would abort in-flight requests).
-    appView,
+    // (appView, isDirty, sessionSnapshot, isSessionHydrating, isEngineerUnlocked) is
+    // read via refs above so that the callback identity stays stable and doesn't cause
+    // the event-listener effect to re-register (which would abort in-flight requests).
     applyStoredSession,
     forceStartScreen,
     getReconnectReviewer,
@@ -3157,9 +3170,13 @@ function AdminDashboard({
                   <p className="muted-line">No {status.toLowerCase()} sessions.</p>
                 ) : (
                   (buckets[status] || []).map((session) => (
-                    <article className={`admin-session-row${session.isPriority ? " priority" : ""}`} key={session.id}>
-                      {/* Info block — clicks here must never trigger navigation. */}
-                      <div onClick={(e) => e.stopPropagation()} style={{ pointerEvents: "none" }}>
+                    <article
+                      className={`admin-session-row${session.isPriority ? " priority" : ""}`}
+                      key={session.id}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Info block — display only, no interactive behavior. */}
+                      <div onClick={(e) => e.stopPropagation()}>
                         <p className={`eyebrow${status === "Pending Review" ? " attention" : ""}`}>{session.isPriority ? "Priority" : status}</p>
                         <h2>{session.projectName || "Untitled MixReview Session"}</h2>
                         <p>
