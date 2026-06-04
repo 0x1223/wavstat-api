@@ -28,14 +28,15 @@ function abbrev(str, len = 11) {
   return str.length > len ? str.slice(0, len) + "…" : str;
 }
 
-// Horizontal waveform preview bar visualisation — mirrors StemLane in MobileTrackNav.
-// Stretches to fill whatever flex space the row gives it.
+// 200 bars so the waveform fills the lane at any column width; overflow:hidden clips the rest.
+const WAVEFORM_BAR_COUNT = 200;
+
 function StemLane({ seed, label }) {
   return (
     <span className="desktop-track-lane" aria-hidden="true">
       <span className="desktop-track-lane-label">{label}</span>
       <span className="desktop-track-lane-bars">
-        {BAR_HEIGHTS.map((_, i) => (
+        {Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => (
           <i key={i} style={{ height: `${BAR_HEIGHTS[(i + seed * 7) % BAR_HEIGHTS.length]}px` }} />
         ))}
       </span>
