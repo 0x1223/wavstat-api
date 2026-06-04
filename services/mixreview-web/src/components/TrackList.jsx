@@ -415,6 +415,27 @@ export const TrackList = memo(function TrackList({
           <h2>{importedTracks.length} imported</h2>
           {deleteError && <p className="upload-error">{deleteError}</p>}
         </div>
+        {/* ── Desktop "Add Track" — aligned with top border of Review Dashboard ─
+            Visible only on desktop (≥981 px). Mobile retains the button below.  */}
+        {!multiAlbum && canEdit && effectiveAlbums.length > 0 && (() => {
+          const singleAlbum    = effectiveAlbums[0];
+          const isStemProject  = singleAlbum?.type === "stem_project";
+          return (
+            <label className="upload-button compact desktop-add-track-btn">
+              <input
+                type="file"
+                accept={AUDIO_ACCEPT}
+                multiple
+                onChange={(event) => {
+                  const files = Array.from(event.target.files || []);
+                  if (files.length > 0) onTrackUpload(files);
+                  event.target.value = "";
+                }}
+              />
+              <span>{isStemProject ? "Upload Stems" : "Add Track"}</span>
+            </label>
+          );
+        })()}
       </div>
 
       {isEmpty ? (

@@ -275,7 +275,7 @@ export default function App({ onFirstRender } = {}) {
     [activeTrackId, albums],
   );
   const isActiveStemProject =
-    activeAlbum?.type === "stem_project" && activeStemPreviewAlbumId === activeAlbum?.id;
+    activeAlbum?.type === "stem_project";
 
   // Build the ordered stems array for StemPlayer (admin stem-project view only).
   // Each entry mirrors the shape StemPlayer expects: { id, title, audioSource }.

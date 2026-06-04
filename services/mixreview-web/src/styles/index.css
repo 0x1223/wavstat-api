@@ -5140,12 +5140,87 @@ body:has(.app-shell.reviewer-mode) {
   color: rgba(130, 185, 215, 0.85);
 }
 
-/* ── Expand the track-list-panel height cap on desktop (≥ 981px) ────────────
-   The default max-height was set for the old card grid (≤ 280px). Vertical rows
-   are taller per-track, so we give the panel more room when the selector makes
-   it single-album view.                                                         */
+/* ── Desktop "Add Track" button — hidden on mobile, shown in header on desktop ─ */
+.desktop-add-track-btn {
+  display: none;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   DESKTOP LAYOUT REFINEMENTS  (≥ 981 px)
+   Scope: project/track/stem panel only. No mobile, no playback, no transport.
+   ════════════════════════════════════════════════════════════════════════════ */
 @media (min-width: 981px) {
+
+  /* ── 1. Add Track button: lives in the header, aligned with Dashboard top ── */
+  .desktop-add-track-btn {
+    display: inline-flex;   /* reveal on desktop */
+    flex-shrink: 0;
+  }
+
+  /* Hide the old below-header button so it doesn't duplicate on desktop */
+  .app-shell:not(.setup-shell):not(.admin-shell) .track-list-single-album-actions {
+    display: none;
+  }
+
+  /* ── 2. Lock the project/stem window to a fixed height ─────────────────────
+     Starts at the same Y as the Review Dashboard top border (both at the top
+     of their review-layout columns). Bottom edge aligns beside "No approvals
+     yet" in the dashboard.  All extra tracks scroll inside this fixed window. */
   .app-shell:not(.setup-shell):not(.admin-shell) .track-list-panel {
-    max-height: clamp(300px, 44dvh, 480px);
+    height:     clamp(340px, 48dvh, 490px);
+    max-height: clamp(340px, 48dvh, 490px);
+    overflow: hidden;
+  }
+
+  /* ── 3a. Double individual track row height ─────────────────────────────────
+     Each stem/track lane grows from 38 px → 76 px so the waveform preview
+     has more vertical breathing room. All badge/label sizes scale up to match. */
+  .desktop-track-item {
+    min-height: 76px !important;
+    padding: 0 10px !important;
+    gap: 10px;
+  }
+
+  /* Waveform preview lane — taller to fill the doubled row */
+  .desktop-track-lane {
+    height: 48px;
+  }
+
+  /* Bar sparkline — taller max bar to fill the new lane height */
+  .desktop-track-lane-bars {
+    padding: 4px 3px;
+    gap: 2px;
+  }
+
+  .desktop-track-lane-bars i {
+    width: 3px;
+  }
+
+  /* Track number badge — slightly larger to breathe in the taller row */
+  .desktop-track-badge {
+    width: 26px;
+    height: 26px;
+    font-size: 0.68rem;
+  }
+
+  /* Track name — fractionally larger font for the taller row */
+  .desktop-track-name {
+    font-size: 0.8rem;
+    min-width: 100px;
+  }
+
+  /* Comment count badge — taller to fill the row */
+  .desktop-track-count {
+    height: 22px;
+    font-size: 0.65rem;
+  }
+
+  /* Hover actions overlay — remains vertically centred at 50 % (no change needed
+     since the rule already uses top:50%/transform:translateY(-50%)) */
+
+  /* ── 3b. Stem multitrack lanes scrollable inside fixed window ────────────── */
+  /* StemPlayer lane — give each stem lane more height in the desktop window */
+  .stem-player-lane {
+    padding: 10px 0 8px;
   }
 }
