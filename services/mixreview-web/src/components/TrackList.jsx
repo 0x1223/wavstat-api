@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, memo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, memo, useCallback } from "react";
 import { getStemColor } from "../lib/stemColors.js";
 
 const AUDIO_ACCEPT = [
@@ -19,6 +19,29 @@ const AUDIO_ACCEPT = [
 
 const INITIAL_RENDERED_TRACKS = 14;
 const RENDERED_TRACK_BATCH = 12;
+
+// Deterministic bar heights — same palette as MobileTrackNav
+const BAR_HEIGHTS = [4, 7, 11, 16, 19, 13, 17, 10, 8, 14, 18, 12, 6, 15, 5, 9, 20, 3, 16, 11, 7, 14, 18, 4, 10, 16, 6, 13, 19, 8, 11, 15, 5, 17, 9, 12, 7, 20, 4, 14];
+
+function abbrev(str, len = 11) {
+  if (!str) return "Untitled";
+  return str.length > len ? str.slice(0, len) + "…" : str;
+}
+
+// Horizontal waveform preview bar visualisation — mirrors StemLane in MobileTrackNav.
+// Stretches to fill whatever flex space the row gives it.
+function StemLane({ seed, label }) {
+  return (
+    <span className="desktop-track-lane" aria-hidden="true">
+      <span className="desktop-track-lane-label">{label}</span>
+      <span className="desktop-track-lane-bars">
+        {BAR_HEIGHTS.map((_, i) => (
+          <i key={i} style={{ height: `${BAR_HEIGHTS[(i + seed * 7) % BAR_HEIGHTS.length]}px` }} />
+        ))}
+      </span>
+    </span>
+  );
+}
 
 function useDeferredTrackLimit(resetKey, total) {
   const [limit, setLimit] = useState(() => Math.min(total, INITIAL_RENDERED_TRACKS));
@@ -41,6 +64,8 @@ function useDeferredTrackLimit(resetKey, total) {
 }
 
 // ── TrackRow ──────────────────────────────────────────────────────────────────
+// Desktop layout: [badge] [name] [waveform lane ···] [comment count]
+// Edit actions (Replace / S / M / Delete) overlay on hover.
 const TrackRow = memo(function TrackRow({
   track,
   index,
@@ -53,20 +78,24 @@ const TrackRow = memo(function TrackRow({
   onDragEnd,
   isDeleting,
   trackColor,
-  // Stem-specific: show Solo/Mute toggles and pass state from parent
   isStemTrack,
   isSoloed,
   isMuted,
   onToggleSolo,
   onToggleMute,
 }) {
+  const title      = track.title || `Track ${index + 1}`;
+  const shortTitle = abbrev(title);
+  const activeVersion  = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
+  const commentCount   = activeVersion?.comments?.length ?? 0;
+
   return (
     <div
       className={`track-row${trackColor ? " colored-track-row" : ""}`}
       style={
         trackColor
           ? {
-              "--stem-wave-color": trackColor.wave,
+              "--stem-wave-color":     trackColor.wave,
               "--stem-progress-color": trackColor.progress,
             }
           : undefined
@@ -75,13 +104,19 @@ const TrackRow = memo(function TrackRow({
       onDragStart={canEdit ? (e) => onDragStart(e, track.id) : undefined}
       onDragEnd={onDragEnd}
     >
+      {/* ── Main selectable row ─────────────────────────────────────────── */}
       <button
         type="button"
-        className={isActive ? "active" : ""}
+        className={`desktop-track-item${isActive ? " active" : ""}`}
         onClick={() => onTrackSelect(track.id)}
       >
-        <span>{track.title || `Track ${index + 1}`}</span>
+        <span className="desktop-track-badge">{index + 1}</span>
+        <span className="desktop-track-name">{title}</span>
+        <StemLane seed={index} label={shortTitle} />
+        <span className="desktop-track-count">{commentCount}</span>
       </button>
+
+      {/* ── Edit actions — overlay on hover ─────────────────────────────── */}
       {canEdit && (
         <div className="track-row-actions" aria-label="Track actions">
           <label className="track-row-replace">
@@ -127,7 +162,7 @@ const TrackRow = memo(function TrackRow({
               e.stopPropagation();
               onTrackDelete(track.id);
             }}
-            aria-label="Delete stem"
+            aria-label="Delete track"
             tabIndex={-1}
           >
             {isDeleting ? "…" : "Delete"}
@@ -142,7 +177,7 @@ const TrackRow = memo(function TrackRow({
 function TypeBadge({ type }) {
   const isStem = type === "stem_project";
   return (
-    <span className={`project-type-tag project-type-tag--${isStem ? "stems" : "stereo"}`}>
+    <span className={`desktop-project-type-tag desktop-project-type-tag--${isStem ? "stems" : "album"}`}>
       {isStem ? "Stems" : "Stereo"}
     </span>
   );
@@ -164,22 +199,23 @@ export const TrackList = memo(function TrackList({
   onMoveTrack,
   onDeleteProject,
 }) {
-  const [collapsed,       setCollapsed]       = useState({});
-  const [renamingAlbumId, setRenamingAlbumId] = useState(null);
-  const [renameValue,     setRenameValue]     = useState("");
-  const [dragOverAlbumId, setDragOverAlbumId] = useState(null);
-  const [deletingTrackId, setDeletingTrackId] = useState(null);
-  const [deleteError,     setDeleteError]     = useState("");
-  const [showTypePicker,  setShowTypePicker]  = useState(false);
-  const [soloedTracks,    setSoloedTracks]    = useState(() => new Set());
-  const [mutedTracks,     setMutedTracks]     = useState(() => new Set());
+  const [collapsed,            setCollapsed]            = useState({});
+  const [renamingAlbumId,      setRenamingAlbumId]      = useState(null);
+  const [renameValue,          setRenameValue]          = useState("");
+  const [dragOverAlbumId,      setDragOverAlbumId]      = useState(null);
+  const [deletingTrackId,      setDeletingTrackId]      = useState(null);
+  const [deleteError,          setDeleteError]          = useState("");
+  const [showTypePicker,       setShowTypePicker]       = useState(false);
+  const [soloedTracks,         setSoloedTracks]         = useState(() => new Set());
+  const [mutedTracks,          setMutedTracks]          = useState(() => new Set());
 
-  // App.jsx owns track removal — after onTrackDelete resolves it filters
-  // the track out of the `tracks` prop, so no local deletedTrackIds set needed.
-  const visibleTracks = useMemo(
-    () => tracks,
-    [tracks],
-  );
+  // ── Desktop project selector state ──────────────────────────────────────────
+  const [desktopSelectedAlbumId, setDesktopSelectedAlbumId] = useState(null);
+  const [desktopDropdownOpen,    setDesktopDropdownOpen]    = useState(false);
+  const desktopSelectorRef = useRef(null);
+
+  // ── Derived data ─────────────────────────────────────────────────────────────
+  const visibleTracks = useMemo(() => tracks, [tracks]);
 
   const effectiveAlbums = useMemo(
     () => (Array.isArray(albums) && albums.length > 0 ? albums : []),
@@ -218,23 +254,75 @@ export const TrackList = memo(function TrackList({
     });
   }, [effectiveAlbums, trackMap]);
 
-  // renderResetKey must only change when the SET OF VISIBLE TRACKS changes
-  // (a track was added or deleted). It must NOT react to album structure changes
-  // such as creating an empty album — doing so resets renderedTrackLimit to 14,
-  // which makes every album after the first render 0 cards until the progressive
-  // timeout catches back up (~100 ms later, but visually looks like data loss).
+  // Multi-album: true when the session has more than one project
+  const multiAlbum = effectiveAlbums.length > 1;
+
+  // Resolve which album is "selected" in the desktop dropdown
+  const desktopSelectedAlbum =
+    effectiveAlbums.find((a) => a.id === desktopSelectedAlbumId) ||
+    effectiveAlbums[0] ||
+    null;
+
+  // When showing the desktop selector, display ONLY the selected album's bucket
+  // (reset previousTrackCount to 0 so the deferred render limit works correctly).
+  const displayBuckets = useMemo(() => {
+    if (!multiAlbum) return albumBuckets;
+    return albumBuckets
+      .filter((b) => b.album.id === desktopSelectedAlbum?.id)
+      .map((b) => ({ ...b, previousTrackCount: 0 }));
+  }, [albumBuckets, multiAlbum, desktopSelectedAlbum]);
+
+  // X / Y counter shown inside the selector button
+  const currentDesktopAlbumIndex = effectiveAlbums.findIndex(
+    (a) => a.id === desktopSelectedAlbum?.id,
+  );
+  const albumCount = effectiveAlbums.length;
+
   const renderResetKey = useMemo(
     () => visibleTracks.map((t) => t.id).join(","),
     [visibleTracks],
   );
 
   const totalTrackRows = useMemo(
-    () => albumBuckets.reduce((sum, { albumTracks }) => sum + albumTracks.length, 0) + unassignedTracks.length,
-    [albumBuckets, unassignedTracks.length],
+    () =>
+      displayBuckets.reduce((sum, { albumTracks }) => sum + albumTracks.length, 0) +
+      unassignedTracks.length,
+    [displayBuckets, unassignedTracks.length],
   );
 
   const renderedTrackLimit = useDeferredTrackLimit(renderResetKey, totalTrackRows);
 
+  const isEmpty = visibleTracks.length === 0;
+
+  // ── Auto-switch desktop selector to the album that owns the active track ────
+  // Mirrors MobileTrackNav's auto-switch behaviour.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!multiAlbum || !activeTrackId) return;
+    const owner = effectiveAlbums.find((a) =>
+      (a.trackIds || []).includes(activeTrackId),
+    );
+    if (owner && owner.id !== desktopSelectedAlbumId) {
+      setDesktopSelectedAlbumId(owner.id);
+    }
+  }, [activeTrackId]); // intentionally narrow — only re-run when active track changes
+
+  // ── Close dropdown on outside click ─────────────────────────────────────────
+  useEffect(() => {
+    if (!desktopDropdownOpen) return;
+    const handleOutside = (e) => {
+      if (
+        desktopSelectorRef.current &&
+        !desktopSelectorRef.current.contains(e.target)
+      ) {
+        setDesktopDropdownOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handleOutside);
+    return () => document.removeEventListener("pointerdown", handleOutside);
+  }, [desktopDropdownOpen]);
+
+  // ── Callbacks ────────────────────────────────────────────────────────────────
   const toggleCollapse = useCallback((albumId) => {
     setCollapsed((prev) => ({ ...prev, [albumId]: !prev[albumId] }));
   }, []);
@@ -296,17 +384,14 @@ export const TrackList = memo(function TrackList({
 
   const handleTrackDelete = useCallback(async (trackId) => {
     if (!canEdit || !trackId || deletingTrackId) return;
-    const confirmed = window.confirm("Delete this track and its stored audio files? This cannot be undone.");
+    const confirmed = window.confirm(
+      "Delete this track and its stored audio files? This cannot be undone.",
+    );
     if (!confirmed) return;
 
     setDeleteError("");
     setDeletingTrackId(trackId);
     try {
-      // Delegates the API call, tracks-state filter, album-trackIds update, and
-      // active-track fallback selection to App.jsx via onTrackDelete. This keeps
-      // sessionSnapshot consistent immediately after deletion so the auto-save
-      // payload never resurects the deleted track, and the reconnect track-count
-      // guard never sees a local-vs-server discrepancy caused by an intentional delete.
       await onTrackDelete?.(trackId);
     } catch (error) {
       setDeleteError(error.message || "Track could not be deleted.");
@@ -318,10 +403,10 @@ export const TrackList = memo(function TrackList({
   const handleCreateProject = useCallback((title, type) => {
     onCreateAlbum?.(title, type);
     setShowTypePicker(false);
+    setDesktopDropdownOpen(false);
   }, [onCreateAlbum]);
 
-  const isEmpty = visibleTracks.length === 0;
-
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <section className="track-list-panel" aria-label="Project tracks">
       <div className="track-list-header">
@@ -339,13 +424,216 @@ export const TrackList = memo(function TrackList({
         </div>
       ) : (
         <div className="track-list-albums">
-          {albumBuckets.map(({ album, albumTracks, previousTrackCount }) => {
-            const visibleAlbumTracks = albumTracks.slice(0, Math.max(0, renderedTrackLimit - previousTrackCount));
-            const isCollapsed      = Boolean(collapsed[album.id]);
-            const isDragTarget     = dragOverAlbumId === album.id;
-            const showAlbumHeaders = effectiveAlbums.length > 1;
-            const isStemProject    = album.type === "stem_project";
-            const uploadLabel      = isStemProject ? "Upload Stems" : "Add Track";
+
+          {/* ── Desktop project selector ──────────────────────────────────────
+              Shown when the session has more than one album/project.
+              Replaces the accordion-style album headers with a single dropdown
+              so the user can switch projects without leaving the track list.   */}
+          {multiAlbum && (
+            <div className="desktop-project-selector" ref={desktopSelectorRef}>
+
+              {/* Top row: dropdown trigger + inline edit actions */}
+              <div className="desktop-project-selector-row">
+                <button
+                  type="button"
+                  className="desktop-project-selector-btn"
+                  onClick={() => setDesktopDropdownOpen((v) => !v)}
+                  aria-haspopup="listbox"
+                  aria-expanded={desktopDropdownOpen}
+                >
+                  <span className="desktop-project-selector-eyebrow">Project</span>
+
+                  {renamingAlbumId === desktopSelectedAlbum?.id ? (
+                    <input
+                      className="album-rename-input desktop-project-rename-input"
+                      value={renameValue}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") {
+                          setRenamingAlbumId(null);
+                          setRenameValue("");
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span
+                      className="desktop-project-selector-name"
+                      title={canEdit ? "Double-click to rename" : undefined}
+                      onDoubleClick={() =>
+                        canEdit && desktopSelectedAlbum && startRename(desktopSelectedAlbum)
+                      }
+                    >
+                      {desktopSelectedAlbum?.title ?? "Select Project"}
+                    </span>
+                  )}
+
+                  <TypeBadge type={desktopSelectedAlbum?.type} />
+
+                  {albumCount > 0 && (
+                    <span
+                      className="desktop-project-counter"
+                      aria-label={`${currentDesktopAlbumIndex + 1} of ${albumCount}`}
+                    >
+                      {currentDesktopAlbumIndex + 1}&thinsp;/&thinsp;{albumCount}
+                    </span>
+                  )}
+
+                  <span
+                    className={`desktop-project-chevron${desktopDropdownOpen ? " open" : ""}`}
+                    aria-hidden="true"
+                  >
+                    ▾
+                  </span>
+                </button>
+
+                {/* Upload + Delete for the selected project */}
+                {canEdit && desktopSelectedAlbum && (
+                  <div className="desktop-project-edit-actions">
+                    <label className="upload-button compact small">
+                      <input
+                        type="file"
+                        accept={AUDIO_ACCEPT}
+                        multiple
+                        onChange={(event) => {
+                          const files = Array.from(event.target.files || []);
+                          if (files.length > 0)
+                            onTrackUpload(files, desktopSelectedAlbum.id);
+                          event.target.value = "";
+                        }}
+                      />
+                      <span>
+                        {desktopSelectedAlbum.type === "stem_project"
+                          ? "Upload Stems"
+                          : "Add Track"}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      className="album-delete-btn desktop-album-delete-btn"
+                      onClick={() => onDeleteProject?.(desktopSelectedAlbum.id)}
+                      title="Delete project"
+                      aria-label="Delete project"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Dropdown project list */}
+              {desktopDropdownOpen && (
+                <div className="desktop-project-dropdown" role="listbox">
+                  {effectiveAlbums.map((album) => {
+                    const isActive = album.id === desktopSelectedAlbum?.id;
+                    return (
+                      <button
+                        key={album.id}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        className={`desktop-project-option${isActive ? " active" : ""}`}
+                        onClick={() => {
+                          setDesktopSelectedAlbumId(album.id);
+                          setDesktopDropdownOpen(false);
+                        }}
+                      >
+                        <span className="desktop-project-option-title">{album.title}</span>
+                        <TypeBadge type={album.type} />
+                        {isActive && (
+                          <span className="desktop-project-check" aria-hidden="true">
+                            ✓
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+
+                  {/* Create project shortcut inside dropdown */}
+                  {canEdit && (
+                    <div className="desktop-project-dropdown-footer">
+                      {showTypePicker ? (
+                        <div className="project-type-picker desktop-type-picker-inline">
+                          <button
+                            type="button"
+                            className="project-type-picker-card"
+                            onClick={() => handleCreateProject("New Project", "album")}
+                          >
+                            <strong>Project</strong>
+                            <span>Final stereo tracks</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="project-type-picker-card project-type-picker-card--stems"
+                            onClick={() => handleCreateProject("New Stem Project", "stem_project")}
+                          >
+                            <strong>Stem Project</strong>
+                            <span>Multitrack stems</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="project-type-picker-cancel"
+                            onClick={() => setShowTypePicker(false)}
+                            aria-label="Cancel"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="add-album-btn desktop-dropdown-add-btn"
+                          onClick={() => setShowTypePicker(true)}
+                        >
+                          + Create Project
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Section label (single-album edit controls) ─────────────────── */}
+          {!multiAlbum && canEdit && effectiveAlbums.length > 0 && (() => {
+            const singleAlbum  = effectiveAlbums[0];
+            const isStemProject = singleAlbum?.type === "stem_project";
+            return (
+              <div className="track-list-single-album-actions">
+                <TypeBadge type={singleAlbum?.type} />
+                <label className="upload-button compact">
+                  <input
+                    type="file"
+                    accept={AUDIO_ACCEPT}
+                    multiple
+                    onChange={(event) => {
+                      const files = Array.from(event.target.files || []);
+                      if (files.length > 0) onTrackUpload(files);
+                      event.target.value = "";
+                    }}
+                  />
+                  <span>{isStemProject ? "Upload Stems" : "Add Track"}</span>
+                </label>
+              </div>
+            );
+          })()}
+
+          {/* ── Track buckets ─────────────────────────────────────────────────
+              In multi-album mode: displayBuckets contains only the selected
+              album (previousTrackCount reset to 0).
+              In single-album mode: displayBuckets === albumBuckets.            */}
+          {displayBuckets.map(({ album, albumTracks, previousTrackCount }) => {
+            const visibleAlbumTracks = albumTracks.slice(
+              0,
+              Math.max(0, renderedTrackLimit - previousTrackCount),
+            );
+            const isCollapsed   = Boolean(collapsed[album.id]);
+            const isDragTarget  = dragOverAlbumId === album.id;
+            const isStemProject = album.type === "stem_project";
 
             return (
               <div
@@ -355,108 +643,10 @@ export const TrackList = memo(function TrackList({
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, album.id)}
               >
-                {showAlbumHeaders && (
-                  <div className="track-list-album-header">
-                    <button
-                      type="button"
-                      className="album-collapse-btn"
-                      onClick={() => toggleCollapse(album.id)}
-                      aria-expanded={!isCollapsed}
-                      aria-label={
-                        isCollapsed ? `Expand ${album.title}` : `Collapse ${album.title}`
-                      }
-                    >
-                      <span className={`album-chevron${isCollapsed ? " collapsed" : ""}`}>
-                        ▾
-                      </span>
-                    </button>
-
-                    {renamingAlbumId === album.id ? (
-                      <input
-                        className="album-rename-input"
-                        value={renameValue}
-                        autoFocus
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onBlur={commitRename}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") commitRename();
-                          if (e.key === "Escape") {
-                            setRenamingAlbumId(null);
-                            setRenameValue("");
-                          }
-                        }}
-                      />
-                    ) : (
-                      <span
-                        className={`album-title${isStemProject ? " album-title-preview" : ""}`}
-                        title={
-                          isStemProject
-                            ? "Click to preview stem session"
-                            : canEdit ? "Double-click to rename" : undefined
-                        }
-                        onClick={() => {
-                          if (isStemProject && album.trackIds?.[0]) {
-                            onTrackSelect(album.trackIds[0], { previewStemAlbumId: album.id });
-                          }
-                        }}
-                        onDoubleClick={() => canEdit && startRename(album)}
-                      >
-                        {album.title}
-                      </span>
-                    )}
-
-                    <TypeBadge type={album.type} />
-
-                    <span className="album-track-count">{albumTracks.length}</span>
-
-                    {canEdit && (
-                      <label className="upload-button compact small">
-                        <input
-                          type="file"
-                          accept={AUDIO_ACCEPT}
-                          multiple
-                          onChange={(event) => {
-                            const files = Array.from(event.target.files || []);
-                            if (files.length > 0) onTrackUpload(files, album.id);
-                            event.target.value = "";
-                          }}
-                        />
-                        <span>{uploadLabel}</span>
-                      </label>
-                    )}
-
-                    {canEdit && (
-                      <button
-                        type="button"
-                        className="album-delete-btn"
-                        onClick={() => onDeleteProject?.(album.id)}
-                        title="Delete project"
-                        aria-label="Delete project"
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {!showAlbumHeaders && canEdit && (
-                  <div className="track-list-single-album-actions">
-                    <TypeBadge type={album.type} />
-                    <label className="upload-button compact">
-                      <input
-                        type="file"
-                        accept={AUDIO_ACCEPT}
-                        multiple
-                        onChange={(event) => {
-                          const files = Array.from(event.target.files || []);
-                          if (files.length > 0) onTrackUpload(files);
-                          event.target.value = "";
-                        }}
-                      />
-                      <span>{uploadLabel}</span>
-                    </label>
-                  </div>
-                )}
+                {/* Section label (Tracks / Stems) */}
+                <p className="desktop-track-section-label">
+                  {isStemProject ? "Stems" : "Tracks"}
+                </p>
 
                 {!isCollapsed && (
                   <div className="track-list">
@@ -493,30 +683,38 @@ export const TrackList = memo(function TrackList({
             );
           })}
 
-          {unassignedTracks.length > 0 && renderedTrackLimit > totalTrackRows - unassignedTracks.length && (
-            <div className="track-list">
-              {unassignedTracks.slice(0, renderedTrackLimit - (totalTrackRows - unassignedTracks.length)).map((track, index) => (
-                <TrackRow
-                  key={track.id}
-                  track={track}
-                  index={index}
-                  isActive={track.id === activeTrackId}
-                  canEdit={false}
-                  onTrackSelect={onTrackSelect}
-                  onTrackDelete={handleTrackDelete}
-                  onTrackReplace={onTrackReplace}
-                  onDragStart={handleDragStart}
-                  onDragEnd={handleDragEnd}
-                  isDeleting={false}
-                  trackColor={getStemColor(index)}
-                />
-              ))}
-            </div>
-          )}
+          {/* ── Unassigned tracks ─────────────────────────────────────────── */}
+          {unassignedTracks.length > 0 &&
+            renderedTrackLimit > totalTrackRows - unassignedTracks.length && (
+              <div className="track-list">
+                {unassignedTracks
+                  .slice(
+                    0,
+                    renderedTrackLimit - (totalTrackRows - unassignedTracks.length),
+                  )
+                  .map((track, index) => (
+                    <TrackRow
+                      key={track.id}
+                      track={track}
+                      index={index}
+                      isActive={track.id === activeTrackId}
+                      canEdit={false}
+                      onTrackSelect={onTrackSelect}
+                      onTrackDelete={handleTrackDelete}
+                      onTrackReplace={onTrackReplace}
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
+                      isDeleting={false}
+                      trackColor={getStemColor(index)}
+                    />
+                  ))}
+              </div>
+            )}
         </div>
       )}
 
-      {canEdit && (
+      {/* ── Create project (single-album or no-selector mode) ──────────────── */}
+      {canEdit && !multiAlbum && (
         <div className="add-album-actions">
           {showTypePicker ? (
             <div className="project-type-picker">

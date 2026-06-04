@@ -4691,3 +4691,461 @@ body:has(.app-shell.reviewer-mode) {
     display: block;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   DESKTOP TRACK LIST — vertical mobile-style layout
+   Applies to the engineer/admin TrackList panel on non-phone screens.
+   Does NOT affect MobileTrackNav (reviewer-only, max-width: 768px).
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Override horizontal card grid → vertical column ──────────────────────── */
+.track-list-panel .track-list {
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: visible;
+  gap: 4px;
+  padding-bottom: 0;
+}
+
+/* Full-width rows; undo the fixed card min-width */
+.track-list-panel .track-row {
+  min-width: 0;
+  width: 100%;
+}
+
+/* Reset card-style button defaults so desktop-track-item takes over fully */
+.track-list-panel .track-list button,
+.track-list-panel .colored-track-row button {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: 0;
+}
+
+/* ── Desktop track item: full-width horizontal row ─────────────────────────── */
+.desktop-track-item {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 8px !important;
+  border: 1px solid color-mix(in srgb, var(--stem-progress-color, #d6a354) 54%, rgba(255, 255, 255, 0.12)) !important;
+  border-radius: 6px !important;
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 20%, transparent) 0 3px, transparent 3px),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 19%, transparent), rgba(255, 255, 255, 0.035)) !important;
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.desktop-track-item:hover {
+  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 70%, #ffffff) !important;
+}
+
+.desktop-track-item.active {
+  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 82%, #ffffff) !important;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 34%, transparent) 0 3px, transparent 3px),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 16%, transparent), rgba(255, 255, 255, 0.045)) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--stem-progress-color, #d6a354) 30%, transparent),
+    inset 0 0 16px color-mix(in srgb, var(--stem-progress-color, #d6a354) 10%, transparent),
+    0 2px 8px color-mix(in srgb, var(--stem-progress-color, #d6a354) 12%, transparent);
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 88%, #ffffff);
+}
+
+/* ── Track number badge ─────────────────────────────────────────────────────── */
+.desktop-track-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  font-size: 0.63rem;
+  font-weight: 800;
+  background: color-mix(in srgb, var(--stem-progress-color, #d6a354) 22%, transparent);
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 82%, #ffffff);
+}
+
+.desktop-track-item.active .desktop-track-badge {
+  background: color-mix(in srgb, var(--stem-progress-color, #d6a354) 28%, transparent);
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 86%, #ffffff);
+}
+
+/* ── Track name (truncated) ─────────────────────────────────────────────────── */
+.desktop-track-name {
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
+  min-width: 90px;
+  max-width: 190px;
+  flex-shrink: 0;
+}
+
+.desktop-track-item.active .desktop-track-name {
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 90%, #ffffff);
+}
+
+/* ── Waveform bar preview — stretches across remaining row width ────────────── */
+.desktop-track-lane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 3px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 16%, transparent), transparent 58%),
+    color-mix(in srgb, var(--stem-wave-color, #6d6457) 12%, transparent);
+}
+
+.desktop-track-item.active .desktop-track-lane {
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 22%, transparent), transparent 62%),
+    color-mix(in srgb, var(--stem-wave-color, #6d6457) 15%, transparent);
+}
+
+.desktop-track-lane-label {
+  position: absolute;
+  left: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 42%, transparent);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.desktop-track-item.active .desktop-track-lane-label {
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 52%, transparent);
+}
+
+.desktop-track-lane-bars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 1.5px;
+  padding: 2px 3px;
+  opacity: 0.48;
+  overflow: hidden;
+}
+
+.desktop-track-item.active .desktop-track-lane-bars {
+  opacity: 0.84;
+}
+
+.desktop-track-lane-bars i {
+  display: block;
+  width: 2.5px;
+  flex-shrink: 0;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+/* ── Comment count badge ────────────────────────────────────────────────────── */
+.desktop-track-count {
+  flex-shrink: 0;
+  min-width: 20px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--stem-progress-color, #d6a354) 38%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 70%, #ffffff);
+}
+
+.desktop-track-item.active .desktop-track-count {
+  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 46%, transparent);
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 82%, #ffffff);
+}
+
+/* ── Track row hover actions — right-side overlay ──────────────────────────── */
+/* Position inside the row rather than below it (rows are now only 38px tall) */
+.track-list-panel .track-row-actions {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  left: auto;
+  bottom: auto;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(10, 8, 5, 0.88);
+  backdrop-filter: blur(6px);
+  z-index: 10;
+  gap: 8px;
+}
+
+/* ── Section label (Tracks / Stems) ────────────────────────────────────────── */
+.desktop-track-section-label {
+  font-size: 0.59rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.28);
+  padding: 2px 2px 4px;
+  margin: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   DESKTOP PROJECT SELECTOR
+   Mirrors the mobile-project-selector structure and visual language.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+.desktop-project-selector {
+  position: relative;
+  margin-bottom: 6px;
+}
+
+/* Top row: selector button + inline edit controls side-by-side */
+.desktop-project-selector-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.desktop-project-selector-btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid rgba(215, 173, 98, 0.28);
+  border-radius: 8px;
+  background: rgba(215, 173, 98, 0.06);
+  cursor: pointer;
+  text-align: left;
+  color: #e7dcc8;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.desktop-project-selector-btn:hover {
+  background: rgba(215, 173, 98, 0.10);
+  border-color: rgba(215, 173, 98, 0.40);
+}
+
+.desktop-project-selector-eyebrow {
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(215, 173, 98, 0.50);
+  flex-shrink: 0;
+}
+
+.desktop-project-selector-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #d7ad62;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.desktop-project-rename-input {
+  flex: 1;
+  min-width: 80px;
+}
+
+.desktop-project-counter {
+  flex-shrink: 0;
+  font-size: 0.66rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: rgba(215, 173, 98, 0.45);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.desktop-project-chevron {
+  flex-shrink: 0;
+  font-size: 0.88rem;
+  color: rgba(215, 173, 98, 0.55);
+  display: inline-block;
+  transition: transform 180ms ease;
+}
+
+.desktop-project-chevron.open {
+  transform: rotate(180deg);
+}
+
+/* Upload + delete grouped to the right of the selector button */
+.desktop-project-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.desktop-album-delete-btn {
+  opacity: 0.55 !important;
+  transition: opacity 150ms ease, color 150ms ease !important;
+}
+
+.desktop-album-delete-btn:hover {
+  opacity: 1 !important;
+}
+
+/* ── Dropdown menu ──────────────────────────────────────────────────────────── */
+.desktop-project-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(215, 173, 98, 0.22);
+  border-radius: 8px;
+  background: rgba(10, 9, 6, 0.97);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.65);
+  overflow: hidden;
+}
+
+.desktop-project-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 11px 14px;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: none;
+  color: #bfab80;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  width: 100%;
+  transition: background 100ms ease;
+}
+
+.desktop-project-option:last-of-type {
+  border-bottom: none;
+}
+
+.desktop-project-option:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.desktop-project-option.active {
+  color: #ffd889;
+  background: rgba(215, 173, 98, 0.07);
+}
+
+.desktop-project-check {
+  font-size: 0.8rem;
+  color: rgba(215, 173, 98, 0.75);
+  flex-shrink: 0;
+}
+
+.desktop-project-option-title {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Footer row inside dropdown: "+ Create Project" */
+.desktop-project-dropdown-footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 6px 8px;
+}
+
+.desktop-dropdown-add-btn {
+  width: 100%;
+  padding: 7px 10px !important;
+  font-size: 0.78rem !important;
+}
+
+.desktop-type-picker-inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.desktop-type-picker-inline .project-type-picker-card {
+  flex: 1;
+  min-width: 100px;
+  font-size: 0.76rem;
+  padding: 7px 10px;
+}
+
+.desktop-type-picker-inline .project-type-picker-card span {
+  font-size: 0.65rem;
+}
+
+/* ── Project type tags ──────────────────────────────────────────────────────── */
+/* Shared by both the selector button and the dropdown options */
+.desktop-project-type-tag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.desktop-project-type-tag--album {
+  background: rgba(215, 173, 98, 0.10);
+  border-color: rgba(215, 173, 98, 0.25);
+  color: rgba(215, 173, 98, 0.70);
+}
+
+.desktop-project-type-tag--stems {
+  background: rgba(110, 168, 200, 0.10);
+  border-color: rgba(110, 168, 200, 0.25);
+  color: rgba(130, 185, 215, 0.85);
+}
+
+/* ── Expand the track-list-panel height cap on desktop (≥ 981px) ────────────
+   The default max-height was set for the old card grid (≤ 280px). Vertical rows
+   are taller per-track, so we give the panel more room when the selector makes
+   it single-album view.                                                         */
+@media (min-width: 981px) {
+  .app-shell:not(.setup-shell):not(.admin-shell) .track-list-panel {
+    max-height: clamp(300px, 44dvh, 480px);
+  }
+}
