@@ -28,8 +28,8 @@ function abbrev(str, len = 11) {
   return str.length > len ? str.slice(0, len) + "…" : str;
 }
 
-// 200 bars so the waveform fills the lane at any column width; overflow:hidden clips the rest.
-const WAVEFORM_BAR_COUNT = 200;
+// 500 bars so the waveform fills the lane at any column width; overflow:hidden clips the rest.
+const WAVEFORM_BAR_COUNT = 500;
 
 function StemLane({ seed, label }) {
   return (
