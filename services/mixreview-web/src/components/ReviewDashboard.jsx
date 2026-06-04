@@ -69,14 +69,23 @@ if (isMobile) {
                 !statusState?.[state]?.enabled ||
                 (state === "Pending Review" && !selectedTrackReviewCount)
               }
-              className={`${statusState?.[state]?.active || state === activeVersion.approvalStatus ? "active" : ""} ${statusState?.[state]?.tone || ""}${state === "Pending Review" ? " pending-review-summary" : ""}${state === "Pending Review" && !selectedTrackReviewCount ? " muted" : ""}`}
+              className={[
+                statusState?.[state]?.active || state === activeVersion.approvalStatus ? "active" : "",
+                statusState?.[state]?.tone || "",
+                state === "Pending Review" ? "pending-review-summary" : "",
+                state === "Pending Review" && !selectedTrackReviewCount ? "muted" : "",
+                state === "Needs Review" ? "needs-review-btn" : "",
+              ].filter(Boolean).join(" ")}
               key={state}
               onClick={() => onApprovalChange(state)}
             >
               {state === "Pending Review" ? (
                 <>
                   <span>Pending Reviews</span>
-                  <small>{selectedTrackReviewCount}/{selectedTrackTotal}</small>
+                  <small>
+                    {approvalSummary?.needsReview ?? 0}/{approvalSummary?.total ?? 0}
+                    {" tracks"}
+                  </small>
                 </>
               ) : state}
             </button>

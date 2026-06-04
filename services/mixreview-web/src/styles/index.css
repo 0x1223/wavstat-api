@@ -5224,3 +5224,124 @@ body:has(.app-shell.reviewer-mode) {
     padding: 10px 0 8px;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   DESKTOP ADMIN UI REFINEMENTS — track header, badges, review status
+   All selectors below are desktop/admin-specific. Mobile is untouched.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Track list header: eyebrow + count on one line, project subtitle ─── */
+.track-list-header-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Eyebrow label + "N imported" on the same flex row */
+.track-list-header-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+/* "N imported" sits inline next to the eyebrow */
+.track-list-imported-count {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #c4ae80;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Subtitle: "XARI0US ARTISTS · 4 tracks" */
+.track-list-header-subtitle {
+  margin: 0;
+  font-size: 0.7rem;
+  color: rgba(215, 173, 98, 0.65);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+}
+
+.track-list-header-subtitle-name {
+  color: rgba(215, 173, 98, 0.80);
+}
+
+.track-list-header-subtitle-count {
+  color: rgba(255, 255, 255, 0.35);
+  font-weight: 600;
+}
+
+/* ── 2. Project counter "1 / 3" — bold and immediately noticeable ─────────── */
+.desktop-project-counter {
+  font-size: 0.80rem;
+  font-weight: 800;
+  color: rgba(215, 173, 98, 0.82);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid rgba(215, 173, 98, 0.28);
+  border-radius: 4px;
+  padding: 1px 6px;
+  background: rgba(215, 173, 98, 0.07);
+}
+
+/* ── 3. Waveform bars fill full lane width (space-between, no fixed gap) ──── */
+.desktop-track-lane-bars {
+  gap: 0;
+  justify-content: space-between;
+  padding: 3px 2px;
+}
+
+/* ── 4. Comment count badge — larger, bolder, more readable ────────────────── */
+.desktop-track-count {
+  min-width: 26px;
+  height: 24px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  border-width: 1px;
+  padding: 0 5px;
+}
+
+@media (min-width: 981px) {
+  .desktop-track-count {
+    min-width: 28px;
+    height: 26px;
+    font-size: 0.76rem;
+  }
+}
+
+/* ── 5. Pending Reviews count (already uses approvalSummary in JSX) ─────────
+   Style the <small> inside the button to be clearly readable.               */
+.approval-state-grid button.pending-review-summary small {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 800;
+  margin-top: 1px;
+  letter-spacing: 0.01em;
+}
+
+/* ── 6. Desktop/admin: gray out "Needs Review" when not the active state ────
+   .approval-state-grid only exists in ReviewDashboard (desktop admin only).
+   Mobile "Needs Review" in the topbar .status-switch is untouched.          */
+.approval-state-grid .needs-review-btn:not(.active) {
+  color: rgba(207, 198, 182, 0.38);
+  border-color: rgba(255, 255, 255, 0.07);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent),
+    #0e0e0e;
+}
+
+.approval-state-grid .needs-review-btn:not(.active):hover {
+  color: rgba(207, 198, 182, 0.60);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.11);
+}

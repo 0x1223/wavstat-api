@@ -410,11 +410,29 @@ export const TrackList = memo(function TrackList({
   return (
     <section className="track-list-panel" aria-label="Project tracks">
       <div className="track-list-header">
-        <div>
-          <p className="eyebrow">Project Tracks</p>
-          <h2>{importedTracks.length} imported</h2>
+        {/* ── Left: eyebrow + count on one line, project subtitle below ─────── */}
+        <div className="track-list-header-content">
+          <div className="track-list-header-top">
+            <p className="eyebrow">Project Tracks</p>
+            <span className="track-list-imported-count">
+              {importedTracks.length} imported
+            </span>
+          </div>
+          {desktopSelectedAlbum && !isEmpty && (
+            <p className="track-list-header-subtitle">
+              <span className="track-list-header-subtitle-name">
+                {desktopSelectedAlbum.title}
+              </span>
+              {" · "}
+              <span className="track-list-header-subtitle-count">
+                {displayBuckets[0]?.albumTracks.length ?? 0}
+                {" track"}{(displayBuckets[0]?.albumTracks.length ?? 0) !== 1 ? "s" : ""}
+              </span>
+            </p>
+          )}
           {deleteError && <p className="upload-error">{deleteError}</p>}
         </div>
+
         {/* ── Desktop "Add Track" — aligned with top border of Review Dashboard ─
             Visible only on desktop (≥981 px). Mobile retains the button below.  */}
         {!multiAlbum && canEdit && effectiveAlbums.length > 0 && (() => {
