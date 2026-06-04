@@ -799,6 +799,18 @@ export default function App({ onFirstRender } = {}) {
       return;
     }
 
+    // Admin dashboard must never auto-navigate into a session on focus/visibility
+    // events. accessState may still point to the last-opened session, but while
+    // the user is on the dashboard that pointer must not trigger a workspace jump.
+    // Only refresh the session list.
+    if (appView === "admin") {
+      console.log("[session-nav] reconnect suppressed on admin dashboard");
+      if (isEngineerUnlockedRef.current) {
+        refreshAdminSessions();
+      }
+      return;
+    }
+
     const accessState = loadAccessState();
     const snapshot = sessionSnapshotRef.current;
     const targetSessionId =
@@ -808,9 +820,6 @@ export default function App({ onFirstRender } = {}) {
       shareId;
 
     if (!targetSessionId) {
-      if (appView === "admin" && isEngineerUnlockedRef.current) {
-        refreshAdminSessions();
-      }
       return;
     }
 
@@ -1957,11 +1966,20 @@ export default function App({ onFirstRender } = {}) {
       clearSharedSession(session.shareId);
     }
 
-    // Clear access state if it was pointing at the deleted session.
+    // Clear access state if it was pointing at the deleted session so a
+    // subsequent focus/reconnect event does not try to reload it.
     const storedAccess = loadAccessState();
     if (storedAccess?.sessionId === session.id) {
       clearAccessState();
     }
+
+    // Always land back on the admin dashboard after a successful delete.
+    // An in-flight reconnect that read the now-deleted sessionId before this
+    // point must not navigate to workspace, so abort it.
+    reconnectAbortRef.current?.abort();
+    reconnectInFlightRef.current = false;
+    console.log("[session-nav] session deleted, staying on admin dashboard", session.id);
+    setAppView("admin");
   }, [refreshAdminSessions]);
 
   const returnToStart = useCallback(() => {
@@ -3150,21 +3168,42 @@ function AdminDashboard({
                           {session.trackCount || 0} tracks · {session.approvedTrackCount || 0}/{session.trackCount || 0} approved · Updated {formatDashboardDate(session.updatedAt)}
                         </p>
                       </div>
-                      <div className="session-actions">
-                        <button type="button" onClick={() => onOpenSession(session.id)}>
+                      <div className="session-actions" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            console.log("[admin-nav] open session clicked", session.id);
+                            onOpenSession(session.id);
+                          }}
+                        >
                           {status === "Draft" ? "Continue" : "Open"}
                         </button>
-                        <button type="button" onClick={() => onTogglePriority(session)}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onTogglePriority(session);
+                          }}
+                        >
                           {session.isPriority ? "Unmark Priority" : "Mark Priority"}
                         </button>
-                        <button type="button" onClick={() => onCopyClientLink(session)}>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCopyClientLink(session);
+                          }}
+                        >
                           Copy Client Review Link
                         </button>
                         <button
                           type="button"
                           className="session-delete-btn"
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.stopPropagation();
                             if (window.confirm(`Permanently delete "${session.projectName || session.id}"? This cannot be undone.`)) {
+                              console.log("[admin-nav] delete session", session.id);
                               onDeleteSession(session);
                             }
                           }}
