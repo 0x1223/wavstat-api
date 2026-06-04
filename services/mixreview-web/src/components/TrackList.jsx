@@ -20,9 +20,6 @@ const AUDIO_ACCEPT = [
 const INITIAL_RENDERED_TRACKS = 14;
 const RENDERED_TRACK_BATCH = 12;
 
-// Deterministic bar heights — same palette as MobileTrackNav
-const BAR_HEIGHTS = [4, 7, 11, 16, 19, 13, 17, 10, 8, 14, 18, 12, 6, 15, 5, 9, 20, 3, 16, 11, 7, 14, 18, 4, 10, 16, 6, 13, 19, 8, 11, 15, 5, 17, 9, 12, 7, 20, 4, 14];
-
 function abbrev(str, len = 11) {
   if (!str) return "Untitled";
   return str.length > len ? str.slice(0, len) + "…" : str;
@@ -30,16 +27,81 @@ function abbrev(str, len = 11) {
 
 // 500 bars so the waveform fills the lane at any column width; overflow:hidden clips the rest.
 const WAVEFORM_BAR_COUNT = 500;
+// Max bar height (px) — fills the 40 px usable lane at ≥ 981 px viewport.
+const PREVIEW_BAR_MAX_PX = 36;
 
-function StemLane({ seed, label }) {
+// ── Real peak preview cache ───────────────────────────────────────────────────
+// Module-level so cached data survives re-renders and session switches without
+// re-fetching. Keyed by peaksUrl. Value is normalized float[] (0-1) or null.
+const previewPeaksCache = new Map();
+
+function loadPreviewPeaks(peaksUrl) {
+  if (!peaksUrl) return Promise.resolve(null);
+  if (previewPeaksCache.has(peaksUrl)) return Promise.resolve(previewPeaksCache.get(peaksUrl));
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 3000);
+
+  return fetch(peaksUrl, { signal: controller.signal })
+    .then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then((raw) => {
+      // API stores as flat float[] in [-1, 1]. WaveSurfer format [[...]] also handled.
+      const channel = Array.isArray(raw[0]) ? raw[0] : raw;
+      // Downsample to WAVEFORM_BAR_COUNT using max-abs per bucket.
+      const step = Math.max(1, channel.length / WAVEFORM_BAR_COUNT);
+      const heights = Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => {
+        const start = Math.floor(i * step);
+        const end   = Math.max(start + 1, Math.min(Math.ceil((i + 1) * step), channel.length));
+        let peak = 0;
+        for (let j = start; j < end; j++) peak = Math.max(peak, Math.abs(channel[j]));
+        return peak;
+      });
+      // Normalize so the loudest bar fills the lane.
+      const maxH = Math.max(...heights, 0.001);
+      const normalized = heights.map((h) => h / maxH);
+      previewPeaksCache.set(peaksUrl, normalized);
+      return normalized;
+    })
+    .catch(() => {
+      previewPeaksCache.set(peaksUrl, null);
+      return null;
+    })
+    .finally(() => window.clearTimeout(timeoutId));
+}
+
+// ── StemLane ─────────────────────────────────────────────────────────────────
+// Renders the waveform-preview bar column inside each desktop track row.
+// When peaksUrl is provided the real audio peaks are fetched (cached) and used;
+// otherwise the lane is empty (no fake bars for tracks without uploaded audio).
+function StemLane({ label, peaksUrl }) {
+  const [peakBars, setPeakBars] = useState(() => {
+    // Sync init from cache so cached tracks render immediately on first paint.
+    if (peaksUrl && previewPeaksCache.has(peaksUrl)) return previewPeaksCache.get(peaksUrl);
+    return undefined;
+  });
+
+  useEffect(() => {
+    if (!peaksUrl) return;
+    let cancelled = false;
+    loadPreviewPeaks(peaksUrl).then((data) => {
+      if (!cancelled) setPeakBars(data);
+    });
+    return () => { cancelled = true; };
+  }, [peaksUrl]);
+
   return (
     <span className="desktop-track-lane" aria-hidden="true">
       <span className="desktop-track-lane-label">{label}</span>
-      <span className="desktop-track-lane-bars">
-        {Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => (
-          <i key={i} style={{ height: `${BAR_HEIGHTS[(i + seed * 7) % BAR_HEIGHTS.length]}px` }} />
-        ))}
-      </span>
+      {peakBars && peakBars.length > 0 && (
+        <span className="desktop-track-lane-bars">
+          {peakBars.map((v, i) => (
+            <i key={i} style={{ height: `${Math.max(2, Math.round(v * PREVIEW_BAR_MAX_PX))}px` }} />
+          ))}
+        </span>
+      )}
     </span>
   );
 }
@@ -89,6 +151,7 @@ const TrackRow = memo(function TrackRow({
   const shortTitle = abbrev(title);
   const activeVersion  = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
   const commentCount   = activeVersion?.comments?.length ?? 0;
+  const peaksUrl       = activeVersion?.audioSource?.peaksUrl || null;
 
   return (
     <div
@@ -113,7 +176,7 @@ const TrackRow = memo(function TrackRow({
       >
         <span className="desktop-track-badge">{index + 1}</span>
         <span className="desktop-track-name">{title}</span>
-        <StemLane seed={index} label={shortTitle} />
+        <StemLane label={shortTitle} peaksUrl={peaksUrl} />
         <span className="desktop-track-count">{commentCount}</span>
       </button>
 
