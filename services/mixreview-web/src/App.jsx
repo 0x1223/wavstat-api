@@ -810,10 +810,6 @@ export default function App({ onFirstRender } = {}) {
     // (which would abort in-flight reconnect requests via the cleanup).
     const currentView = appViewRef.current;
     if (currentView === "admin") {
-      console.log("[session-nav] reconnect suppressed on admin dashboard");
-      if (isEngineerUnlockedRef.current) {
-        refreshAdminSessions();
-      }
       return;
     }
     if (currentView === "setup") {

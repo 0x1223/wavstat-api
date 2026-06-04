@@ -266,12 +266,18 @@ export const TrackList = memo(function TrackList({
 
   // When showing the desktop selector, display ONLY the selected album's bucket
   // (reset previousTrackCount to 0 so the deferred render limit works correctly).
+  // Single-album: claim all session tracks regardless of album.trackIds linkage so
+  // flat-stored tracks (album.trackIds=[]) appear under the project bar identically
+  // to sessions where tracks are properly linked.
   const displayBuckets = useMemo(() => {
+    if (effectiveAlbums.length === 1) {
+      return [{ album: effectiveAlbums[0], albumTracks: visibleTracks, previousTrackCount: 0 }];
+    }
     if (!multiAlbum) return albumBuckets;
     return albumBuckets
       .filter((b) => b.album.id === desktopSelectedAlbum?.id)
       .map((b) => ({ ...b, previousTrackCount: 0 }));
-  }, [albumBuckets, multiAlbum, desktopSelectedAlbum]);
+  }, [albumBuckets, effectiveAlbums, multiAlbum, visibleTracks, desktopSelectedAlbum]);
 
   // X / Y counter shown inside the selector button
   const currentDesktopAlbumIndex = effectiveAlbums.findIndex(
@@ -287,8 +293,8 @@ export const TrackList = memo(function TrackList({
   const totalTrackRows = useMemo(
     () =>
       displayBuckets.reduce((sum, { albumTracks }) => sum + albumTracks.length, 0) +
-      unassignedTracks.length,
-    [displayBuckets, unassignedTracks.length],
+      (multiAlbum ? unassignedTracks.length : 0),
+    [displayBuckets, multiAlbum, unassignedTracks.length],
   );
 
   const renderedTrackLimit = useDeferredTrackLimit(renderResetKey, totalTrackRows);
@@ -740,8 +746,8 @@ export const TrackList = memo(function TrackList({
             );
           })}
 
-          {/* ── Unassigned tracks ─────────────────────────────────────────── */}
-          {unassignedTracks.length > 0 &&
+          {/* ── Unassigned tracks (multi-album only) ─────────────────────── */}
+          {multiAlbum && unassignedTracks.length > 0 &&
             renderedTrackLimit > totalTrackRows - unassignedTracks.length && (
               <div className="track-list">
                 {unassignedTracks
