@@ -2817,7 +2817,7 @@ export default function App({ onFirstRender } = {}) {
               onPlaybackChange={setIsPlaying}
               onMobileNoteRequest={openMobileNote}
             />
-          ) : (
+          ) : activeTrack ? (
             <WaveformReview
               audioSource={audioSource}
               comments={comments}
@@ -2839,7 +2839,7 @@ export default function App({ onFirstRender } = {}) {
               onPrevTrack={handlePrevTrack}
               onNextTrack={handleNextTrack}
             />
-          )}
+          ) : null}
         </div>
 
         <div className="review-side">
@@ -2962,33 +2962,35 @@ export default function App({ onFirstRender } = {}) {
   </>
 )}
 
-      <TransportBar
-        currentTime={currentTime}
-        duration={duration}
-        isPlaying={isPlaying}
-        isDisabled={!isPlayerReady}
-        onPlayPause={() => {
-          // Record the first real user Play tap (not a Pause press).
-          // isPlaying reflects the current state, so !isPlaying means the
-          // user is about to start playback.
-          if (isMobileViewport() && isReviewerMode && !isPlaying) {
-            userHasPlayedRef.current = true;
-            setMobileHasPlayed(true);
-            // Prime the iOS audio session so that AudioContext.resume() calls
-            // in MobileSpectrumAnalyzer succeed without their own gesture token.
-            unlockAudioSession();
-          }
-          playerRef.current?.playPause();
-        }}
-        onSkipBackward={() => playerRef.current?.skip(-5)}
-        onSkipForward={() => playerRef.current?.skip(5)}
-        repeatMode={repeatMode}
-        hasPrev={hasPrev}
-        hasNext={hasNext}
-        onPrev={handlePrevTrack}
-        onNext={handleNextTrack}
-        onRepeatChange={handleRepeatChange}
-      />
+      {activeTrack && (
+        <TransportBar
+          currentTime={currentTime}
+          duration={duration}
+          isPlaying={isPlaying}
+          isDisabled={!isPlayerReady}
+          onPlayPause={() => {
+            // Record the first real user Play tap (not a Pause press).
+            // isPlaying reflects the current state, so !isPlaying means the
+            // user is about to start playback.
+            if (isMobileViewport() && isReviewerMode && !isPlaying) {
+              userHasPlayedRef.current = true;
+              setMobileHasPlayed(true);
+              // Prime the iOS audio session so that AudioContext.resume() calls
+              // in MobileSpectrumAnalyzer succeed without their own gesture token.
+              unlockAudioSession();
+            }
+            playerRef.current?.playPause();
+          }}
+          onSkipBackward={() => playerRef.current?.skip(-5)}
+          onSkipForward={() => playerRef.current?.skip(5)}
+          repeatMode={repeatMode}
+          hasPrev={hasPrev}
+          hasNext={hasNext}
+          onPrev={handlePrevTrack}
+          onNext={handleNextTrack}
+          onRepeatChange={handleRepeatChange}
+        />
+      )}
 
       {isReviewerMode && mobileNoteDraft && (
         <>
