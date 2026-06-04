@@ -3158,7 +3158,8 @@ function AdminDashboard({
                 ) : (
                   (buckets[status] || []).map((session) => (
                     <article className={`admin-session-row${session.isPriority ? " priority" : ""}`} key={session.id}>
-                      <div>
+                      {/* Info block — clicks here must never trigger navigation. */}
+                      <div onClick={(e) => e.stopPropagation()} style={{ pointerEvents: "none" }}>
                         <p className={`eyebrow${status === "Pending Review" ? " attention" : ""}`}>{session.isPriority ? "Priority" : status}</p>
                         <h2>{session.projectName || "Untitled MixReview Session"}</h2>
                         <p>
