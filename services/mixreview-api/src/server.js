@@ -1798,8 +1798,15 @@ function normalizeAlbums(rawAlbums, tracks, defaultTitle, createdAt) {
     tracks.map((t) => (typeof t.id === "string" ? t.id : null)).filter(Boolean)
   );
 
-  // No albums yet → auto-migrate: create one default album from all tracks.
+  // No albums yet:
+  // - Blank new session (no tracks either) → return [] so the workspace shows
+  //   only "+ Create Project" rather than injecting a ghost album.
+  // - Legacy session with tracks but no albums → auto-migrate into a default
+  //   album so existing data is not orphaned (backward-compat path).
   if (rawAlbums.length === 0) {
+    if (trackIdSet.size === 0) {
+      return [];
+    }
     return [{
       id: "album-default",
       title: defaultTitle || "Main Album",
