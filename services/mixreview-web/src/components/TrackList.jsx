@@ -31,51 +31,14 @@ function abbrev(str, len = 11) {
 // 500 bars so the waveform fills the lane at any column width; overflow:hidden clips the rest.
 const WAVEFORM_BAR_COUNT = 500;
 
-// Fetches peaksUrl and maps the amplitude array to pixel bar heights [2–20].
-// Returns null while loading or when no peaksUrl is set (triggers fallback).
-function useTrackPeaks(peaksUrl) {
-  const [bars, setBars] = useState(null);
-
-  useEffect(() => {
-    if (!peaksUrl) return;
-    let active = true;
-
-    fetch(peaksUrl)
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((data) => {
-        if (!active) return;
-        const flat = Array.isArray(data[0]) ? data[0] : data;
-        if (!Array.isArray(flat) || flat.length === 0) return;
-        setBars(
-          Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => {
-            const srcIdx = Math.floor((i / WAVEFORM_BAR_COUNT) * flat.length);
-            return Math.max(2, Math.round(Math.abs(flat[srcIdx] ?? 0) * 20));
-          }),
-        );
-      })
-      .catch(() => {});
-
-    return () => { active = false; };
-  }, [peaksUrl]);
-
-  return bars;
-}
-
-// Renders real audio amplitude bars when peaksUrl resolves; falls back to the
-// deterministic generated pattern while loading or when no peaks are available.
-function StemLane({ seed, label, peaksUrl }) {
-  const realBars = useTrackPeaks(peaksUrl);
-
+function StemLane({ seed, label }) {
   return (
     <span className="desktop-track-lane" aria-hidden="true">
       <span className="desktop-track-lane-label">{label}</span>
       <span className="desktop-track-lane-bars">
-        {Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => {
-          const h = realBars
-            ? realBars[i]
-            : BAR_HEIGHTS[(i + seed * 7) % BAR_HEIGHTS.length];
-          return <i key={i} style={{ height: `${h}px` }} />;
-        })}
+        {Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => (
+          <i key={i} style={{ height: `${BAR_HEIGHTS[(i + seed * 7) % BAR_HEIGHTS.length]}px` }} />
+        ))}
       </span>
     </span>
   );
@@ -126,7 +89,6 @@ const TrackRow = memo(function TrackRow({
   const shortTitle = abbrev(title);
   const activeVersion  = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
   const commentCount   = activeVersion?.comments?.length ?? 0;
-  const peaksUrl       = activeVersion?.audioSource?.peaksUrl || null;
 
   return (
     <div
@@ -151,7 +113,7 @@ const TrackRow = memo(function TrackRow({
       >
         <span className="desktop-track-badge">{index + 1}</span>
         <span className="desktop-track-name">{title}</span>
-        <StemLane seed={index} label={shortTitle} peaksUrl={peaksUrl} />
+        <StemLane seed={index} label={shortTitle} />
         <span className="desktop-track-count">{commentCount}</span>
       </button>
 

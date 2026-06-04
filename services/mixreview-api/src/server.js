@@ -36,18 +36,6 @@ const upload = multer({
 const pendingPeakRepairKeys = new Set();
 let peakRepairChain = Promise.resolve();
 
-// Public base URL used to construct peaksUrl values stored in session documents.
-// Reads RAILWAY_PUBLIC_DOMAIN (set automatically by Railway) or an explicit
-// API_BASE_URL override.  Falls back to a value captured from the first request
-// so the startup backfill still works in dev or when the env var is absent.
-const configuredApiBaseUrl =
-  getEnvValue("API_BASE_URL") ||
-  (getEnvValue("RAILWAY_PUBLIC_DOMAIN")
-    ? `https://${getEnvValue("RAILWAY_PUBLIC_DOMAIN")}`
-    : null);
-let _capturedApiBaseUrl = configuredApiBaseUrl || null;
-let _backfillTriggered = false;
-
 const r2Config = {
   accountId: getEnvValue("CLOUDFLARE_ACCOUNT_ID") || getEnvValue("R2_ACCOUNT_ID"),
   accessKeyId: getEnvValue("CLOUDFLARE_R2_ACCESS_KEY_ID") || getEnvValue("R2_ACCESS_KEY_ID"),
@@ -96,16 +84,6 @@ app.options("*", cors(corsOptions));
 app.use(express.json({ limit: "2mb" }));
 app.use("/uploads", express.static(uploadRoot));
 
-// Capture the real public base URL from the first request so the backfill
-// works even when no env var is configured (local dev, custom domains, etc.).
-app.use((req, _res, next) => {
-  if (!_capturedApiBaseUrl) {
-    _capturedApiBaseUrl = `${req.protocol}://${req.get("host")}`;
-    setImmediate(() => backfillMissingPeaks(_capturedApiBaseUrl));
-  }
-  next();
-});
-
 function sendHealth(_req, res) {
   res.json({
     ok: true,
@@ -151,11 +129,6 @@ app.use((error, _req, res, _next) => {
 
 app.listen(port, () => {
   console.log(`MixReview API listening on ${port}`);
-  // If we already know the public base URL (env var configured), kick off the
-  // missing-peaks backfill immediately without waiting for the first request.
-  if (_capturedApiBaseUrl) {
-    setImmediate(() => backfillMissingPeaks(_capturedApiBaseUrl));
-  }
 });
 
 async function handleAudioUpload(req, res, next) {
@@ -512,54 +485,11 @@ async function generateAndStoreSessionPeaksFromR2(originalKey, peaksKey, apiBase
   await generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
 }
 
-// backfillMissingPeaks — runs once per server process (guarded by _backfillTriggered).
-// Loads every session in the index and queues peak repair for any track that is
-// missing a peaksUrl.  Runs in the background; errors are logged, not thrown.
-async function backfillMissingPeaks(apiBaseUrl) {
-  if (!hasR2Config || !apiBaseUrl || _backfillTriggered) return;
-  _backfillTriggered = true;
+function queueMissingPeakRepairs(session, req) {
+  if (!hasR2Config || !session?.id) return;
 
-  try {
-    const database = await readDatabase();
-    const metas = database.sessions || [];
-    if (metas.length === 0) return;
-
-    console.log(`[MixReview] Peaks backfill: scanning ${metas.length} session(s)...`);
-    let queued = 0;
-
-    for (const meta of metas) {
-      const sessionId =
-        meta.id ||
-        (typeof meta.storageKey === "string"
-          ? meta.storageKey.match(/sessions\/([^/]+)\/session\.json/)?.[1]
-          : null);
-      if (!sessionId) continue;
-      try {
-        const session = await readSessionDocument(sessionId);
-        if (session) queued += queueMissingPeakRepairs(session, apiBaseUrl);
-      } catch (err) {
-        console.warn("[MixReview] Peaks backfill: could not load session", sessionId, err.message);
-      }
-    }
-
-    console.log(
-      queued > 0
-        ? `[MixReview] Peaks backfill: queued repair for ${queued} track(s)`
-        : "[MixReview] Peaks backfill: all tracks already have peaks — nothing to do",
-    );
-  } catch (err) {
-    console.warn("[MixReview] Peaks backfill failed:", err.message);
-  }
-}
-
-// queueMissingPeakRepairs — for every track in the session that lacks a peaksUrl,
-// enqueues an async R2-read → ffmpeg → upload → patch cycle.
-// Returns the number of tracks newly queued (so callers can log totals).
-function queueMissingPeakRepairs(session, apiBaseUrl) {
-  if (!hasR2Config || !session?.id || !apiBaseUrl) return 0;
-
+  const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
   const tracks = Array.isArray(session.tracks) ? session.tracks : [];
-  let queued = 0;
 
   tracks.forEach((track) => {
     const versions = Array.isArray(track.versions) ? track.versions : [];
@@ -577,10 +507,7 @@ function queueMissingPeakRepairs(session, apiBaseUrl) {
       .then(() => generateAndStoreSessionPeaksFromR2(audio.key, peaksKey, apiBaseUrl, session.id, track.id, version.id))
       .catch((err) => console.error("[MixReview] Missing peaks repair failed", { key: audio.key, error: err.message }))
       .finally(() => pendingPeakRepairKeys.delete(repairId));
-    queued += 1;
   });
-
-  return queued;
 }
 
 // generatePeaksWithFfmpeg — decodes any audio format to mono f32le PCM via
@@ -978,7 +905,7 @@ async function getSession(req, res, next) {
     return res.status(404).json({ error: "Session not found." });
   }
 
-  queueMissingPeakRepairs(session, `${req.protocol}://${req.get("host")}`);
+  queueMissingPeakRepairs(session, req);
   return res.json({ session: await refreshSessionPlaybackUrls(session, req) });
 }
 
