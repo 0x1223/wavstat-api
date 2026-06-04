@@ -489,15 +489,9 @@ function queueMissingPeakRepairs(session, req) {
   if (!hasR2Config || !session?.id) return;
 
   const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
-  const stemTrackIds = new Set(
-    (Array.isArray(session.albums) ? session.albums : [])
-      .filter((album) => album?.type === "stem_project")
-      .flatMap((album) => Array.isArray(album.trackIds) ? album.trackIds : []),
-  );
   const tracks = Array.isArray(session.tracks) ? session.tracks : [];
 
   tracks.forEach((track) => {
-    if (!stemTrackIds.has(track.id)) return;
     const versions = Array.isArray(track.versions) ? track.versions : [];
     const version = versions.find((candidate) => candidate.id === track.activeVersionId) || versions[0];
     const audio = version?.audioMetadata;
