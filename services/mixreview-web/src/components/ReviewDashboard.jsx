@@ -82,10 +82,7 @@ if (isMobile) {
               {state === "Pending Review" ? (
                 <>
                   <span>Pending Reviews</span>
-                  <small>
-                    {approvalSummary?.needsReview ?? 0}/{approvalSummary?.total ?? 0}
-                    {" tracks"}
-                  </small>
+                  <small>{selectedTrackReviewCount}/{selectedTrackTotal}</small>
                 </>
               ) : state}
             </button>

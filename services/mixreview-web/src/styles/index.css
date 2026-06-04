@@ -5239,21 +5239,28 @@ body:has(.app-shell.reviewer-mode) {
   gap: 2px;
 }
 
-/* Eyebrow label + "N imported" on the same flex row */
+/* Eyebrow label + "N imported" on the same baseline row */
 .track-list-header-top {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: baseline;   /* text baselines align, not box midpoints */
+  gap: 10px;
   flex-wrap: nowrap;
 }
 
-/* "N imported" sits inline next to the eyebrow */
+/* Zero out the eyebrow's built-in bottom margin when it lives in the header row */
+.track-list-header-top .eyebrow {
+  margin: 0;
+}
+
+/* "N imported" — secondary label, slightly smaller than PROJECT TRACKS */
 .track-list-imported-count {
-  font-size: 0.78rem;
+  font-size: 0.68rem;
   font-weight: 700;
-  color: #c4ae80;
+  color: rgba(196, 174, 128, 0.70);   /* more muted than eyebrow gold */
   white-space: nowrap;
   flex-shrink: 0;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* Subtitle: "XARI0US ARTISTS · 4 tracks" */
@@ -5294,12 +5301,13 @@ body:has(.app-shell.reviewer-mode) {
   background: rgba(215, 173, 98, 0.07);
 }
 
-/* ── 3. Waveform bars fill full lane width (space-between, no fixed gap) ──── */
-.desktop-track-lane-bars {
-  gap: 0;
-  justify-content: space-between;
-  padding: 3px 2px;
-}
+/* ── 3. Waveform bar preview — original tight-gap + overflow-clip style ──────
+   The bars use position:absolute;inset:0 so they fill the lane container.
+   overflow:hidden on the container clips bars that exceed the lane width,
+   giving a natural waveform-fills-left-to-right appearance.
+   Do NOT use justify-content:space-between here — that spreads fixed-width
+   bars into tick marks rather than a waveform.                               */
+/* (no override needed — base .desktop-track-lane-bars rule is correct)      */
 
 /* ── 4. Comment count badge — larger, bolder, more readable ────────────────── */
 .desktop-track-count {
@@ -5319,14 +5327,17 @@ body:has(.app-shell.reviewer-mode) {
   }
 }
 
-/* ── 5. Pending Reviews count (already uses approvalSummary in JSX) ─────────
-   Style the <small> inside the button to be clearly readable.               */
-.approval-state-grid button.pending-review-summary small {
+/* ── 5. Pending Reviews <small> — style the count inside the button ──────────
+   The Pending Review button contains a <span> label and a <small> count.
+   Keep it legible without being larger than the label.                       */
+.approval-state-grid button.pending-review-summary small,
+.status-switch button.pending-review-summary small {
   display: block;
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 800;
   margin-top: 1px;
   letter-spacing: 0.01em;
+  opacity: 0.88;
 }
 
 /* ── 6. Desktop/admin: gray out "Needs Review" when not the active state ────
