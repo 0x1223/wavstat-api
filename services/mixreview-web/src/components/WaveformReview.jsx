@@ -7,12 +7,6 @@ function getPlaybackUrl(audioSource) {
   return audioSource?.previewUrl || audioSource?.playbackUrl || audioSource?.url || "";
 }
 
-const STATIC_WAVEFORM_CURVE = [0.15, 0.2, 0.35, 0.5, 0.65, 0.75, 0.8, 0.72, 0.6, 0.45, 0.35, 0.4, 0.55, 0.7, 0.85, 0.9, 0.82, 0.68, 0.5, 0.3, 0.2, 0.15];
-
-function buildStaticPeaks(length = 300) {
-  return [Array.from({ length }, (_, i) => STATIC_WAVEFORM_CURVE[i % STATIC_WAVEFORM_CURVE.length])];
-}
-
 function normalizePeaks(peaks) {
   if (!Array.isArray(peaks) || peaks.length === 0) {
     return null;
@@ -20,7 +14,7 @@ function normalizePeaks(peaks) {
   return Array.isArray(peaks[0]) ? peaks : [peaks];
 }
 
-function fetchPeaks(peaksUrl, timeoutMs = 800) {
+function fetchPeaks(peaksUrl, timeoutMs = 3000) {
   if (!peaksUrl) {
     return Promise.resolve(null);
   }
@@ -36,7 +30,7 @@ function fetchPeaks(peaksUrl, timeoutMs = 800) {
     .then(normalizePeaks)
     .catch((error) => {
       if (error?.name !== "AbortError") {
-        console.warn("[WaveformReview] Peaks fetch failed — using static peaks", error.message);
+        console.warn("[WaveformReview] Peaks fetch failed — decoding audio", error.message);
       }
       return null;
     })
@@ -563,12 +557,11 @@ export function WaveformReview({
 
       peaksFetch.then((peaks) => {
         if (isDisposed || !wavesurfer) return;
-        const resolvedPeaks = peaks || buildStaticPeaks();
         console.log("[WaveformReview] Desktop loading with precomputed peaks", {
-          source: peaks ? "peaksUrl" : "static",
-          points: resolvedPeaks[0]?.length || 0,
+          source: peaks ? "peaksUrl" : "decode",
+          points: peaks?.[0]?.length || 0,
         });
-        wavesurfer.load(playbackUrl, resolvedPeaks).catch((error) => {
+        wavesurfer.load(playbackUrl, peaks || undefined).catch((error) => {
           if (isDisposed || hasLoaded) return;
           console.warn("[WaveformReview] Desktop load failed", error?.message ?? String(error));
           hasLoaded = true;

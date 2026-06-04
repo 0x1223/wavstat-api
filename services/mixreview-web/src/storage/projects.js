@@ -327,6 +327,7 @@ function normalizeAudioMetadata(audioMetadata) {
     requiresTranscode: Boolean(audioMetadata.requiresTranscode),
     previewUrl: typeof audioMetadata.previewUrl === "string" && audioMetadata.previewUrl ? audioMetadata.previewUrl : null,
     previewKey: typeof audioMetadata.previewKey === "string" && audioMetadata.previewKey ? audioMetadata.previewKey : null,
+    peaksUrl: typeof audioMetadata.peaksUrl === "string" && audioMetadata.peaksUrl ? audioMetadata.peaksUrl : null,
     transcodedAt: typeof audioMetadata.transcodedAt === "string" && audioMetadata.transcodedAt ? audioMetadata.transcodedAt : null,
     key: typeof audioMetadata.key === "string" && audioMetadata.key ? audioMetadata.key : null,
     storage: typeof audioMetadata.storage === "string" && audioMetadata.storage ? audioMetadata.storage : null,
