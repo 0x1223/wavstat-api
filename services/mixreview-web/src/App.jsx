@@ -1011,6 +1011,26 @@ export default function App({ onFirstRender } = {}) {
     };
   }, [reconnectAndHydrateSession]);
 
+  // ── Post-hydration peaks polling ─────────────────────────────────────────
+  // Peaks are generated asynchronously by the server after upload. Tracks that
+  // were already in a session when it loaded may have peaksUrl: null because
+  // the server's missing-peaks repair (which fires on GET session) also runs
+  // async. Without this, those tracks keep empty preview lanes until the next
+  // tab-focus reconnect. Poll shortly after sync to catch them.
+  // tracksRef.current is used instead of tracks to avoid re-running on every
+  // track state update — we only want a one-shot scan per sync event.
+  useEffect(() => {
+    if (!isSessionSynced || !sessionId) return;
+    const pendingPairs = tracksRef.current.flatMap((t) =>
+      t.versions
+        .filter((v) => v.audioSource && !v.audioSource.peaksUrl)
+        .map((v) => ({ trackId: t.id, versionId: v.id })),
+    );
+    if (pendingPairs.length > 0) {
+      pollForPeaksUrls(sessionId, pendingPairs, setTracks, 2_000);
+    }
+  }, [isSessionSynced, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const updateActiveVersion = useCallback((updater) => {
     setVersions((currentVersions) =>
       {
