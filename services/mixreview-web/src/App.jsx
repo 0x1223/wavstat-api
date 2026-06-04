@@ -1355,6 +1355,18 @@ export default function App({ onFirstRender } = {}) {
       albums:  updatedAlbums,
     };
     await saveSessionToApi(savedSnapshot).catch(() => {});
+
+    // The API generates waveform peaks asynchronously; the confirm response
+    // returns peaksUrl: null.  Poll until the server patches the real URL so
+    // StemLane can render the actual waveform preview instead of an empty lane.
+    const pendingPairs = allNewTracks.flatMap((t) =>
+      t.versions
+        .filter((v) => v.audioSource && !v.audioSource.peaksUrl)
+        .map((v) => ({ trackId: t.id, versionId: v.id })),
+    );
+    if (pendingPairs.length > 0) {
+      pollForPeaksUrls(sessionId, pendingPairs, setTracks);
+    }
   }, [albums, currentReviewer, ensureSessionPersisted, permissions.canEdit, sessionId, sessionSnapshot]);
 
   // ── Album management ─────────────────────────────────────────────────────
@@ -3357,6 +3369,84 @@ function normalizeAudioSource(audioSource) {
     // a URL string is present — the URL may be stale/broken.
     needsRelink: Boolean(audioSource.needsRelink) || !url
   };
+}
+
+/**
+ * pollForPeaksUrls — fire-and-forget helper called after handleTrackUpload.
+ *
+ * The API generates waveform peaks asynchronously after confirming an upload
+ * (generateAndStoreSessionPeaks). The confirm response always returns
+ * peaksUrl: null. Without polling, the StemLane preview stays empty until the
+ * next full session reconnect (tab focus / visibility change).
+ *
+ * This function calls GET /api/sessions/:id every few seconds. When the server
+ * has patched audioMetadata.peaksUrl for a track, we push the URL into React
+ * state so StemLane's useEffect([peaksUrl]) can fetch and render the real bars.
+ *
+ * @param {string}   sessionId       - current session id
+ * @param {Array}    pendingPairs    - [{ trackId, versionId }, ...] tracks to watch
+ * @param {Function} setTracks       - React state setter for the tracks array
+ * @param {number}   [delay=4000]    - ms to wait before the next poll
+ * @param {number}   [deadline]      - absolute timestamp after which we give up
+ */
+async function pollForPeaksUrls(
+  sessionId,
+  pendingPairs,
+  setTracks,
+  delay = 4_000,
+  deadline = Date.now() + 90_000,
+) {
+  if (pendingPairs.length === 0) return;
+
+  await new Promise((r) => setTimeout(r, delay));
+  if (Date.now() >= deadline) return;
+
+  let session;
+  try {
+    session = await loadSessionFromApi(sessionId);
+  } catch {
+    // Transient network error — retry without shortening the deadline
+    return pollForPeaksUrls(sessionId, pendingPairs, setTracks, delay, deadline);
+  }
+  if (!session) return;
+
+  const stillPending = [];
+
+  for (const { trackId, versionId } of pendingPairs) {
+    const sTrack   = (session.tracks  || []).find((t) => t.id === trackId);
+    const sVersion = (sTrack?.versions || []).find((v) => v.id === versionId);
+    const peaksUrl = sVersion?.audioMetadata?.peaksUrl || null;
+
+    if (peaksUrl) {
+      // Surgically inject peaksUrl into the matching version's audioSource so
+      // StemLane's useEffect([peaksUrl]) fires and fetches the real preview bars.
+      setTracks((prev) =>
+        prev.map((t) => {
+          if (t.id !== trackId) return t;
+          return {
+            ...t,
+            versions: t.versions.map((v) => {
+              if (v.id !== versionId || !v.audioSource) return v;
+              return { ...v, audioSource: { ...v.audioSource, peaksUrl } };
+            }),
+          };
+        }),
+      );
+    } else {
+      stillPending.push({ trackId, versionId });
+    }
+  }
+
+  if (stillPending.length > 0 && Date.now() < deadline) {
+    // Back off gently: 4 s → 6 s → 9 s → cap at 15 s
+    return pollForPeaksUrls(
+      sessionId,
+      stillPending,
+      setTracks,
+      Math.min(delay * 1.5, 15_000),
+      deadline,
+    );
+  }
 }
 
 /**
