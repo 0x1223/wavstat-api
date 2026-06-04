@@ -258,14 +258,6 @@ export const TrackList = memo(function TrackList({
   // Multi-album: true when the session has more than one project
   const multiAlbum = effectiveAlbums.length > 1;
 
-  // True when a user-intentional project exists. album-default with no tracks
-  // is a backend migration artifact — treat it the same as "no project" so
-  // the blank-session UI shows only "+ Create Project" with no Add Track or
-  // "No tracks imported" noise.
-  const hasUserProject = effectiveAlbums.some(
-    (a) => a.id !== "album-default" || (a.trackIds || []).length > 0
-  );
-
   // Resolve which album is "selected" in the desktop dropdown
   const desktopSelectedAlbum =
     effectiveAlbums.find((a) => a.id === desktopSelectedAlbumId) ||
@@ -444,7 +436,7 @@ export const TrackList = memo(function TrackList({
 
       </div>
 
-      {(multiAlbum || hasUserProject) ? (
+      {effectiveAlbums.length > 0 ? (
         <div className="track-list-albums">
 
           {/* ── Project selector bar — sticky, shown for every session that has a project.
@@ -785,8 +777,8 @@ export const TrackList = memo(function TrackList({
         </div>
       ) : null}
 
-      {/* ── Create project (single-album or no-selector mode) ──────────────── */}
-      {canEdit && !multiAlbum && (
+      {/* ── Create project — blank session only ──────────────────────────── */}
+      {canEdit && effectiveAlbums.length === 0 && (
         <div className="add-album-actions">
           {showTypePicker ? (
             <div className="project-type-picker">
