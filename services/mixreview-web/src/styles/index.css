@@ -4858,8 +4858,10 @@ body:has(.app-shell.reviewer-mode) {
 
 .desktop-track-lane-bars i {
   display: block;
-  width: 2.5px;
-  flex-shrink: 0;
+  /* flex:1 lets each bar grow to fill remaining space proportionally,
+     so the 40-bar waveform spans the full lane width.
+     min-width keeps bars visible; no max-width so they fill completely. */
+  flex: 1 0 1.5px;
   border-radius: 1px;
   background: currentColor;
 }
@@ -5193,7 +5195,7 @@ body:has(.app-shell.reviewer-mode) {
   }
 
   .desktop-track-lane-bars i {
-    width: 3px;
+    flex: 1 0 1.5px;   /* same fill behaviour as base, keeps bars proportional on desktop */
   }
 
   /* Track number badge — slightly larger to breathe in the taller row */
@@ -5252,11 +5254,11 @@ body:has(.app-shell.reviewer-mode) {
   margin: 0;
 }
 
-/* "N imported" — secondary label, slightly smaller than PROJECT TRACKS */
+/* "N imported" — bright white so it reads as the most prominent number */
 .track-list-imported-count {
   font-size: 0.68rem;
-  font-weight: 700;
-  color: rgba(196, 174, 128, 0.70);   /* more muted than eyebrow gold */
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.92);
   white-space: nowrap;
   flex-shrink: 0;
   letter-spacing: 0.04em;
@@ -5282,23 +5284,23 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 .track-list-header-subtitle-count {
-  color: rgba(255, 255, 255, 0.35);
-  font-weight: 600;
+  color: rgba(255, 255, 255, 0.90);   /* bright white for "N tracks" */
+  font-weight: 800;
 }
 
-/* ── 2. Project counter "1 / 3" — bold and immediately noticeable ─────────── */
+/* ── 2. Project counter "1 / 3" — bold white pill, immediately noticeable ─── */
 .desktop-project-counter {
   font-size: 0.80rem;
   font-weight: 800;
-  color: rgba(215, 173, 98, 0.82);
+  color: rgba(255, 255, 255, 0.92);   /* bright white number */
   letter-spacing: 0.02em;
   white-space: nowrap;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-  border: 1px solid rgba(215, 173, 98, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 4px;
   padding: 1px 6px;
-  background: rgba(215, 173, 98, 0.07);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 /* ── 3. Waveform bar preview — original tight-gap + overflow-clip style ──────
@@ -5327,17 +5329,27 @@ body:has(.app-shell.reviewer-mode) {
   }
 }
 
-/* ── 5. Pending Reviews <small> — style the count inside the button ──────────
-   The Pending Review button contains a <span> label and a <small> count.
-   Keep it legible without being larger than the label.                       */
-.approval-state-grid button.pending-review-summary small,
-.status-switch button.pending-review-summary small {
+/* ── 5a. Pending Reviews <small> — Review Dashboard panel (side panel) ───────
+   Compact, secondary; the dashboard button is small so keep it subtle.       */
+.approval-state-grid button.pending-review-summary small {
   display: block;
-  font-size: 0.66rem;
+  font-size: 0.64rem;
   font-weight: 800;
   margin-top: 1px;
   letter-spacing: 0.01em;
-  opacity: 0.88;
+  opacity: 0.80;
+}
+
+/* ── 5b. Pending Reviews <small> — TOP STATUS CARD (topbar status-switch) ───
+   This is the target for "Pending Reviews 2/6" — make the count prominent.  */
+.status-switch button.pending-review-summary small {
+  display: block;
+  font-size: 0.76rem;    /* noticeably larger than the dashboard small */
+  font-weight: 900;
+  margin-top: 2px;
+  letter-spacing: 0.01em;
+  color: rgba(255, 255, 255, 0.95);  /* bright white so it pops */
+  opacity: 1;
 }
 
 /* ── 6. Desktop/admin: gray out "Needs Review" when not the active state ────
