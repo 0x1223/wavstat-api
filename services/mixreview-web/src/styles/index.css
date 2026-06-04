@@ -4858,10 +4858,8 @@ body:has(.app-shell.reviewer-mode) {
 
 .desktop-track-lane-bars i {
   display: block;
-  /* flex:1 lets each bar grow to fill remaining space proportionally,
-     so the 40-bar waveform spans the full lane width.
-     min-width keeps bars visible; no max-width so they fill completely. */
-  flex: 1 0 1.5px;
+  width: 2.5px;
+  flex-shrink: 0;
   border-radius: 1px;
   background: currentColor;
 }
@@ -5195,7 +5193,7 @@ body:has(.app-shell.reviewer-mode) {
   }
 
   .desktop-track-lane-bars i {
-    flex: 1 0 1.5px;   /* same fill behaviour as base, keeps bars proportional on desktop */
+    width: 3px;
   }
 
   /* Track number badge — slightly larger to breathe in the taller row */
@@ -5224,6 +5222,17 @@ body:has(.app-shell.reviewer-mode) {
   /* StemPlayer lane — give each stem lane more height in the desktop window */
   .stem-player-lane {
     padding: 10px 0 8px;
+  }
+
+  /* ── 3c. Project selector: fixed at top of scroll container ─────────────────
+     .track-list-albums is the overflow-y:auto scroll parent. Setting sticky
+     here pins the selector row while only the track rows beneath scroll.      */
+  .desktop-project-selector {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: #0e0e0e;
+    padding-bottom: 4px;
   }
 }
 
@@ -5303,13 +5312,10 @@ body:has(.app-shell.reviewer-mode) {
   background: rgba(255, 255, 255, 0.07);
 }
 
-/* ── 3. Waveform bar preview — original tight-gap + overflow-clip style ──────
-   The bars use position:absolute;inset:0 so they fill the lane container.
-   overflow:hidden on the container clips bars that exceed the lane width,
-   giving a natural waveform-fills-left-to-right appearance.
-   Do NOT use justify-content:space-between here — that spreads fixed-width
-   bars into tick marks rather than a waveform.                               */
-/* (no override needed — base .desktop-track-lane-bars rule is correct)      */
+/* ── 3. Waveform bar preview — thin fixed-width bars, overflow-clip style ───
+   Bars are 2.5 px wide (3 px on desktop) with flex-shrink:0 so they keep
+   their fixed width. overflow:hidden on the lane container clips bars that
+   exceed the lane width, giving a natural waveform-fills-left appearance.    */
 
 /* ── 4. Comment count badge — larger, bolder, more readable ────────────────── */
 .desktop-track-count {
