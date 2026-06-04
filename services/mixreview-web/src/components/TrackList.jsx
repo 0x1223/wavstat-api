@@ -320,6 +320,7 @@ export const TrackList = memo(function TrackList({
 
   // Multi-album: true when the session has more than one project
   const multiAlbum = effectiveAlbums.length > 1;
+  const hasProjectSelector = effectiveAlbums.length > 0;
 
   // Resolve which album is "selected" in the desktop dropdown
   const desktopSelectedAlbum =
@@ -368,14 +369,20 @@ export const TrackList = memo(function TrackList({
   // Mirrors MobileTrackNav's auto-switch behaviour.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!multiAlbum || !activeTrackId) return;
-    const owner = effectiveAlbums.find((a) =>
-      (a.trackIds || []).includes(activeTrackId),
-    );
-    if (owner && owner.id !== desktopSelectedAlbumId) {
-      setDesktopSelectedAlbumId(owner.id);
+    if (!hasProjectSelector) {
+      if (desktopSelectedAlbumId !== null) setDesktopSelectedAlbumId(null);
+      return;
     }
-  }, [activeTrackId]); // intentionally narrow — only re-run when active track changes
+
+    const owner = activeTrackId
+      ? effectiveAlbums.find((a) => (a.trackIds || []).includes(activeTrackId))
+      : null;
+    const selectedStillExists = effectiveAlbums.some((a) => a.id === desktopSelectedAlbumId);
+    const nextAlbumId = owner?.id || (selectedStillExists ? desktopSelectedAlbumId : effectiveAlbums[0]?.id || null);
+    if (nextAlbumId !== desktopSelectedAlbumId) {
+      setDesktopSelectedAlbumId(nextAlbumId);
+    }
+  }, [activeTrackId, desktopSelectedAlbumId, effectiveAlbums, hasProjectSelector]);
 
   // ── Close dropdown on outside click ─────────────────────────────────────────
   useEffect(() => {
@@ -471,7 +478,8 @@ export const TrackList = memo(function TrackList({
   }, [canEdit, deletingTrackId, onTrackDelete]);
 
   const handleCreateProject = useCallback((title, type) => {
-    onCreateAlbum?.(title, type);
+    const albumId = onCreateAlbum?.(title, type);
+    if (albumId) setDesktopSelectedAlbumId(albumId);
     setShowTypePicker(false);
     setDesktopDropdownOpen(false);
   }, [onCreateAlbum]);
@@ -508,10 +516,8 @@ export const TrackList = memo(function TrackList({
       {effectiveAlbums.length > 0 ? (
         <div className="track-list-albums">
 
-          {/* ── Project selector bar — sticky, shown for every session that has a project.
-              Multi-album: full dropdown to switch between projects.
-              Single-album: static display bar (same visual weight, no dropdown). */}
-          {multiAlbum ? (
+          {/* ── Project selector bar — sticky dropdown for every session that has a project. */}
+          {desktopSelectedAlbum ? (
             <div className="desktop-project-selector" ref={desktopSelectorRef}>
 
               {/* Top row: dropdown trigger + inline edit actions */}
@@ -677,72 +683,6 @@ export const TrackList = memo(function TrackList({
                   )}
                 </div>
               )}
-            </div>
-          ) : desktopSelectedAlbum ? (
-            <div className="desktop-project-selector">
-              <div className="desktop-project-selector-row">
-                <div className="desktop-project-selector-btn desktop-project-selector-btn--static">
-                  <span className="desktop-project-selector-eyebrow">Project</span>
-                  {renamingAlbumId === desktopSelectedAlbum.id ? (
-                    <input
-                      className="album-rename-input desktop-project-rename-input"
-                      value={renameValue}
-                      autoFocus
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onBlur={commitRename}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") commitRename();
-                        if (e.key === "Escape") {
-                          setRenamingAlbumId(null);
-                          setRenameValue("");
-                        }
-                      }}
-                    />
-                  ) : (
-                    <span
-                      className="desktop-project-selector-name"
-                      title={canEdit ? "Double-click to rename" : undefined}
-                      onDoubleClick={() =>
-                        canEdit && startRename(desktopSelectedAlbum)
-                      }
-                    >
-                      {desktopSelectedAlbum.title}
-                    </span>
-                  )}
-                  <TypeBadge type={desktopSelectedAlbum.type} />
-                </div>
-                {canEdit && (
-                  <div className="desktop-project-edit-actions">
-                    <label className="upload-button compact small">
-                      <input
-                        type="file"
-                        accept={AUDIO_ACCEPT}
-                        multiple
-                        onChange={(event) => {
-                          const files = Array.from(event.target.files || []);
-                          if (files.length > 0)
-                            onTrackUpload(files, desktopSelectedAlbum.id);
-                          event.target.value = "";
-                        }}
-                      />
-                      <span>
-                        {desktopSelectedAlbum.type === "stem_project"
-                          ? "Upload Stems"
-                          : "Add Track"}
-                      </span>
-                    </label>
-                    <button
-                      type="button"
-                      className="album-delete-btn desktop-album-delete-btn"
-                      onClick={() => onDeleteProject?.(desktopSelectedAlbum.id)}
-                      title="Delete project"
-                      aria-label="Delete project"
-                    >
-                      ×
-                    </button>
-                  </div>
-                )}
-              </div>
             </div>
           ) : null}
 

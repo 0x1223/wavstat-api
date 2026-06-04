@@ -175,10 +175,13 @@ export async function deleteAlbumFromApi(sessionId, albumId) {
   }
 }
 
-export async function deleteTrackFromApi(trackId) {
+export async function deleteTrackFromApi(sessionId, trackId) {
   const adminKey = import.meta.env.VITE_ADMIN_API_KEY;
+  const path = sessionId
+    ? `/api/sessions/${encodeURIComponent(sessionId)}/tracks/${encodeURIComponent(trackId)}`
+    : `/api/tracks/${encodeURIComponent(trackId)}`;
   const response = await fetch(
-    apiUrl(`/api/tracks/${encodeURIComponent(trackId)}`),
+    apiUrl(path),
     {
       method: "DELETE",
       headers: adminKey ? { Authorization: `Bearer ${adminKey}` } : {},

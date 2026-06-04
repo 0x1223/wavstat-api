@@ -1395,8 +1395,9 @@ export default function App({ onFirstRender } = {}) {
   // existing selectTrack / WaveSurfer / transport path is unaffected.
 
   const handleCreateAlbum = useCallback((title = "New Album", type = "album") => {
+    const albumId = `album-${Date.now()}`;
     const newAlbum = {
-      id: `album-${Date.now()}`,
+      id: albumId,
       title: typeof title === "string" && title.trim() ? title.trim() : "New Album",
       type: type === "stem_project" ? "stem_project" : "album",
       trackIds: [],
@@ -1404,6 +1405,7 @@ export default function App({ onFirstRender } = {}) {
     };
     setAlbums((prev) => [...prev, newAlbum]);
     setIsDirty(true);
+    return albumId;
   }, []);
 
   const handleRenameAlbum = useCallback((albumId, newTitle) => {
@@ -1505,41 +1507,74 @@ export default function App({ onFirstRender } = {}) {
   const handleTrackDeleteById = useCallback(async (trackId) => {
     if (!permissions.canEdit || !trackId) return;
     // Throws on API failure — TrackList.handleTrackDelete catches and shows deleteError.
-    await deleteTrackFromApi(trackId);
+    await deleteTrackFromApi(sessionId, trackId);
     // State is only mutated after the API call succeeds, keeping sessionSnapshot
     // consistent so the auto-save payload never resurrects the deleted track.
     try {
-      setTracks((prev) => prev.filter((t) => t.id !== trackId));
-      setAlbums((prev) =>
-        prev.map((a) => ({ ...a, trackIds: (a.trackIds || []).filter((id) => id !== trackId) }))
-      );
-      if (activeTrackIdRef.current === trackId) {
-        const remaining = tracksRef.current.filter((t) => t.id !== trackId);
-        if (remaining.length > 0) {
-          selectTrackRef.current?.(remaining[0].id);
+      // Anchor the post-deletion snapshot from the current ref BEFORE the React
+      // state updates commit. A reconnect or visibility event that fires in the
+      // commit window will then see isDirty=true and flush the correct document
+      // instead of loading and applying stale pre-deletion server data.
+      const snapshot = sessionSnapshotRef.current || {};
+      const storedTracks = Array.isArray(snapshot.tracks) ? snapshot.tracks : [];
+      const storedAlbums = Array.isArray(snapshot.albums) ? snapshot.albums : [];
+      const nextStoredTracks = storedTracks.filter((t) => t.id !== trackId);
+      const ownerAlbum = storedAlbums.find((a) => (a.trackIds || []).includes(trackId));
+      const nextAlbums = storedAlbums.map((a) => ({
+        ...a,
+        trackIds: (a.trackIds || []).filter((id) => id !== trackId),
+      }));
+      const isDeletingActiveTrack = activeTrackIdRef.current === trackId;
+      const fallbackStoredTrack = isDeletingActiveTrack
+        ? (ownerAlbum?.trackIds || [])
+            .filter((id) => id !== trackId)
+            .map((id) => nextStoredTracks.find((t) => t.id === id))
+            .find(Boolean) || null
+        : null;
+      const nextActiveVersion =
+        fallbackStoredTrack?.versions?.find((v) => v.id === fallbackStoredTrack.activeVersionId) ||
+        fallbackStoredTrack?.versions?.[0] ||
+        null;
+      const nextActiveTrackId = isDeletingActiveTrack
+        ? fallbackStoredTrack?.id || null
+        : snapshot.activeTrackId;
+      const nextActiveVersionId = isDeletingActiveTrack
+        ? nextActiveVersion?.id || "version-v1"
+        : snapshot.activeVersionId || "version-v1";
+      const postDeleteSnapshot = {
+        ...snapshot,
+        tracks: nextStoredTracks,
+        albums: nextAlbums,
+        activeTrackId: nextActiveTrackId,
+        activeVersionId: nextActiveVersionId,
+        versions: isDeletingActiveTrack ? fallbackStoredTrack?.versions || [] : snapshot.versions || [],
+        updatedAt: new Date().toISOString(),
+      };
+      sessionSnapshotRef.current = postDeleteSnapshot;
+      isDirtyRef.current = true;
+
+      const remainingTracks = tracksRef.current.filter((t) => t.id !== trackId);
+      setTracks(remainingTracks);
+      setAlbums(nextAlbums);
+      if (isDeletingActiveTrack) {
+        const fallbackUiTrack = fallbackStoredTrack
+          ? remainingTracks.find((t) => t.id === fallbackStoredTrack.id)
+          : null;
+        if (fallbackUiTrack) {
+          setActiveTrackId(fallbackUiTrack.id);
+          setActiveStemPreviewAlbumId(null);
+          setVersions(fallbackUiTrack.versions);
+          setActiveVersionId(nextActiveVersionId);
+          setReviewRoute(isEngineerMode ? "admin" : "reviewer", nextActiveVersionId, sessionId, fallbackUiTrack.id);
         } else {
           setActiveTrackId(null);
           setActiveStemPreviewAlbumId(null);
           setVersions(createEmptyVersions());
           setActiveVersionId("version-v1");
+          setReviewRoute(isEngineerMode ? "admin" : "reviewer", "version-v1", sessionId, null);
         }
       }
-
-      // Anchor the post-deletion snapshot from the current ref BEFORE the React
-      // state updates commit. A reconnect or visibility event that fires in the
-      // commit window will then see isDirty=true and flush the correct document
-      // instead of loading and applying stale pre-deletion server data.
-      const postDeleteSnapshot = {
-        ...sessionSnapshotRef.current,
-        tracks: (sessionSnapshotRef.current?.tracks ?? []).filter((t) => t.id !== trackId),
-        albums: (sessionSnapshotRef.current?.albums ?? []).map((a) => ({
-          ...a,
-          trackIds: (a.trackIds || []).filter((id) => id !== trackId),
-        })),
-        updatedAt: new Date().toISOString(),
-      };
-      sessionSnapshotRef.current = postDeleteSnapshot;
-      isDirtyRef.current = true;
+      setIsDirty(true);
 
       // Immediately persist so the server document is updated before the 450ms
       // debounced auto-save fires and before any reconnect can reload stale data.
@@ -1552,7 +1587,7 @@ export default function App({ onFirstRender } = {}) {
       console.error("[MixReview] Track state cleanup failed after delete", stateError);
       setSessionMessage("Track was deleted from storage but the UI could not fully update. Please refresh.");
     }
-  }, [permissions.canEdit]);
+  }, [isEngineerMode, permissions.canEdit, sessionId]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const beginNewSession = useCallback(() => {

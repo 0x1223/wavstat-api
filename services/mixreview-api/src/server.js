@@ -110,6 +110,7 @@ sessionRouter.delete("/:sessionId", deleteSession);
 sessionRouter.post("/:sessionId/audio", upload.single("audio"), handleAudioUpload);
 sessionRouter.post("/:sessionId/confirm-audio", requireAdminAuth, confirmAudioUpload);
 sessionRouter.delete("/:sessionId/albums/:albumId", requireAdminAuth, deleteAlbum);
+sessionRouter.delete("/:sessionId/tracks/:trackId", requireAdminAuth, deleteTrack);
 
 app.use("/api/sessions", sessionRouter);
 app.post("/api/audio/upload", upload.single("audio"), handleAudioUpload);
@@ -1219,9 +1220,73 @@ async function deleteAlbum(req, res, next) {
 
 async function deleteTrack(req, res, next) {
   try {
-    const trackId = sanitizePathSegment(req.params.id);
+    const trackId = sanitizePathSegment(req.params.trackId || req.params.id);
     if (!trackId) {
       return res.status(400).json({ error: "Valid track id is required." });
+    }
+
+    const scopedSessionId = sanitizeSessionId(req.params.sessionId);
+    if (scopedSessionId) {
+      const session = await readSessionDocument(scopedSessionId).catch(() => null);
+      const tracks = Array.isArray(session?.tracks) ? session.tracks : [];
+      const trackIndex = tracks.findIndex((track) => track.id === trackId);
+      if (!session || trackIndex < 0) {
+        return res.status(404).json({ error: "Track not found in this session." });
+      }
+
+      const deletedTrack = tracks[trackIndex];
+      const r2Keys = new Set();
+      collectTrackAudioKeys(deletedTrack, r2Keys);
+
+      const nextTracks = tracks.filter((track) => track.id !== trackId);
+      const albums = Array.isArray(session.albums) ? session.albums : [];
+      const ownerAlbum = albums.find((album) =>
+        (Array.isArray(album.trackIds) ? album.trackIds : []).includes(trackId),
+      );
+      const nextAlbums = albums.map((album) => ({
+        ...album,
+        trackIds: (Array.isArray(album.trackIds) ? album.trackIds : []).filter((id) => id !== trackId),
+      }));
+
+      const wasActiveTrack = session.activeTrackId === trackId;
+      const fallbackTrack = wasActiveTrack
+        ? (Array.isArray(ownerAlbum?.trackIds) ? ownerAlbum.trackIds : [])
+            .filter((id) => id !== trackId)
+            .map((id) => nextTracks.find((track) => track.id === id))
+            .find(Boolean) || null
+        : null;
+      const activeVersion =
+        fallbackTrack?.versions?.find((version) => version.id === fallbackTrack.activeVersionId) ||
+        fallbackTrack?.versions?.[0] ||
+        null;
+
+      const nextSession = normalizeSessionDocument({
+        ...session,
+        tracks: nextTracks,
+        albums: nextAlbums,
+        activeTrackId: wasActiveTrack ? fallbackTrack?.id || null : session.activeTrackId,
+        activeVersionId: wasActiveTrack ? activeVersion?.id || "version-v1" : session.activeVersionId,
+        versions: wasActiveTrack ? fallbackTrack?.versions || [] : session.versions,
+        updatedAt: new Date().toISOString(),
+      });
+
+      const deletedObjects = hasR2Config ? await deleteTrackAudioObjects(r2Keys) : 0;
+      await writeSessionDocument(scopedSessionId, nextSession);
+      await upsertSessionIndex(nextSession);
+
+      console.log("[MixReview] Track deleted", {
+        trackId,
+        sessions: [scopedSessionId],
+        r2ObjectCount: r2Keys.size,
+        deletedObjects,
+      });
+
+      return res.json({
+        ok: true,
+        deleted: trackId,
+        sessions: [scopedSessionId],
+        deletedObjects,
+      });
     }
 
     const database = await readDatabase();
