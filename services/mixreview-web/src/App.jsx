@@ -1506,6 +1506,14 @@ export default function App({ onFirstRender } = {}) {
   // ─────────────────────────────────────────────────────────────────────────
 
   const beginNewSession = useCallback(() => {
+    // Flush the current session to the API before resetting state so the user
+    // can always recover it via Admin Dashboard. Fire-and-forget: the UI
+    // transition is instant and we must not block on the network call.
+    const snapshot = sessionSnapshotRef.current;
+    if (snapshot?.hasStarted && snapshot?.id) {
+      saveSessionToApi(snapshot).catch(() => {});
+    }
+
     // Abort any in-flight reconnect so its applyStoredSession callback does not
     // fire after we have already reset state for the new session.
     reconnectAbortRef.current?.abort();
@@ -1519,7 +1527,7 @@ export default function App({ onFirstRender } = {}) {
     setProjectTitle(emptyProjectName);
     setSessionDetails(emptySessionDetails);
     setTracks([]);
-    setAlbums([{ id: "album-default", title: emptyProjectName, type: "album", trackIds: [], createdAt: new Date().toISOString() }]);
+    setAlbums([]);
     setActiveTrackId(null);
     setActiveStemPreviewAlbumId(null);
     setVersions(createEmptyVersions());
@@ -1572,6 +1580,7 @@ export default function App({ onFirstRender } = {}) {
       hasStarted: true,
       currentReviewer: "Engineer",
       tracks: [],
+      albums: [],
       versions: [],
       updatedAt: new Date().toISOString()
     };
@@ -1584,7 +1593,7 @@ export default function App({ onFirstRender } = {}) {
       setSessionDetails(nextDetails);
       setHasStarted(true);
       setAppView("workspace");
-      setSessionMessage("Session saved. Choose audio to start the review.");
+      setSessionMessage("Session saved. Create a project to start the review.");
       setReviewRoute("admin", "version-v1", sessionId, null);
       saveAccessState({ mode: "admin", sessionId });
     } catch (error) {
@@ -2770,7 +2779,7 @@ export default function App({ onFirstRender } = {}) {
             onDeleteProject={handleDeleteProject}
           />
 
-          {!hasPlayableAudio && (
+          {activeTrack && !hasPlayableAudio && (
             <AudioUpload
               audioSource={audioSource}
               duration={duration}
@@ -3494,7 +3503,13 @@ function buildInitialAlbums(session) {
     }));
   }
 
-  // No albums in the document → create one default album from all tracks.
+  // No albums in the document:
+  // - If there are existing tracks, migrate them into a default album (backward compat).
+  // - If there are no tracks either, return empty so the workspace shows "Create Project".
+  if (rawTracks.length === 0) {
+    return [];
+  }
+
   return [{
     id: "album-default",
     title: session?.projectName || emptyProjectName,

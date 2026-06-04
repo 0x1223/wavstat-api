@@ -457,12 +457,7 @@ export const TrackList = memo(function TrackList({
         })()}
       </div>
 
-      {isEmpty ? (
-        <div className="empty-state compact">
-          <strong>No tracks imported.</strong>
-          <p>Choose audio to start this client review session.</p>
-        </div>
-      ) : (
+      {!isEmpty ? (
         <div className="track-list-albums">
 
           {/* ── Desktop project selector ──────────────────────────────────────
@@ -751,7 +746,12 @@ export const TrackList = memo(function TrackList({
               </div>
             )}
         </div>
-      )}
+      ) : effectiveAlbums.length > 0 ? (
+        <div className="empty-state compact">
+          <strong>No tracks imported.</strong>
+          <p>Choose audio to start this client review session.</p>
+        </div>
+      ) : null}
 
       {/* ── Create project (single-album or no-selector mode) ──────────────── */}
       {canEdit && !multiAlbum && (
