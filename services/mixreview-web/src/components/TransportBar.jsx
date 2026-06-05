@@ -14,6 +14,9 @@ export function TransportBar({
   onPrev,
   onNext,
   onRepeatChange,
+  canReview = false,
+  isReviewActive = false,
+  onReviewToggle,
 }) {
   const repeatSymbol = repeatMode === "one" ? "↺¹" : "↺";
   const repeatTitle =
@@ -24,11 +27,25 @@ export function TransportBar({
   const isRepeatActive = repeatMode !== "off";
 
   return (
-    <footer className="transport" aria-label="Playback controls">
+    <footer className={`transport${canReview ? " has-review-action" : ""}`} aria-label="Playback controls">
       <div className="transport-time">
         <span>{formatTimecode(currentTime)}</span>
         <span>{formatTimecode(duration)}</span>
       </div>
+
+      {canReview && (
+        <div className="transport-review">
+          <button
+            type="button"
+            className={`transport-review-button${isReviewActive ? " active" : ""}`}
+            aria-pressed={isReviewActive}
+            onClick={onReviewToggle}
+          >
+            <span aria-hidden="true">✍️</span>
+            <span>Review</span>
+          </button>
+        </div>
+      )}
 
       <div className="transport-controls">
         <button

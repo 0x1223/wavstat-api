@@ -195,6 +195,7 @@ export default function App({ onFirstRender } = {}) {
   );
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [mediaElement, setMediaElement] = useState(null);
   const [mobileNoteDraft, setMobileNoteDraft] = useState(null);
@@ -1855,6 +1856,7 @@ export default function App({ onFirstRender } = {}) {
     setCurrentTime(0);
     setIsPlaying(false);
     setIsPlayerReady(false);
+    setIsMarkerToolActive(false);
     activeMarkerRef.current = null;
     setMobileNoteDraft(null);
   }, [activeTrackId, currentReviewer, isEngineerMode, sessionId]);
@@ -1878,6 +1880,7 @@ export default function App({ onFirstRender } = {}) {
     setCurrentTime(0);
     setIsPlaying(false);
     setIsPlayerReady(false);
+    setIsMarkerToolActive(false);
     activeMarkerRef.current = null;
     setMobileNoteDraft(null);
     setReviewRoute(
@@ -2945,6 +2948,8 @@ export default function App({ onFirstRender } = {}) {
               mobilePlayUnlocked={mobileHasPlayed}
               onPrevTrack={handlePrevTrack}
               onNextTrack={handleNextTrack}
+              markerToolActive={isMarkerToolActive}
+              onMarkerToolActiveChange={setIsMarkerToolActive}
             />
           ) : null}
         </div>
@@ -3097,6 +3102,9 @@ export default function App({ onFirstRender } = {}) {
           onPrev={handlePrevTrack}
           onNext={handleNextTrack}
           onRepeatChange={handleRepeatChange}
+          canReview={isEngineerMode && !isActiveStemProject && duration > 0}
+          isReviewActive={isMarkerToolActive}
+          onReviewToggle={() => setIsMarkerToolActive((value) => !value)}
         />
       )}
 

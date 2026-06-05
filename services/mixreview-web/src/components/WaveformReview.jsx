@@ -62,6 +62,8 @@ export function WaveformReview({
   mobilePlayUnlocked = false,
   onPrevTrack = undefined,
   onNextTrack = undefined,
+  markerToolActive: controlledMarkerToolActive = undefined,
+  onMarkerToolActiveChange = undefined,
 }) {
   const containerRef = useRef(null);
   const wavesurferRef = useRef(null);
@@ -107,8 +109,19 @@ export function WaveformReview({
   const [waveformWidth, setWaveformWidth] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
-  const [isMarkerToolActive, setIsMarkerToolActive] = useState(false);
+  const [internalMarkerToolActive, setInternalMarkerToolActive] = useState(false);
   const [pendingMarker, setPendingMarker] = useState(null);
+  const isMarkerToolActive =
+    typeof controlledMarkerToolActive === "boolean"
+      ? controlledMarkerToolActive
+      : internalMarkerToolActive;
+  const setMarkerToolActive = (value) => {
+    const nextValue = typeof value === "function" ? value(isMarkerToolActive) : value;
+    if (typeof controlledMarkerToolActive !== "boolean") {
+      setInternalMarkerToolActive(nextValue);
+    }
+    onMarkerToolActiveChange?.(nextValue);
+  };
   useEffect(() => {
     callbacksRef.current = {
       onDurationChange,
@@ -627,7 +640,7 @@ export function WaveformReview({
       event.stopPropagation();
       if (isMarkerToolActive) {
         callbacksRef.current.onMobileNoteRequest?.(clickedTime);
-        setIsMarkerToolActive(false);
+        setMarkerToolActive(false);
       }
       return;
     }
@@ -635,7 +648,7 @@ export function WaveformReview({
     // Desktop: open the inline comment editor at this timestamp.
     if (isMarkerToolActive) {
       setPendingMarker({ time: clickedTime, text: "" });
-      setIsMarkerToolActive(false);
+      setMarkerToolActive(false);
     }
   }
   const hasAudio = Boolean(getPlaybackUrl(audioSource));
@@ -691,7 +704,7 @@ export function WaveformReview({
             event.stopPropagation();
             const ratio = Math.min(1, Math.max(0, (event.clientX - metrics.left) / (metrics.width * zoomScaleRef.current)));
             callbacksRef.current.onMobileNoteRequest?.(ratio * duration);
-            setIsMarkerToolActive(false);
+            setMarkerToolActive(false);
           }}
           onClick={handleWaveformClick}
         >
@@ -709,6 +722,7 @@ export function WaveformReview({
               bypass React's commit phase entirely.                               */}
           <div
             ref={zoomWrapperRef}
+            className="waveform-zoom-wrapper"
             style={{
               position: "absolute",
               inset: 0,
@@ -857,7 +871,7 @@ export function WaveformReview({
           )}
         </div>
 
-      {(duration > 0 || (isReviewerMode && isMobileViewport())) && (
+      {(pendingMarker || isMobileViewport()) && (duration > 0 || (isReviewerMode && isMobileViewport())) && (
         <div className="review-console">
           {pendingMarker ? (
             <div className="desktop-comment-box">
@@ -907,7 +921,7 @@ export function WaveformReview({
                 className={`marker-tool-toggle${isMarkerToolActive ? " active" : ""}`}
                 aria-pressed={isMarkerToolActive}
                 aria-label="Toggle review mode"
-                onClick={() => setIsMarkerToolActive((c) => !c)}
+                onClick={() => setMarkerToolActive((c) => !c)}
               >
                 <span aria-hidden="true">✍️</span>
                 <span className="tool-label">Review</span>

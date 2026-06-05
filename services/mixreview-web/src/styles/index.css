@@ -2184,9 +2184,15 @@ h2 {
 .waveform {
   position: relative;
   z-index: 2;
+  width: 100%;
   padding: 0 18px;
   filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.42));
   cursor: crosshair;
+}
+
+.waveform-zoom-wrapper {
+  display: flex;
+  align-items: center;
 }
 
 .loading-waveform {
@@ -2761,6 +2767,10 @@ h2 {
   backdrop-filter: blur(18px);
 }
 
+.transport.has-review-action {
+  grid-template-columns: 1fr auto auto 1fr;
+}
+
 .transport-time,
 .transport-meta {
   display: flex;
@@ -2816,6 +2826,12 @@ h2 {
   gap: 10px;
 }
 
+.transport-review {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .transport button {
   min-width: 46px;
   min-height: 42px;
@@ -2824,6 +2840,27 @@ h2 {
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent),
     #151515;
   font-weight: 800;
+}
+
+.transport-review-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 104px !important;
+  color: #cfc6b6;
+}
+
+.transport-review-button span:last-child {
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.transport-review-button.active {
+  color: #130d04;
+  border-color: rgba(215, 173, 98, 0.55);
+  background: linear-gradient(180deg, #ffd889, #d6a354);
+  box-shadow: 0 6px 18px rgba(215, 173, 98, 0.2);
 }
 
 .transport button:disabled {
