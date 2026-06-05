@@ -873,6 +873,17 @@ async function loadSessionIndexForList() {
     }
   }
 
+  if (hasR2Config && database.sessions.some((session) => typeof session.commentCount !== "number")) {
+    console.log("[MixReview] Session index is missing review counters — refreshing from R2");
+    const rebuilt = await scanR2ForSessions();
+    if (rebuilt.length > 0) {
+      database = { sessions: rebuilt };
+      await writeDatabase(database).catch((e) =>
+        console.warn("[MixReview] Failed to persist review counter refresh:", e.message)
+      );
+    }
+  }
+
   return database;
 }
 
@@ -1659,6 +1670,7 @@ async function scanR2ForSessions() {
         const session = normalizeSessionDocument(JSON.parse(await docResponse.Body.transformToString()));
         if (session) {
           const trackSummary = getTrackSummary(session);
+          const reviewSummary = getSessionReviewSummary(session);
           sessions.push({
             id: session.id,
             projectName: session.projectName || "Untitled MixReview Session",
@@ -1673,6 +1685,8 @@ async function scanR2ForSessions() {
             status: getSessionStatus(session),
             trackCount: trackSummary.total,
             approvedTrackCount: trackSummary.approved,
+            commentCount: reviewSummary.comments,
+            reviewCount: reviewSummary.comments,
             updatedAt: session.updatedAt || new Date().toISOString(),
             storageKey: key
           });
@@ -1762,6 +1776,7 @@ async function writeSessionDocument(sessionId, session) {
 async function upsertSessionIndex(session) {
   const database = await readDatabase();
   const trackSummary = getTrackSummary(session);
+  const reviewSummary = getSessionReviewSummary(session);
   const summary = {
     id: session.id,
     projectName: session.projectName || "Untitled MixReview Session",
@@ -1776,6 +1791,8 @@ async function upsertSessionIndex(session) {
     status: getSessionStatus(session),
     trackCount: trackSummary.total,
     approvedTrackCount: trackSummary.approved,
+    commentCount: reviewSummary.comments,
+    reviewCount: reviewSummary.comments,
     updatedAt: session.updatedAt || new Date().toISOString(),
     storageKey: buildSessionObjectKey(session.id)
   };
@@ -1933,6 +1950,22 @@ function getTrackSummary(session) {
       return activeVersion?.approvalStatus === "Approved";
     }).length
   };
+}
+
+function getSessionReviewSummary(session) {
+  const tracks = Array.isArray(session.tracks) && session.tracks.length > 0
+    ? session.tracks
+    : getImportedTracks(session);
+  const comments = tracks.reduce((total, track) => {
+    const versions = Array.isArray(track.versions) ? track.versions : [];
+    return total + versions.reduce(
+      (versionTotal, version) =>
+        versionTotal + (Array.isArray(version.comments) ? version.comments.length : 0),
+      0,
+    );
+  }, 0);
+
+  return { comments };
 }
 
 function getImportedTracks(session) {

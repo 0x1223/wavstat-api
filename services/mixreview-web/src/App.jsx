@@ -217,6 +217,7 @@ export default function App({ onFirstRender } = {}) {
     false,
   );
   const activeMarkerRef = useRef(null);
+  const adminSessionsRef = useRef(adminSessions);
   const playerRef = useRef(null);
   const versionsRef = useRef(versions);
   const lastSavedSessionRef = useRef("");
@@ -550,6 +551,10 @@ export default function App({ onFirstRender } = {}) {
   }, [versions]);
 
   useEffect(() => {
+    adminSessionsRef.current = adminSessions;
+  }, [adminSessions]);
+
+  useEffect(() => {
     tracksRef.current = tracks;
   }, [tracks]);
 
@@ -757,7 +762,7 @@ export default function App({ onFirstRender } = {}) {
   }, [hasStarted, isSessionHydrating, sessionSnapshot, shareId]);
 
   const refreshAdminSessions = useCallback(() => {
-    setIsAdminSessionsLoading(true);
+    setIsAdminSessionsLoading(adminSessionsRef.current.length === 0);
     listSessionsFromApi()
       .then(setAdminSessions)
       .catch(() => {
@@ -1991,10 +1996,12 @@ export default function App({ onFirstRender } = {}) {
     }
 
     setAdminSessions((current) =>
-      current.map((candidate) =>
-        candidate.id === session.id
-          ? { ...candidate, isPriority: !candidate.isPriority }
-          : candidate,
+      sortSessionSummaries(
+        current.map((candidate) =>
+          candidate.id === session.id
+            ? { ...candidate, isPriority: !candidate.isPriority }
+            : candidate,
+        ),
       ),
     );
 
@@ -3162,18 +3169,17 @@ function AdminDashboard({
   onRefresh,
   onLogout
 }) {
-  // Explicit order: Pending Review (urgent — reviewer submitted feedback) first,
-  // then Needs Review (waiting for reviewer), then Approved.
-  const dashboardStates = ["Draft", "Pending Review", "Needs Review", "Approved"];
+  const dashboardStates = ["Needs Review", "Pending Review", "Approved", "Draft"];
   const sortedSessions = sortSessionSummaries(sessions);
   const buckets = dashboardStates.reduce((groups, status) => {
-    groups[status] = sortedSessions.filter((session) => (session.status || "Draft") === status);
+    groups[status] = sortedSessions.filter((session) => getDashboardSessionStatus(session) === status);
     return groups;
   }, {});
-  const draftSessions = buckets.Draft || [];
-  const pendingReviewSessions = buckets["Pending Review"] || [];
   const needsReviewSessions = buckets["Needs Review"] || [];
+  const pendingReviewSessions = buckets["Pending Review"] || [];
   const approvedSessions = buckets.Approved || [];
+  const draftSessions = buckets.Draft || [];
+  const visibleDashboardStates = dashboardStates.filter((status) => (buckets[status] || []).length > 0);
 
   return (
     <main className="app-shell admin-shell">
@@ -3207,10 +3213,10 @@ function AdminDashboard({
 
       <section className="admin-dashboard" aria-label="Admin dashboard">
         <div className="summary-grid">
-          <SummaryTile label="Draft" value={draftSessions.length} />
-          <SummaryTile label="Pending Review" value={pendingReviewSessions.length} attention />
           <SummaryTile label="Needs Review" value={needsReviewSessions.length} />
+          <SummaryTile label="Pending Review" value={pendingReviewSessions.length} attention />
           <SummaryTile label="Approved" value={approvedSessions.length} />
+          <SummaryTile label="Draft" value={draftSessions.length} />
         </div>
 
         {isLoading ? (
@@ -3225,13 +3231,10 @@ function AdminDashboard({
           </div>
         ) : (
           <div className="admin-session-list">
-            {dashboardStates.map((status) => (
+            {visibleDashboardStates.map((status) => (
               <section className="admin-session-group" key={status}>
                 <h2>{status}</h2>
-                {(buckets[status] || []).length === 0 ? (
-                  <p className="muted-line">No {status.toLowerCase()} sessions.</p>
-                ) : (
-                  (buckets[status] || []).map((session) => (
+                {(buckets[status] || []).map((session) => (
                     <article
                       className={`admin-session-row${session.isPriority ? " priority" : ""}`}
                       key={session.id}
@@ -3245,7 +3248,7 @@ function AdminDashboard({
                           {session.artistName || "No artist"} · {session.reviewerName || session.reviewerClientId || "No reviewer"}
                         </p>
                         <p>
-                          {session.trackCount || 0} tracks · {session.approvedTrackCount || 0}/{session.trackCount || 0} approved · Updated {formatDashboardDate(session.updatedAt)}
+                          {session.trackCount || 0} tracks · {getSessionReviewCount(session)} reviews · {session.approvedTrackCount || 0}/{session.trackCount || 0} approved · Updated {formatDashboardDate(session.updatedAt)}
                         </p>
                       </div>
                       <div className="session-actions" onClick={(e) => e.stopPropagation()}>
@@ -3292,8 +3295,7 @@ function AdminDashboard({
                         </button>
                       </div>
                     </article>
-                  ))
-                )}
+                ))}
               </section>
             ))}
           </div>
@@ -3603,8 +3605,32 @@ async function findReviewerSession(clientIdOrName) {
 
 function sortSessionSummaries(sessions) {
   return [...sessions].sort((a, b) => {
+    if (Boolean(a.isPriority) !== Boolean(b.isPriority)) {
+      return a.isPriority ? -1 : 1;
+    }
+
     return new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime();
   });
+}
+
+function getDashboardSessionStatus(session) {
+  const trackCount = Number(session?.trackCount || 0);
+  const approvedTrackCount = Number(session?.approvedTrackCount || 0);
+  const reviewCount = getSessionReviewCount(session);
+
+  if (trackCount === 0) {
+    return "Draft";
+  }
+
+  if (trackCount > 0 && approvedTrackCount >= trackCount) {
+    return "Approved";
+  }
+
+  return reviewCount > 0 ? "Pending Review" : "Needs Review";
+}
+
+function getSessionReviewCount(session) {
+  return Number(session?.reviewCount ?? session?.commentCount ?? 0);
 }
 
 function formatDashboardDate(value) {
