@@ -258,7 +258,7 @@ function StemLane({ label, audioSource, trackColor }) {
   // Deterministic synthetic waveform shown while real peaks are in flight.
   // Always generated when there's an audioSource so the lane is never blank.
   const fallbackBars = useMemo(() => {
-    if (peakBars?.length || !audioSource) return [];
+    if (peakBars?.length) return [];
     let seed = 0;
     for (let i = 0; i < (label || "").length; i += 1) {
       seed = (seed * 31 + label.charCodeAt(i)) % 9973;
