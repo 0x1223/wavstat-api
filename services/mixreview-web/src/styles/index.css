@@ -4993,34 +4993,24 @@ body:has(.app-shell.reviewer-mode) {
   color: #fff8e8;
 }
 
-.desktop-track-lane-bars {
+/* ── Canvas waveform — fills the full lane, drawn by StemLane via Canvas 2D ── */
+.desktop-track-lane-canvas {
   position: absolute;
-  inset: 18px 6px 5px;
-  display: flex;
-  align-items: center;
-  gap: 1.5px;
-  padding: 0;
-  color: var(--stem-progress-color, #d6a354);
-  opacity: 0.9;
-  overflow: hidden;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  opacity: 0.88;
 }
 
-.desktop-track-item.active .desktop-track-lane-bars {
+.desktop-track-item.active .desktop-track-lane-canvas {
   opacity: 1;
 }
 
-.desktop-track-lane-bars i {
-  display: block;
-  width: 2.5px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  background: currentColor;
-  box-shadow: 0 0 8px color-mix(in srgb, currentColor 24%, transparent);
-}
-
-.desktop-track-lane.is-loading-preview .desktop-track-lane-bars {
+.desktop-track-lane.is-loading-preview .desktop-track-lane-canvas {
   opacity: 0.42;
-  filter: saturate(0.88);
+  filter: saturate(0.82);
 }
 
 /* ── Comment count badge ────────────────────────────────────────────────────── */
@@ -5421,14 +5411,6 @@ body:has(.app-shell.reviewer-mode) {
   .desktop-track-lane {
     height: 100%;
     min-height: 70px;
-  }
-
-  .desktop-track-lane-bars {
-    gap: 2px;
-  }
-
-  .desktop-track-lane-bars i {
-    width: 3px;
   }
 
   .desktop-track-badge {
