@@ -435,6 +435,11 @@ export const TrackList = memo(function TrackList({
     (a) => a.id === desktopSelectedAlbum?.id,
   );
   const albumCount = effectiveAlbums.length;
+  const selectedAlbumTrackCount = useMemo(() => {
+    if (!desktopSelectedAlbum) return 0;
+    if (effectiveAlbums.length === 1) return visibleTracks.length;
+    return (desktopSelectedAlbum.trackIds || []).filter((id) => trackMap[id]).length;
+  }, [desktopSelectedAlbum, effectiveAlbums.length, trackMap, visibleTracks.length]);
 
   const renderResetKey = useMemo(
     () => visibleTracks.map((t) => t.id).join(","),
@@ -591,6 +596,14 @@ export const TrackList = memo(function TrackList({
           {/* ── Project selector bar — sticky dropdown for every session that has a project. */}
           {desktopSelectedAlbum ? (
             <div className="desktop-project-selector" ref={desktopSelectorRef}>
+              <p className="track-list-header-subtitle desktop-selected-project-summary">
+                <span className="track-list-header-subtitle-name">
+                  {desktopSelectedAlbum.title}
+                </span>
+                <span className="track-list-header-subtitle-count">
+                  {selectedAlbumTrackCount} track{selectedAlbumTrackCount === 1 ? "" : "s"}
+                </span>
+              </p>
 
               {/* Top row: dropdown trigger + inline edit actions */}
               <div className="desktop-project-selector-row">
@@ -689,6 +702,7 @@ export const TrackList = memo(function TrackList({
                 <div className="desktop-project-dropdown" role="listbox">
                   {effectiveAlbums.map((album) => {
                     const isActive = album.id === desktopSelectedAlbum?.id;
+                    const firstTrackId = (album.trackIds || []).find((id) => trackMap[id]);
                     return (
                       <button
                         key={album.id}
@@ -698,6 +712,7 @@ export const TrackList = memo(function TrackList({
                         className={`desktop-project-option${isActive ? " active" : ""}`}
                         onClick={() => {
                           setDesktopSelectedAlbumId(album.id);
+                          if (firstTrackId) onTrackSelect(firstTrackId);
                           setDesktopDropdownOpen(false);
                         }}
                       >
