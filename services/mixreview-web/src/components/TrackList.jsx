@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useMemo, memo, useCallback } from "react";
 import { getStemColor } from "../lib/stemColors.js";
+import { apiUrl } from "../config/api.js";
 
 const AUDIO_ACCEPT = [
   ".flac",
@@ -34,6 +35,42 @@ const PREVIEW_BAR_MAX_PX = 36;
 // Module-level so cached data survives re-renders and session switches without
 // re-fetching. Keyed by peaksUrl. Value is normalized float[] (0-1) or null.
 const previewPeaksCache = new Map();
+let previewDecodeAudioContext = null;
+
+function getPreviewPlaybackUrl(audioSource) {
+  return audioSource?.previewUrl || audioSource?.playbackUrl || audioSource?.audioUrl || audioSource?.url || "";
+}
+
+function getPreviewPeakUrls(audioSource) {
+  const urls = [];
+  if (audioSource?.peaksUrl) urls.push(audioSource.peaksUrl);
+  if (audioSource?.key) urls.push(apiUrl(`/api/audio/playback/${encodeURIComponent(`${audioSource.key}.peaks.json`)}`));
+  return [...new Set(urls)];
+}
+
+function normalizePreviewPeaks(raw) {
+  const channel = Array.isArray(raw?.[0]) ? raw[0] : raw;
+  if ((!Array.isArray(channel) && !ArrayBuffer.isView(channel)) || channel.length === 0) return null;
+
+  const step = Math.max(1, channel.length / WAVEFORM_BAR_COUNT);
+  const heights = Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => {
+    const start = Math.floor(i * step);
+    const end   = Math.max(start + 1, Math.min(Math.ceil((i + 1) * step), channel.length));
+    let peak = 0;
+    for (let j = start; j < end; j++) peak = Math.max(peak, Math.abs(channel[j] || 0));
+    return peak;
+  });
+
+  const maxH = Math.max(...heights, 0.001);
+  return heights.map((h) => h / maxH);
+}
+
+function getPreviewAudioContext() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!previewDecodeAudioContext) previewDecodeAudioContext = new AudioCtx();
+  return previewDecodeAudioContext;
+}
 
 function loadPreviewPeaks(peaksUrl) {
   if (!peaksUrl) return Promise.resolve(null);
@@ -48,52 +85,107 @@ function loadPreviewPeaks(peaksUrl) {
       return r.json();
     })
     .then((raw) => {
-      // API stores as flat float[] in [-1, 1]. WaveSurfer format [[...]] also handled.
-      const channel = Array.isArray(raw[0]) ? raw[0] : raw;
-      // Downsample to WAVEFORM_BAR_COUNT using max-abs per bucket.
-      const step = Math.max(1, channel.length / WAVEFORM_BAR_COUNT);
-      const heights = Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => {
-        const start = Math.floor(i * step);
-        const end   = Math.max(start + 1, Math.min(Math.ceil((i + 1) * step), channel.length));
-        let peak = 0;
-        for (let j = start; j < end; j++) peak = Math.max(peak, Math.abs(channel[j]));
-        return peak;
-      });
-      // Normalize so the loudest bar fills the lane.
-      const maxH = Math.max(...heights, 0.001);
-      const normalized = heights.map((h) => h / maxH);
+      const normalized = normalizePreviewPeaks(raw);
+      if (!normalized) return null;
       previewPeaksCache.set(peaksUrl, normalized);
       return normalized;
     })
     .catch(() => {
-      previewPeaksCache.set(peaksUrl, null);
       return null;
     })
     .finally(() => window.clearTimeout(timeoutId));
 }
 
+async function decodePreviewPeaks(audioUrl) {
+  if (!audioUrl) return null;
+  const cacheKey = `decode:${audioUrl}`;
+  if (previewPeaksCache.has(cacheKey)) return previewPeaksCache.get(cacheKey);
+
+  const audioContext = getPreviewAudioContext();
+  if (!audioContext) return null;
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(audioUrl, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const audioBuffer = await audioContext.decodeAudioData(await response.arrayBuffer());
+    const channelData = audioBuffer.getChannelData(0);
+    const normalized = normalizePreviewPeaks(channelData);
+    if (normalized) previewPeaksCache.set(cacheKey, normalized);
+    return normalized;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function loadPreviewPeaksForAudio(audioSource) {
+  for (const peaksUrl of getPreviewPeakUrls(audioSource)) {
+    const peaks = await loadPreviewPeaks(peaksUrl);
+    if (peaks) return peaks;
+  }
+  return decodePreviewPeaks(getPreviewPlaybackUrl(audioSource));
+}
+
 // ── StemLane ─────────────────────────────────────────────────────────────────
 // Renders the waveform-preview bar column inside each desktop track row.
-// When peaksUrl is provided the real audio peaks are fetched (cached) and used;
-// otherwise the lane is empty (no fake bars for tracks without uploaded audio).
-function StemLane({ label, peaksUrl }) {
+// Uses server peaks when available, derives the peaks URL from the stored audio
+// key while metadata is catching up, then falls back to browser audio decoding.
+function StemLane({ label, audioSource }) {
   const [peakBars, setPeakBars] = useState(() => {
     // Sync init from cache so cached tracks render immediately on first paint.
-    if (peaksUrl && previewPeaksCache.has(peaksUrl)) return previewPeaksCache.get(peaksUrl);
+    const cacheKey = getPreviewPeakUrls(audioSource).find((url) => previewPeaksCache.has(url));
+    if (cacheKey) return previewPeaksCache.get(cacheKey);
+    const audioUrl = getPreviewPlaybackUrl(audioSource);
+    if (audioUrl && previewPeaksCache.has(`decode:${audioUrl}`)) return previewPeaksCache.get(`decode:${audioUrl}`);
     return undefined;
   });
 
   useEffect(() => {
-    if (!peaksUrl) return;
+    if (!audioSource) {
+      setPeakBars(undefined);
+      return;
+    }
+
     let cancelled = false;
-    loadPreviewPeaks(peaksUrl).then((data) => {
-      if (!cancelled) setPeakBars(data);
+    const cachedKey = getPreviewPeakUrls(audioSource).find((url) => previewPeaksCache.has(url));
+    const audioUrl = getPreviewPlaybackUrl(audioSource);
+    setPeakBars(
+      cachedKey
+        ? previewPeaksCache.get(cachedKey)
+        : audioUrl && previewPeaksCache.has(`decode:${audioUrl}`)
+          ? previewPeaksCache.get(`decode:${audioUrl}`)
+          : undefined,
+    );
+    const retryDelays = [0, 2500, 5000, 10000, 15000];
+    const timers = [];
+
+    retryDelays.forEach((delay) => {
+      const timer = window.setTimeout(() => {
+        loadPreviewPeaksForAudio(audioSource).then((data) => {
+          if (!cancelled && data) setPeakBars(data);
+        });
+      }, delay);
+      timers.push(timer);
     });
-    return () => { cancelled = true; };
-  }, [peaksUrl]);
+
+    return () => {
+      cancelled = true;
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [
+    audioSource?.peaksUrl,
+    audioSource?.key,
+    audioSource?.previewUrl,
+    audioSource?.playbackUrl,
+    audioSource?.audioUrl,
+    audioSource?.url,
+  ]);
 
   return (
-    <span className="desktop-track-lane" aria-hidden="true">
+    <span className={`desktop-track-lane${peakBars?.length ? " has-bars" : ""}`} aria-hidden="true">
       <span className="desktop-track-lane-label">{label}</span>
       {peakBars && peakBars.length > 0 && (
         <span className="desktop-track-lane-bars">
@@ -151,7 +243,7 @@ const TrackRow = memo(function TrackRow({
   const shortTitle = abbrev(title);
   const activeVersion  = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
   const commentCount   = activeVersion?.comments?.length ?? 0;
-  const peaksUrl       = activeVersion?.audioSource?.peaksUrl || null;
+  const audioSource    = activeVersion?.audioSource || null;
 
   return (
     <div
@@ -176,7 +268,7 @@ const TrackRow = memo(function TrackRow({
       >
         <span className="desktop-track-badge">{index + 1}</span>
         <span className="desktop-track-name">{title}</span>
-        <StemLane label={shortTitle} peaksUrl={peaksUrl} />
+        <StemLane label={shortTitle} audioSource={audioSource} />
         <span className="desktop-track-count">{commentCount}</span>
       </button>
 

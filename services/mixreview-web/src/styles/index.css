@@ -4812,12 +4812,20 @@ body:has(.app-shell.reviewer-mode) {
   align-items: center;
   overflow: hidden;
   border-radius: 3px;
+  background: color-mix(in srgb, var(--stem-wave-color, #6d6457) 7%, transparent);
+}
+
+.desktop-track-lane.has-bars {
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 16%, transparent), transparent 58%),
     color-mix(in srgb, var(--stem-wave-color, #6d6457) 12%, transparent);
 }
 
 .desktop-track-item.active .desktop-track-lane {
+  background: color-mix(in srgb, var(--stem-wave-color, #6d6457) 9%, transparent);
+}
+
+.desktop-track-item.active .desktop-track-lane.has-bars {
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 22%, transparent), transparent 62%),
     color-mix(in srgb, var(--stem-wave-color, #6d6457) 15%, transparent);
