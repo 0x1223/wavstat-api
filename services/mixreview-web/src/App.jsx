@@ -530,7 +530,7 @@ export default function App({ onFirstRender } = {}) {
         tracks: nextTracks.map(toStoredTrack),
         albums,
         versions: activeStoredTrack?.versions.map(toStoredVersion) || [],
-        createdAt: sessionDetails.createdAt || new Date().toISOString(),
+        createdAt: sessionDetails.createdAt,
         updatedAt: new Date().toISOString()
       };
     },
@@ -1642,6 +1642,7 @@ export default function App({ onFirstRender } = {}) {
     }
 
     const nextTitle = `${artistName} - ${sessionName}`;
+    const createdAt = sessionDetails.createdAt || new Date().toISOString();
     const nextDetails = {
       ...sessionDetails,
       sessionName,
@@ -1650,7 +1651,8 @@ export default function App({ onFirstRender } = {}) {
       reviewerClientId: sessionDetails.reviewerClientId.trim(),
       reviewerToken: sessionDetails.reviewerToken.trim(),
       notes: sessionDetails.notes.trim(),
-      status: "Draft"
+      status: "Draft",
+      createdAt
     };
     const draftSession = {
       id: sessionId,
@@ -1664,7 +1666,7 @@ export default function App({ onFirstRender } = {}) {
       tracks: [],
       albums: [],
       versions: [],
-      createdAt: new Date().toISOString(),
+      createdAt,
       updatedAt: new Date().toISOString()
     };
 
