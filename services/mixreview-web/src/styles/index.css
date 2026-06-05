@@ -724,6 +724,16 @@ h2 {
   animation: rise-in 220ms ease both;
 }
 
+.admin-toast {
+  position: fixed;
+  z-index: 50;
+  right: 22px;
+  top: 22px;
+  max-width: min(420px, calc(100vw - 44px));
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+  pointer-events: none;
+}
+
 .share-panel {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.1fr) minmax(220px, 1.1fr) auto;
@@ -1674,16 +1684,19 @@ h2 {
 
 .admin-shell {
   min-height: 100dvh;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .admin-dashboard {
   display: grid;
   gap: 18px;
   min-height: 0;
+  align-content: start;
 }
 
 .admin-dashboard .summary-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 0;
 }
 
 .admin-session-list {

@@ -1976,8 +1976,13 @@ export default function App({ onFirstRender } = {}) {
   const copyClientReviewLink = useCallback((session) => {
     const token = session.shareId || session.id;
     const link = createShareLink(token, "reviewer");
-    navigator.clipboard?.writeText(link).catch(() => {});
-    setSessionMessage(`Client review link copied for ${session.projectName || session.id}.`);
+    if (!navigator.clipboard?.writeText) {
+      setSessionMessage("Clipboard is unavailable in this browser.");
+      return;
+    }
+    navigator.clipboard.writeText(link).catch(() => {
+      setSessionMessage("Client review link could not be copied.");
+    });
   }, []);
 
   const toggleSessionPriority = useCallback(async (session) => {
@@ -1986,12 +1991,10 @@ export default function App({ onFirstRender } = {}) {
     }
 
     setAdminSessions((current) =>
-      sortSessionSummaries(
-        current.map((candidate) =>
-          candidate.id === session.id
-            ? { ...candidate, isPriority: !candidate.isPriority }
-            : candidate,
-        ),
+      current.map((candidate) =>
+        candidate.id === session.id
+          ? { ...candidate, isPriority: !candidate.isPriority }
+          : candidate,
       ),
     );
 
@@ -2004,7 +2007,7 @@ export default function App({ onFirstRender } = {}) {
       await saveSessionToApi({
         ...storedSession,
         isPriority: !storedSession.isPriority,
-        updatedAt: new Date().toISOString()
+        updatedAt: storedSession.updatedAt
       });
       refreshAdminSessions();
     } catch (error) {
@@ -3200,7 +3203,7 @@ function AdminDashboard({
         </div>
       </header>
 
-      {message && <div className="session-message">{message}</div>}
+      {message && <div className="session-message admin-toast">{message}</div>}
 
       <section className="admin-dashboard" aria-label="Admin dashboard">
         <div className="summary-grid">
@@ -3600,10 +3603,6 @@ async function findReviewerSession(clientIdOrName) {
 
 function sortSessionSummaries(sessions) {
   return [...sessions].sort((a, b) => {
-    if (Boolean(a.isPriority) !== Boolean(b.isPriority)) {
-      return a.isPriority ? -1 : 1;
-    }
-
     return new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime();
   });
 }
