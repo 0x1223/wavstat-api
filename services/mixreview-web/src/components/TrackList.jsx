@@ -331,7 +331,7 @@ function StemLane({ label, audioSource, trackColor }) {
       {visibleBars.length > 0 ? (
         <span className="desktop-track-lane-bars">
           {visibleBars.map((height, index) => (
-            <i key={index} style={{ height: `${Math.round(8 + height * 42)}px` }} />
+            <i key={index} style={{ height: `${Math.round(4 + height * 36)}px` }} />
           ))}
         </span>
       ) : null}
