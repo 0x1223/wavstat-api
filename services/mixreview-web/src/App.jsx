@@ -100,9 +100,7 @@ const initialActiveTrackId =
 const initialActiveTrack = initialTracks.find((track) => track.id === initialActiveTrackId) || initialTracks[0] || null;
 const initialVersions = initialActiveTrack?.versions || legacyInitialVersions;
 const initialReviewer =
-  savedAccessState?.mode === "admin"
-    ? "Engineer"
-    : routeMode === "reviewer"
+  routeMode === "reviewer"
     ? "Artist"
     : routeMode === "admin" && safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true"
       ? "Engineer"
@@ -180,10 +178,8 @@ export default function App({ onFirstRender } = {}) {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [appView, setAppView] = useState(
-    !forceStartScreen && (routeSessionId || routeMode || shareRoute || restoredSession)
+    !forceStartScreen && (routeSessionId || shareRoute || restoredSession)
       ? "workspace"
-      : !forceStartScreen && savedAccessState?.mode === "admin"
-      ? "admin"
       : "start",
   );
   const [adminSessions, setAdminSessions] = useState([]);
@@ -192,7 +188,7 @@ export default function App({ onFirstRender } = {}) {
   const [shareId, setShareId] = useState(shareRoute?.shareId || restoredSession?.shareId || null);
   const [isSharePanelOpen, setIsSharePanelOpen] = useState(false);
   const [hasStarted, setHasStarted] = useState(
-    Boolean(!forceStartScreen && (shareRoute || restoredSession || routeMode)),
+    Boolean(!forceStartScreen && (shareRoute || restoredSession)),
   );
   const [isSessionHydrating, setIsSessionHydrating] = useState(
     // Start hydrating whenever a session ID is present in the URL, even if a
@@ -224,9 +220,7 @@ export default function App({ onFirstRender } = {}) {
   const [importProgress, setImportProgress] = useState({ done: 0, total: 0, errors: 0 });
 
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
-    () =>
-      safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true" ||
-      savedAccessState?.mode === "admin",
+    () => safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true",
   );
   const activeMarkerRef = useRef(null);
   const playerRef = useRef(null);
@@ -611,6 +605,9 @@ export default function App({ onFirstRender } = {}) {
           addDeletedSessionId(routeSessionId);
           clearSessionCache(routeSessionId);
           clearSharedSession(routeSessionId);
+          if (loadAccessState()?.sessionId === routeSessionId) {
+            clearAccessState();
+          }
           setTracks([]);
           setActiveTrackId(null);
           setActiveStemPreviewAlbumId(null);
@@ -771,9 +768,12 @@ export default function App({ onFirstRender } = {}) {
   const getReconnectReviewer = useCallback((accessState, storedSession) => {
     const requestedMode = routeMode || accessState?.mode;
     if (requestedMode === "admin" || accessState?.role === "Engineer") {
-      window.sessionStorage.setItem(ADMIN_UNLOCK_SESSION_KEY, "true");
-      setIsEngineerUnlocked(true);
-      return "Engineer";
+      if (safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true") {
+        setIsEngineerUnlocked(true);
+        return "Engineer";
+      }
+      setIsEngineerUnlocked(false);
+      return "Artist";
     }
 
     setIsEngineerUnlocked(false);
@@ -815,6 +815,9 @@ export default function App({ onFirstRender } = {}) {
     if (currentView === "setup") {
       return;
     }
+    if (currentView === "start") {
+      return;
+    }
 
     const accessState = loadAccessState();
     const snapshot = sessionSnapshotRef.current;
@@ -826,7 +829,6 @@ export default function App({ onFirstRender } = {}) {
     const targetSessionId =
       validRouteSessionId ||
       (snapshot?.hasStarted && snapshot?.id ? snapshot.id : null) ||
-      accessState?.sessionId ||
       shareId;
 
     if (!targetSessionId) {
