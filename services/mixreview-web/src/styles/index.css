@@ -4997,11 +4997,12 @@ body:has(.app-shell.reviewer-mode) {
 .desktop-track-lane-canvas {
   position: absolute;
   inset: 0;
+  z-index: 1;
   width: 100%;
   height: 100%;
   display: block;
   pointer-events: none;
-  opacity: 0.88;
+  opacity: 1;
 }
 
 .desktop-track-item.active .desktop-track-lane-canvas {
@@ -5009,8 +5010,8 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 .desktop-track-lane.is-loading-preview .desktop-track-lane-canvas {
-  opacity: 0.42;
-  filter: saturate(0.82);
+  opacity: 0.72;
+  filter: saturate(0.95);
 }
 
 /* ── Comment count badge ────────────────────────────────────────────────────── */

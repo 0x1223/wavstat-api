@@ -123,8 +123,10 @@ function drawWaveformOnCanvas(canvas, bars, progressColor) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const W   = canvas.offsetWidth;
-  const H   = canvas.offsetHeight;
+  const bounds = canvas.getBoundingClientRect();
+  const parentBounds = canvas.parentElement?.getBoundingClientRect();
+  const W = Math.round(bounds.width || parentBounds?.width || canvas.offsetWidth || 0);
+  const H = Math.round(bounds.height || parentBounds?.height || canvas.offsetHeight || 0);
   if (W <= 0 || H <= 0) return;
 
   const pW = Math.round(W * dpr);
@@ -278,11 +280,22 @@ function StemLane({ label, audioSource, trackColor }) {
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    let rafId = 0;
     const draw = () => drawWaveformOnCanvas(canvas, bars, progressColor);
-    draw();
+    const scheduleDraw = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        draw();
+      });
+    };
+    scheduleDraw();
     const ro = new ResizeObserver(draw);
-    ro.observe(canvas);
-    return () => ro.disconnect();
+    ro.observe(canvas.parentElement || canvas);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      ro.disconnect();
+    };
   }, [bars, progressColor]);
 
   return (
