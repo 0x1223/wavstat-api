@@ -305,7 +305,9 @@ function normalizeComment(comment) {
     author: normalizeString(comment.author, "Reviewer"),
     text: normalizeString(comment.text, "Imported timestamp note."),
     resolved: Boolean(comment.resolved),
-    submitted: comment.submitted === false ? false : true
+    submitted: comment.submitted === false ? false : true,
+    createdAt: normalizeString(comment.createdAt, ""),
+    updatedAt: normalizeString(comment.updatedAt, "")
   };
 }
 

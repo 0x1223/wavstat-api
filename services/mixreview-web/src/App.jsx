@@ -60,7 +60,8 @@ const emptySessionDetails = {
   reviewerToken: "",
   notes: "",
   isPriority: false,
-  status: "Draft"
+  status: "Draft",
+  createdAt: null
 };
 
 const routeParams = new URLSearchParams(window.location.search);
@@ -529,6 +530,7 @@ export default function App({ onFirstRender } = {}) {
         tracks: nextTracks.map(toStoredTrack),
         albums,
         versions: activeStoredTrack?.versions.map(toStoredVersion) || [],
+        createdAt: sessionDetails.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
     },
@@ -1662,6 +1664,7 @@ export default function App({ onFirstRender } = {}) {
       tracks: [],
       albums: [],
       versions: [],
+      createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
@@ -2102,18 +2105,15 @@ export default function App({ onFirstRender } = {}) {
       author,
       text: text.trim() || "New timestamp marker ready for a mix note.",
       resolved: false,
-      submitted: isEngineerMode
+      submitted: isEngineerMode,
+      createdAt: new Date().toISOString()
     };
 
     updateActiveVersion((version) => ({
       ...version,
       selectedTime: time,
       selectedCommentId: commentId,
-      comments: [...version.comments, newComment].sort((a, b) => a.time - b.time),
-      activity: [
-        makeActivity("Comment added", `${author} added a marker at ${formatTime(time)}`),
-        ...version.activity
-      ]
+      comments: [...version.comments, newComment].sort((a, b) => a.time - b.time)
     }));
   }, [currentReviewer, isEngineerMode, permissions.canReview, updateActiveVersion]);
 
@@ -2220,12 +2220,8 @@ export default function App({ onFirstRender } = {}) {
       return {
         ...version,
         comments: version.comments.map((comment) =>
-          comment.id === commentId ? { ...comment, text: nextText.trim() } : comment,
-        ),
-        activity: [
-          makeActivity("Comment edited", `${currentReviewer} updated a timestamp note`),
-          ...version.activity
-        ]
+          comment.id === commentId ? { ...comment, text: nextText.trim(), updatedAt: new Date().toISOString() } : comment,
+        )
       };
     });
   }, [currentReviewer, permissions, updateActiveVersion]);
@@ -2629,13 +2625,6 @@ export default function App({ onFirstRender } = {}) {
           createdAt: new Date().toISOString()
         },
         ...version.approvalHistory
-      ],
-      activity: [
-        makeActivity(
-          "Approval changed",
-          `${currentReviewer} set ${version.label} to ${nextStatus}`,
-        ),
-        ...version.activity
       ]
     }));
   }, [activeVersion, currentReviewer, permissions.canReview, updateActiveVersion]);
@@ -2665,14 +2654,7 @@ export default function App({ onFirstRender } = {}) {
       return {
         ...version,
         approvalStatus: deriveReviewStatus({ ...version, comments: nextComments }),
-        comments: nextComments,
-        activity: [
-          makeActivity(
-            "Feedback submitted",
-            `${currentReviewer} submitted ${pendingComments.length} note${pendingComments.length === 1 ? "" : "s"}`,
-          ),
-          ...version.activity
-        ]
+        comments: nextComments
       };
     });
   }, [currentReviewer, permissions.canSubmit, updateActiveVersion]);
@@ -2936,6 +2918,7 @@ export default function App({ onFirstRender } = {}) {
             versions={versions}
             approvalSummary={approvalSummary}
             activeTrack={activeTrack}
+            sessionCreatedAt={sessionDetails.createdAt}
             currentReviewer={currentReviewer}
             onReviewerChange={updateReviewer}
             onApprovalChange={updateApprovalStatus}
@@ -3389,7 +3372,8 @@ function buildSessionDetails(session) {
     reviewerToken: session?.reviewerToken || "",
     notes: session?.notes || "",
     isPriority: Boolean(session?.isPriority),
-    status: session?.status || "Draft"
+    status: session?.status || "Draft",
+    createdAt: session?.createdAt || null
   };
 }
 
