@@ -384,6 +384,10 @@ body {
   min-width: 0;
 }
 
+.desktop-session-track-count {
+  display: none;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: var(--gold);
@@ -1680,6 +1684,10 @@ h2 {
 
 .review-dashboard {
   padding: 20px;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  align-content: start;
+  overflow: hidden;
 }
 
 .admin-shell {
@@ -1945,6 +1953,11 @@ h2 {
   display: grid;
   gap: 12px;
   margin-top: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 
 .mini-list {
@@ -5177,15 +5190,64 @@ body:has(.app-shell.reviewer-mode) {
    Scope: project/track/stem panel only. No mobile, no playback, no transport.
    ════════════════════════════════════════════════════════════════════════════ */
 @media (min-width: 981px) {
+  .app-shell:not(.setup-shell):not(.admin-shell) {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .topbar {
+    align-items: start;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .desktop-session-track-count {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 8px 0 0;
+    color: rgba(215, 173, 98, 0.88);
+    font-size: 0.74rem;
+    font-weight: 850;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .desktop-session-track-count strong {
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 0.72rem;
+    font-weight: 900;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .review-layout {
+    --workspace-top-row-height: clamp(420px, 48dvh, 560px);
+    --workspace-bottom-row-height: clamp(360px, 40dvh, 520px);
+    align-items: start;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .review-main,
+  .app-shell:not(.setup-shell):not(.admin-shell) .review-side {
+    grid-template-rows: var(--workspace-top-row-height) var(--workspace-bottom-row-height);
+  }
 
   /* ── 2. Lock the project/stem window to a fixed height ─────────────────────
      Starts at the same Y as the Review Dashboard top border (both at the top
      of their review-layout columns). Bottom edge aligns beside "No approvals
      yet" in the dashboard.  All extra tracks scroll inside this fixed window. */
   .app-shell:not(.setup-shell):not(.admin-shell) .track-list-panel {
-    height:     clamp(340px, 48dvh, 490px);
-    max-height: clamp(340px, 48dvh, 490px);
+    height: 100%;
+    max-height: none;
+    grid-template-rows: auto minmax(0, 1fr);
     overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .review-dashboard,
+  .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel,
+  .app-shell:not(.setup-shell):not(.admin-shell) .comment-sidebar {
+    height: 100%;
+    max-height: none;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .track-list-albums {
+    max-height: none;
+    min-height: 0;
   }
 
   /* ── 3a. Double individual track row height ─────────────────────────────────

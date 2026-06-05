@@ -409,6 +409,13 @@ export default function App({ onFirstRender } = {}) {
     () => getTrackApprovalSummary(syncActiveTrack(tracks, activeTrackId, versions, activeVersionId)),
     [activeTrackId, activeVersionId, tracks, versions],
   );
+  const importedTrackCount = useMemo(
+    () =>
+      tracks.filter((track) =>
+        track.versions?.some((version) => version.audioSource),
+      ).length,
+    [tracks],
+  );
   const canUploadAudio = permissions.canEdit && isSessionSynced && !isSessionSaving;
   const isReviewerMode = !permissions.canEdit && permissions.canReview;
   const hasPlayableAudio = Boolean(audioSource?.playbackUrl || audioSource?.url || activeAudioUrl);
@@ -2763,6 +2770,7 @@ export default function App({ onFirstRender } = {}) {
           unresolvedCount={unresolvedCount}
           versions={versions}
           activeVersionId={activeVersionId}
+          importedTrackCount={importedTrackCount}
           backLabel={isEngineerMode ? "Admin Dashboard" : "Back to Start"}
           onStatusChange={updateApprovalStatus}
           statusState={statusState}

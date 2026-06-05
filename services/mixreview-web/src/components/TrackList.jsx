@@ -378,11 +378,6 @@ export const TrackList = memo(function TrackList({
     [albums],
   );
 
-  const importedTracks = useMemo(
-    () => visibleTracks.filter((t) => t.versions.some((v) => v.audioSource)),
-    [visibleTracks],
-  );
-
   const trackMap = useMemo(
     () => Object.fromEntries(visibleTracks.map((t) => [t.id, t])),
     [visibleTracks],
@@ -580,26 +575,7 @@ export const TrackList = memo(function TrackList({
   return (
     <section className="track-list-panel" aria-label="Project tracks">
       <div className="track-list-header">
-        {/* ── Left: eyebrow + count on one line, project subtitle below ─────── */}
         <div className="track-list-header-content">
-          <div className="track-list-header-top">
-            <p className="eyebrow">Project Tracks</p>
-            <span className="track-list-imported-count">
-              {importedTracks.length} imported
-            </span>
-          </div>
-          {desktopSelectedAlbum && !isEmpty && (
-            <p className="track-list-header-subtitle">
-              <span className="track-list-header-subtitle-name">
-                {desktopSelectedAlbum.title}
-              </span>
-              {" · "}
-              <span className="track-list-header-subtitle-count">
-                {displayBuckets[0]?.albumTracks.length ?? 0}
-                {" track"}{(displayBuckets[0]?.albumTracks.length ?? 0) !== 1 ? "s" : ""}
-              </span>
-            </p>
-          )}
           {deleteError && <p className="upload-error">{deleteError}</p>}
         </div>
 

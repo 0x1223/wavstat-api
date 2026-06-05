@@ -4,6 +4,7 @@ export function Header({
   unresolvedCount,
   versions,
   activeVersionId,
+  importedTrackCount = 0,
   backLabel = "Back to Start",
   onStatusChange,
   statusState,
@@ -41,6 +42,12 @@ export function Header({
         <p className="eyebrow">MixReview</p>
         <div className="mobile-session-title">
           <h1>{projectName}</h1>
+          {showAdminActions && (
+            <p className="desktop-session-track-count">
+              Project Tracks
+              <strong>{importedTrackCount} imported</strong>
+            </p>
+          )}
           {!permissions.canEdit && permissions.canReview && (
             <span
               className={`mobile-status-badge${reviewSummary ? " with-count" : ""} ${statusState?.[approvalStatus]?.tone || ""}`}
