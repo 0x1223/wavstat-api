@@ -2764,6 +2764,39 @@ export default function App({ onFirstRender } = {}) {
     );
   }
 
+  const transportBar = activeTrack ? (
+    <TransportBar
+      currentTime={currentTime}
+      duration={duration}
+      isPlaying={isPlaying}
+      isDisabled={!isPlayerReady}
+      onPlayPause={() => {
+        // Record the first real user Play tap (not a Pause press).
+        // isPlaying reflects the current state, so !isPlaying means the
+        // user is about to start playback.
+        if (isMobileViewport() && isReviewerMode && !isPlaying) {
+          userHasPlayedRef.current = true;
+          setMobileHasPlayed(true);
+          // Prime the iOS audio session so that AudioContext.resume() calls
+          // in MobileSpectrumAnalyzer succeed without their own gesture token.
+          unlockAudioSession();
+        }
+        playerRef.current?.playPause();
+      }}
+      onSkipBackward={() => playerRef.current?.skip(-5)}
+      onSkipForward={() => playerRef.current?.skip(5)}
+      repeatMode={repeatMode}
+      hasPrev={hasPrev}
+      hasNext={hasNext}
+      onPrev={handlePrevTrack}
+      onNext={handleNextTrack}
+      onRepeatChange={handleRepeatChange}
+      canReview={isEngineerMode && !isActiveStemProject && duration > 0}
+      isReviewActive={isMarkerToolActive}
+      onReviewToggle={() => setIsMarkerToolActive((value) => !value)}
+    />
+  ) : null;
+
   return (
     <main className={`app-shell${isReviewerMode ? " reviewer-mode" : ""}`}>
       <div className="top-stack">
@@ -2952,6 +2985,8 @@ export default function App({ onFirstRender } = {}) {
               onMarkerToolActiveChange={setIsMarkerToolActive}
             />
           ) : null}
+
+          {isEngineerMode && transportBar}
         </div>
 
         <div className="review-side">
@@ -3075,38 +3110,7 @@ export default function App({ onFirstRender } = {}) {
   </>
 )}
 
-      {activeTrack && (
-        <TransportBar
-          currentTime={currentTime}
-          duration={duration}
-          isPlaying={isPlaying}
-          isDisabled={!isPlayerReady}
-          onPlayPause={() => {
-            // Record the first real user Play tap (not a Pause press).
-            // isPlaying reflects the current state, so !isPlaying means the
-            // user is about to start playback.
-            if (isMobileViewport() && isReviewerMode && !isPlaying) {
-              userHasPlayedRef.current = true;
-              setMobileHasPlayed(true);
-              // Prime the iOS audio session so that AudioContext.resume() calls
-              // in MobileSpectrumAnalyzer succeed without their own gesture token.
-              unlockAudioSession();
-            }
-            playerRef.current?.playPause();
-          }}
-          onSkipBackward={() => playerRef.current?.skip(-5)}
-          onSkipForward={() => playerRef.current?.skip(5)}
-          repeatMode={repeatMode}
-          hasPrev={hasPrev}
-          hasNext={hasNext}
-          onPrev={handlePrevTrack}
-          onNext={handleNextTrack}
-          onRepeatChange={handleRepeatChange}
-          canReview={isEngineerMode && !isActiveStemProject && duration > 0}
-          isReviewActive={isMarkerToolActive}
-          onReviewToggle={() => setIsMarkerToolActive((value) => !value)}
-        />
-      )}
+      {!isEngineerMode && transportBar}
 
       {isReviewerMode && mobileNoteDraft && (
         <>

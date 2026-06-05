@@ -985,7 +985,7 @@ h2 {
 }
 
 .review-layout.side-collapsed .review-side {
-  display: none;
+  display: none !important;
 }
 
 /* Toggle button — lives in the session-actions bar so it's always reachable */
@@ -5227,7 +5227,11 @@ body:has(.app-shell.reviewer-mode) {
    Scope: project/track/stem panel only. No mobile, no playback, no transport.
    ════════════════════════════════════════════════════════════════════════════ */
 @media (min-width: 981px) {
-  .app-shell:not(.setup-shell):not(.admin-shell) {
+  .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .app-shell.reviewer-mode {
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
 
@@ -5269,10 +5273,25 @@ body:has(.app-shell.reviewer-mode) {
     min-height: 0;
   }
 
-  .app-shell:not(.setup-shell):not(.admin-shell) .review-main,
+  .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
+    display: grid;
+    grid-template-rows: var(--workspace-top-row-height) minmax(0, 1fr) auto;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-shell.reviewer-mode .review-main {
+    display: grid;
+    grid-template-rows: var(--workspace-top-row-height) minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
   .app-shell:not(.setup-shell):not(.admin-shell) .review-side {
     display: grid;
-    grid-template-rows: var(--workspace-top-row-height) var(--workspace-bottom-row-height);
+    grid-template-rows: var(--workspace-top-row-height) minmax(0, 1fr);
     height: 100%;
     min-height: 0;
     overflow: hidden;
