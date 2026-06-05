@@ -4791,7 +4791,7 @@ body:has(.app-shell.reviewer-mode) {
 /* ── Desktop track item: full-width horizontal row ─────────────────────────── */
 .desktop-track-item {
   display: grid !important;
-  grid-template-columns: minmax(164px, 196px) minmax(0, 1fr);
+  grid-template-columns: 196px minmax(0, 1fr);
   align-items: stretch !important;
   gap: 0;
   width: 100%;
@@ -4829,6 +4829,8 @@ body:has(.app-shell.reviewer-mode) {
 
 .desktop-track-header {
   min-width: 0;
+  width: 100%;
+  height: 100%;
   display: grid;
   grid-template-columns: 7px minmax(0, 1fr);
   align-self: stretch;
@@ -4848,6 +4850,7 @@ body:has(.app-shell.reviewer-mode) {
 
 .desktop-track-meta {
   min-width: 0;
+  width: 100%;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   gap: 6px;
@@ -4856,6 +4859,7 @@ body:has(.app-shell.reviewer-mode) {
 
 .desktop-track-title-row {
   min-width: 0;
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -4883,6 +4887,7 @@ body:has(.app-shell.reviewer-mode) {
 
 /* ── Track name (truncated) ─────────────────────────────────────────────────── */
 .desktop-track-name {
+  display: block;
   font-size: 0.78rem;
   font-weight: 850;
   white-space: nowrap;
@@ -4900,6 +4905,7 @@ body:has(.app-shell.reviewer-mode) {
 
 .desktop-track-comments {
   min-width: 0;
+  width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -4950,13 +4956,19 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 .desktop-track-item.active .desktop-track-lane {
-  background: color-mix(in srgb, var(--stem-wave-color, #6d6457) 9%, transparent);
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.13) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.15) 50%, transparent 51%),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 18%, #333), #242424);
+  background-size: 82px 100%, 100% 100%, 100% 100%;
 }
 
 .desktop-track-item.active .desktop-track-lane.has-bars {
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 22%, transparent), transparent 62%),
-    color-mix(in srgb, var(--stem-wave-color, #6d6457) 15%, transparent);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.13) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.15) 50%, transparent 51%),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 20%, #363636), #252525);
+  background-size: 82px 100%, 100% 100%, 100% 100%;
 }
 
 .desktop-track-lane-label {
@@ -5004,6 +5016,11 @@ body:has(.app-shell.reviewer-mode) {
   border-radius: 999px;
   background: currentColor;
   box-shadow: 0 0 8px color-mix(in srgb, currentColor 24%, transparent);
+}
+
+.desktop-track-lane.is-loading-preview .desktop-track-lane-bars {
+  opacity: 0.42;
+  filter: saturate(0.88);
 }
 
 /* ── Comment count badge ────────────────────────────────────────────────────── */

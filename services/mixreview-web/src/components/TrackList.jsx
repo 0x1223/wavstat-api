@@ -23,8 +23,8 @@ const RENDERED_TRACK_BATCH = 12;
 
 // 500 bars so the waveform fills the lane at any column width; overflow:hidden clips the rest.
 const WAVEFORM_BAR_COUNT = 500;
-// Max bar height (px) — fills the 40 px usable lane at ≥ 981 px viewport.
-const PREVIEW_BAR_MAX_PX = 36;
+// Max bar height (px) — fills the DAW-style lane without touching the label.
+const PREVIEW_BAR_MAX_PX = 44;
 
 // ── Real peak preview cache ───────────────────────────────────────────────────
 // Module-level so cached data survives re-renders and session switches without
@@ -179,12 +179,28 @@ function StemLane({ label, audioSource }) {
     audioSource?.url,
   ]);
 
+  const fallbackBars = useMemo(() => {
+    if (peakBars?.length || !audioSource) return [];
+    let seed = 0;
+    for (let i = 0; i < (label || "").length; i += 1) {
+      seed = (seed * 31 + label.charCodeAt(i)) % 9973;
+    }
+    return Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => {
+      const a = Math.sin((i + seed) * 0.115);
+      const b = Math.sin((i + seed) * 0.031);
+      const c = Math.sin((i + seed) * 0.007);
+      return Math.max(0.04, Math.abs(a * 0.46 + b * 0.34 + c * 0.20));
+    });
+  }, [audioSource, label, peakBars?.length]);
+
+  const bars = peakBars?.length ? peakBars : fallbackBars;
+
   return (
-    <span className={`desktop-track-lane${peakBars?.length ? " has-bars" : ""}`} aria-hidden="true">
+    <span className={`desktop-track-lane${bars.length ? " has-bars" : ""}${peakBars?.length ? "" : " is-loading-preview"}`} aria-hidden="true">
       <span className="desktop-track-lane-label">{label}</span>
-      {peakBars && peakBars.length > 0 && (
+      {bars.length > 0 && (
         <span className="desktop-track-lane-bars">
-          {peakBars.map((v, i) => (
+          {bars.map((v, i) => (
             <i key={i} style={{ height: `${Math.max(2, Math.round(v * PREVIEW_BAR_MAX_PX))}px` }} />
           ))}
         </span>
