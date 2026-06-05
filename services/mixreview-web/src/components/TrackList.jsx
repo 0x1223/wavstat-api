@@ -274,6 +274,25 @@ function StemLane({ label, audioSource, trackColor }) {
   const bars          = peakBars?.length ? peakBars : fallbackBars;
   const progressColor = trackColor?.progress || "#d6a354";
   const isLoading     = !peakBars?.length;
+  const visibleBars   = useMemo(() => {
+    if (!bars.length) return [];
+
+    const targetCount = Math.min(WAVEFORM_BAR_COUNT, Math.max(180, bars.length));
+    const step = bars.length / targetCount;
+
+    return Array.from({ length: targetCount }, (_, index) => {
+      const start = Math.floor(index * step);
+      const end = Math.max(start + 1, Math.min(bars.length, Math.ceil((index + 1) * step)));
+      let peak = 0;
+
+      for (let i = start; i < end; i += 1) {
+        const value = Number.isFinite(bars[i]) ? Math.abs(bars[i]) : 0;
+        peak = Math.max(peak, Math.min(1, value));
+      }
+
+      return Math.max(0.035, peak);
+    });
+  }, [bars]);
 
   // Draw (or redraw on resize) synchronously before browser paint so there's
   // no blank flash on mount. ResizeObserver keeps canvas crisp after layout shifts.
@@ -309,6 +328,13 @@ function StemLane({ label, audioSource, trackColor }) {
     >
       <span className="desktop-track-lane-label">{label}</span>
       <canvas ref={canvasRef} className="desktop-track-lane-canvas" />
+      {visibleBars.length > 0 ? (
+        <span className="desktop-track-lane-bars">
+          {visibleBars.map((height, index) => (
+            <i key={index} style={{ height: `${Math.round(8 + height * 42)}px` }} />
+          ))}
+        </span>
+      ) : null}
     </span>
   );
 }
