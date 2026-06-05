@@ -5026,27 +5026,6 @@ body:has(.app-shell.reviewer-mode) {
   filter: saturate(0.95);
 }
 
-/* ── Canvas waveform — guarded renderer kept below the visible bar layer ───── */
-.desktop-track-lane-canvas {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  pointer-events: none;
-  opacity: 0;
-}
-
-.desktop-track-item.active .desktop-track-lane-canvas {
-  opacity: 0;
-}
-
-.desktop-track-lane.is-loading-preview .desktop-track-lane-canvas {
-  opacity: 0;
-  filter: saturate(0.95);
-}
-
 /* ── Comment count badge ────────────────────────────────────────────────────── */
 .desktop-track-count {
   flex-shrink: 0;

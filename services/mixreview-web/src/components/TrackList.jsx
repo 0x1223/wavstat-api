@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, memo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, memo, useCallback } from "react";
 import { getStemColor } from "../lib/stemColors.js";
 import { apiUrl } from "../config/api.js";
 
@@ -113,81 +113,6 @@ async function decodePreviewPeaks(audioUrl) {
   }
 }
 
-function hexToRgb(hex) {
-  const h = (hex || "#d6a354").replace("#", "");
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
-
-function drawWaveformOnCanvas(canvas, bars, progressColor) {
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const bounds = canvas.getBoundingClientRect();
-  const parentBounds = canvas.parentElement?.getBoundingClientRect();
-  const W = Math.round(bounds.width || parentBounds?.width || canvas.offsetWidth || 0);
-  const H = Math.round(bounds.height || parentBounds?.height || canvas.offsetHeight || 0);
-  if (W <= 0 || H <= 0) return;
-
-  const pW = Math.round(W * dpr);
-  const pH = Math.round(H * dpr);
-  if (canvas.width !== pW || canvas.height !== pH) {
-    canvas.width  = pW;
-    canvas.height = pH;
-  }
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  if (!bars?.length) return;
-
-  const [r, g, b] = hexToRgb(progressColor);
-  const cy = H / 2;
-  const maxHalf = (H * 0.70) / 2;
-  const columnStep = W < 700 ? 1 : 2;
-  const sourceStep = bars.length / Math.max(1, Math.ceil(W / columnStep));
-
-  // Faint DAW centerline: perfectly horizontal, no blur or glow.
-  ctx.beginPath();
-  ctx.moveTo(0, cy);
-  ctx.lineTo(W, cy);
-  ctx.strokeStyle = `rgba(${r},${g},${b},0.26)`;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-
-  // Professional DAW peak rendering: one min/max vertical stroke per pixel
-  // column (or every 2 px on wide lanes). No curves, no smoothing, no glow.
-  ctx.beginPath();
-  for (let x = 0, column = 0; x < W; x += columnStep, column += 1) {
-    const start = Math.floor(column * sourceStep);
-    const end = Math.max(start + 1, Math.min(Math.ceil((column + 1) * sourceStep), bars.length));
-    let minPeak = 0;
-    let maxPeak = 0;
-
-    for (let i = start; i < end; i += 1) {
-      const value = Number.isFinite(bars[i]) ? Math.max(-1, Math.min(1, bars[i])) : 0;
-      if (value < 0) {
-        minPeak = Math.min(minPeak, value);
-      } else {
-        maxPeak = Math.max(maxPeak, value);
-        minPeak = Math.min(minPeak, -value);
-      }
-    }
-
-    const top = Math.max(cy - maxHalf, cy + minPeak * maxHalf);
-    const bottom = Math.min(cy + maxHalf, cy + maxPeak * maxHalf);
-    const crispX = Math.round(x) + 0.5;
-
-    ctx.moveTo(crispX, top);
-    ctx.lineTo(crispX, bottom);
-  }
-
-  ctx.lineWidth = 1;
-  ctx.lineCap = "butt";
-  ctx.lineJoin = "miter";
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = `rgba(${r},${g},${b},0.94)`;
-  ctx.stroke();
-}
-
 async function loadPreviewPeaksForAudio(audioSource) {
   for (const peaksUrl of getPreviewPeakUrls(audioSource)) {
     const peaks = await loadPreviewPeaks(peaksUrl);
@@ -197,14 +122,12 @@ async function loadPreviewPeaksForAudio(audioSource) {
 }
 
 // ── StemLane ─────────────────────────────────────────────────────────────────
-// Renders the canvas waveform preview inside each desktop track row.
+// Renders the desktop project-row waveform preview.
 // Uses server peaks when available, derives the peaks URL from the stored audio
 // key while metadata is catching up, then falls back to browser audio decoding.
-// While real peaks are loading, a deterministic synthetic waveform is drawn
+// While real peaks are loading, deterministic synthetic bars are rendered
 // instantly from the track title so the lane is never blank.
 function StemLane({ label, audioSource, trackColor }) {
-  const canvasRef = useRef(null);
-
   const [peakBars, setPeakBars] = useState(() => {
     // Sync init from cache so cached tracks render immediately on first paint.
     const cacheKey = getPreviewPeakUrls(audioSource).find((url) => previewPeaksCache.has(url));
@@ -271,10 +194,9 @@ function StemLane({ label, audioSource, trackColor }) {
     });
   }, [audioSource, label, peakBars?.length]);
 
-  const bars          = peakBars?.length ? peakBars : fallbackBars;
-  const progressColor = trackColor?.progress || "#d6a354";
-  const isLoading     = !peakBars?.length;
-  const visibleBars   = useMemo(() => {
+  const bars        = peakBars?.length ? peakBars : fallbackBars;
+  const isLoading   = !peakBars?.length;
+  const visibleBars = useMemo(() => {
     if (!bars.length) return [];
 
     const targetCount = Math.min(WAVEFORM_BAR_COUNT, Math.max(180, bars.length));
@@ -294,29 +216,6 @@ function StemLane({ label, audioSource, trackColor }) {
     });
   }, [bars]);
 
-  // Draw (or redraw on resize) synchronously before browser paint so there's
-  // no blank flash on mount. ResizeObserver keeps canvas crisp after layout shifts.
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    let rafId = 0;
-    const draw = () => drawWaveformOnCanvas(canvas, bars, progressColor);
-    const scheduleDraw = () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        rafId = 0;
-        draw();
-      });
-    };
-    scheduleDraw();
-    const ro = new ResizeObserver(draw);
-    ro.observe(canvas.parentElement || canvas);
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      ro.disconnect();
-    };
-  }, [bars, progressColor]);
-
   return (
     <span
       className={[
@@ -327,7 +226,6 @@ function StemLane({ label, audioSource, trackColor }) {
       aria-hidden="true"
     >
       <span className="desktop-track-lane-label">{label}</span>
-      <canvas ref={canvasRef} className="desktop-track-lane-canvas" />
       {visibleBars.length > 0 ? (
         <span className="desktop-track-lane-bars">
           {visibleBars.map((height, index) => (
