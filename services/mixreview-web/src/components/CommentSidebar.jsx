@@ -11,7 +11,7 @@ export function CommentSidebar({
   onCommentDrawerOpen,
   currentReviewer,
   canModifyComment = () => true,
-  canResolve = true
+  canResolve = () => true
 }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState("");
@@ -68,6 +68,7 @@ export function CommentSidebar({
           const isSelected = comment.id === selectedCommentId;
           const isEditing = editingId === comment.id;
           const canModify = canModifyComment(comment);
+          const canResolveComment = canResolve(comment);
 
           return (
             <article
@@ -129,7 +130,7 @@ export function CommentSidebar({
                 <button
                   type="button"
                   className={`resolve-toggle${comment.resolved ? " resolved" : ""}`}
-                  disabled={!canResolve}
+                  disabled={!canResolveComment}
                   onClick={() => onToggleResolved(comment.id)}
                 >
                   {comment.resolved ? "Resolved" : "Unresolved"}

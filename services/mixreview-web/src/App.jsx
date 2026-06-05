@@ -87,7 +87,7 @@ const initialAlbums = buildInitialAlbums(restoredSession);
 // default to the absolute first track (index 0) so a clean reviewer share link
 // never silently lands on an arbitrary mid-session track.
 const initialActiveTrackId =
-  (routeTrackId && initialTracks.some((t) => t.id === routeTrackId))
+  (routeMode !== "reviewer" && !shareRoute && routeTrackId && initialTracks.some((t) => t.id === routeTrackId))
     ? routeTrackId
     : initialTracks[0]?.id || null;
 const initialActiveTrack = initialTracks.find((track) => track.id === initialActiveTrackId) || initialTracks[0] || null;
@@ -245,6 +245,7 @@ export default function App({ onFirstRender } = {}) {
   const autoPlayNextRef = useRef(false);
   const autoplayAttemptedRef = useRef(false);
   const tracksRef = useRef(tracks);
+  const playbackTracksRef = useRef(tracks);
   const activeTrackIdRef = useRef(activeTrackId);
   const selectTrackRef = useRef(null);
   const repeatModeRef = useRef("off");
@@ -334,12 +335,17 @@ export default function App({ onFirstRender } = {}) {
     () => getStemColor(activeProjectTrackIndex),
     [activeProjectTrackIndex],
   );
+  const playbackTracks = useMemo(
+    () => getPlaybackTracks(albums, tracks),
+    [albums, tracks],
+  );
+  const playbackTrackIndex = getPlaybackIndex(playbackTracks, activeTrackId);
   const hasPrev =
-    activeTrackIndex > 0 ||
-    (repeatMode === "all" && tracks.length > 1);
+    playbackTrackIndex > 0 ||
+    (repeatMode === "all" && playbackTracks.length > 1);
   const hasNext =
-    (activeTrackIndex >= 0 && activeTrackIndex < tracks.length - 1) ||
-    (repeatMode === "all" && tracks.length > 1);
+    (playbackTrackIndex >= 0 && playbackTrackIndex < playbackTracks.length - 1) ||
+    (repeatMode === "all" && playbackTracks.length > 1);
 
   const comments = activeVersion?.comments || [];
   const mobileDrawerComment = useMemo(
@@ -457,8 +463,9 @@ export default function App({ onFirstRender } = {}) {
       // valid, otherwise default to tracks[0].  Never fall back to
       // session.activeTrackId so the post-hydration state exactly matches the
       // pre-hydration initial state — preventing a mid-mount WaveSurfer re-init.
+      const shouldHonorRouteTrack = routeMode !== "reviewer" && !shareRoute;
       nextActiveTrackId =
-        (routeTrackId && nextTracks.some((track) => track.id === routeTrackId))
+        (shouldHonorRouteTrack && routeTrackId && nextTracks.some((track) => track.id === routeTrackId))
           ? routeTrackId
           : nextTracks[0]?.id || null;
     }
@@ -482,9 +489,10 @@ export default function App({ onFirstRender } = {}) {
 
     if (!shouldPreservePlayback) {
       // Full reset — new session or active track no longer exists on server.
+      const shouldHonorRouteVersion = routeMode !== "reviewer" && !shareRoute;
       setVersions(nextVersions);
       setActiveVersionId(
-        routeVersionId && nextVersions.some((version) => version.id === routeVersionId)
+        shouldHonorRouteVersion && routeVersionId && nextVersions.some((version) => version.id === routeVersionId)
           ? routeVersionId
           : nextActiveTrack?.activeVersionId || session.activeVersionId || nextVersions[0].id,
       );
@@ -544,6 +552,10 @@ export default function App({ onFirstRender } = {}) {
   useEffect(() => {
     tracksRef.current = tracks;
   }, [tracks]);
+
+  useEffect(() => {
+    playbackTracksRef.current = playbackTracks;
+  }, [playbackTracks]);
 
   useEffect(() => {
     activeTrackIdRef.current = activeTrackId;
@@ -1736,7 +1748,9 @@ export default function App({ onFirstRender } = {}) {
       sessionId: storedSession.id,
       role: reviewer
     });
-    setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", storedSession.activeVersionId || "version-v1", storedSession.id, storedSession.activeTrackId);
+    const firstTrack = buildInitialTracks(storedSession, buildInitialVersions(storedSession))[0] || null;
+    const firstVersionId = firstTrack?.activeVersionId || firstTrack?.versions?.[0]?.id || storedSession.activeVersionId || "version-v1";
+    setReviewRoute(reviewer === "Engineer" ? "admin" : "reviewer", firstVersionId, storedSession.id, reviewer === "Engineer" ? firstTrack?.id : null);
   }, [applyStoredSession]);
 
   const handleAccessLogin = useCallback(async (event) => {
@@ -1790,7 +1804,9 @@ export default function App({ onFirstRender } = {}) {
       setAppView("workspace");
       saveSessionCache(storedSession);
       saveAccessState({ mode: "reviewer", sessionId: storedSession.id, role: "Artist" });
-      setReviewRoute("reviewer", storedSession.activeVersionId || "version-v1", storedSession.id, storedSession.activeTrackId);
+      const firstTrack = buildInitialTracks(storedSession, buildInitialVersions(storedSession))[0] || null;
+      const firstVersionId = firstTrack?.activeVersionId || firstTrack?.versions?.[0]?.id || storedSession.activeVersionId || "version-v1";
+      setReviewRoute("reviewer", firstVersionId, storedSession.id, null);
     } catch (error) {
       setLoginError(error.message || "Unable to open that review session.");
     }
@@ -1901,48 +1917,44 @@ export default function App({ onFirstRender } = {}) {
   }, []);
 
   const handlePrevTrack = useCallback(() => {
-    const idx = tracks.findIndex((t) => t.id === activeTrackId);
+    const sequence = playbackTracks;
+    const idx = sequence.findIndex((t) => t.id === activeTrackId);
     if (idx < 0) return;
     let targetId = null;
     if (idx > 0) {
-      targetId = tracks[idx - 1].id;
+      targetId = sequence[idx - 1].id;
     } else {
-      // First track — always wrap to last (standard DAW behaviour; Repeat All
-      // also wraps so no special-case needed here).
-      targetId = tracks.length > 1 ? tracks[tracks.length - 1].id : tracks[0]?.id ?? null;
+      targetId = sequence.length > 1 ? sequence[sequence.length - 1].id : sequence[0]?.id ?? null;
     }
     if (!targetId) return;
-    // Signal isPlayerReady to call play() once the new track is loaded.
     autoPlayNextRef.current = true;
     if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
       unlockAudioSession();
     }
     selectTrack(targetId);
-  }, [activeTrackId, isReviewerMode, selectTrack, tracks]);
+  }, [activeTrackId, isReviewerMode, playbackTracks, selectTrack]);
 
   const handleNextTrack = useCallback(() => {
-    const idx = tracks.findIndex((t) => t.id === activeTrackId);
+    const sequence = playbackTracks;
+    const idx = sequence.findIndex((t) => t.id === activeTrackId);
     if (idx < 0) return;
     let targetId = null;
-    if (idx < tracks.length - 1) {
-      targetId = tracks[idx + 1].id;
-    } else if (repeatMode === "all" && tracks.length > 1) {
-      // Repeat All — wrap around to the beginning.
-      targetId = tracks[0].id;
+    if (idx < sequence.length - 1) {
+      targetId = sequence[idx + 1].id;
+    } else if (repeatMode === "all" && sequence.length > 1) {
+      targetId = sequence[0].id;
     }
     if (!targetId) {
-      // Last track, Repeat All off — stop and park; do not change the track.
       playerRef.current?.pause();
       setIsPlaying(false);
       return;
     }
-    // Signal isPlayerReady to call play() once the new track is loaded.
     autoPlayNextRef.current = true;
     if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
       unlockAudioSession();
     }
     selectTrack(targetId);
-  }, [activeTrackId, isReviewerMode, repeatMode, selectTrack, tracks]);
+  }, [activeTrackId, isReviewerMode, playbackTracks, repeatMode, selectTrack]);
   // ─────────────────────────────────────────────────────────────────────────
 
   const shareSession = useCallback(() => {
@@ -2107,7 +2119,7 @@ export default function App({ onFirstRender } = {}) {
       author,
       text: text.trim() || "New timestamp marker ready for a mix note.",
       resolved: false,
-      submitted: isEngineerMode,
+      submitted: true,
       createdAt: new Date().toISOString()
     };
 
@@ -2117,7 +2129,7 @@ export default function App({ onFirstRender } = {}) {
       selectedCommentId: commentId,
       comments: [...version.comments, newComment].sort((a, b) => a.time - b.time)
     }));
-  }, [currentReviewer, isEngineerMode, permissions.canReview, updateActiveVersion]);
+  }, [currentReviewer, permissions.canReview, updateActiveVersion]);
 
   const openMobileNote = useCallback((time) => {
     if (!isReviewerMode) {
@@ -2194,6 +2206,11 @@ export default function App({ onFirstRender } = {}) {
     }
 
     updateActiveVersion((version) => {
+      const targetComment = version.comments.find((comment) => comment.id === commentId);
+      if (!targetComment || !canEditComment(targetComment, currentReviewer, permissions)) {
+        return version;
+      }
+
       const nextComments = version.comments.map((comment) =>
         comment.id === commentId
           ? { ...comment, resolved: !comment.resolved }
@@ -2206,7 +2223,7 @@ export default function App({ onFirstRender } = {}) {
         approvalStatus: deriveReviewStatus({ ...version, comments: nextComments })
       };
     });
-  }, [permissions.canReview, updateActiveVersion]);
+  }, [currentReviewer, permissions, updateActiveVersion]);
 
   const editComment = useCallback((commentId, nextText) => {
     if (!permissions.canReview || !nextText.trim()) {
@@ -2292,7 +2309,7 @@ export default function App({ onFirstRender } = {}) {
   }, [updateActiveVersion]);
 
   const activateComment = useCallback((comment, { autoplay = false } = {}) => {
-    if (!canEditComment(comment, currentReviewer, permissions)) {
+    if (!permissions.canReview) {
       return;
     }
     updateActiveVersion((version) => ({
@@ -2479,7 +2496,7 @@ export default function App({ onFirstRender } = {}) {
 
       // ── Repeat All ──────────────────────────────────────────────────────
       if (mode === "all") {
-        const allTracks = tracksRef.current;
+        const allTracks = playbackTracksRef.current;
         const currId   = activeTrackIdRef.current;
         const idx      = allTracks.findIndex((t) => t.id === currId);
         if (idx < 0) return;
@@ -2502,7 +2519,7 @@ export default function App({ onFirstRender } = {}) {
       // trigger programmatic playback before the iOS AudioContext is unlocked.
       if (isMobileViewport() && !userHasPlayedRef.current) return;
 
-      const allTracks = tracksRef.current;
+      const allTracks = playbackTracksRef.current;
       const currId   = activeTrackIdRef.current;
       const idx      = allTracks.findIndex((t) => t.id === currId);
 
@@ -2941,7 +2958,7 @@ export default function App({ onFirstRender } = {}) {
             onCommentDrawerOpen={openMobileCommentDrawer}
             currentReviewer={currentReviewer}
             canModifyComment={(comment) => canEditComment(comment, currentReviewer, permissions)}
-            canResolve={permissions.canReview}
+            canResolve={(comment) => canEditComment(comment, currentReviewer, permissions)}
           />
         </div>
       </section>
@@ -3839,6 +3856,33 @@ function getTrackApprovalSummary(tracks) {
     }).length,
     total: importedTracks.length
   };
+}
+
+function getPlaybackTracks(albums = [], tracks = []) {
+  const byId = new Map(tracks.map((track) => [track.id, track]));
+  const seen = new Set();
+  const sequence = [];
+
+  for (const album of albums) {
+    for (const trackId of album.trackIds || []) {
+      const track = byId.get(trackId);
+      if (!track || seen.has(track.id)) continue;
+      seen.add(track.id);
+      sequence.push(track);
+    }
+  }
+
+  for (const track of tracks) {
+    if (seen.has(track.id)) continue;
+    seen.add(track.id);
+    sequence.push(track);
+  }
+
+  return sequence;
+}
+
+function getPlaybackIndex(playbackTracks, activeTrackId) {
+  return playbackTracks.findIndex((track) => track.id === activeTrackId);
 }
 
 function withUploadedAudio(version, audioSource, reviewer, fileName) {
