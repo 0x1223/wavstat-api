@@ -5217,37 +5217,47 @@ body:has(.app-shell.reviewer-mode) {
   }
 
   .app-shell:not(.setup-shell):not(.admin-shell) .review-layout {
-    --workspace-top-row-height: clamp(420px, 48dvh, 560px);
-    --workspace-bottom-row-height: clamp(360px, 40dvh, 520px);
+    --workspace-top-row-height: minmax(360px, 1fr);
+    --workspace-bottom-row-height: minmax(300px, 0.86fr);
     align-items: start;
+    height: 100%;
+    min-height: 0;
   }
 
   .app-shell:not(.setup-shell):not(.admin-shell) .review-main,
   .app-shell:not(.setup-shell):not(.admin-shell) .review-side {
+    display: grid;
     grid-template-rows: var(--workspace-top-row-height) var(--workspace-bottom-row-height);
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
   }
 
-  /* ── 2. Lock the project/stem window to a fixed height ─────────────────────
-     Starts at the same Y as the Review Dashboard top border (both at the top
-     of their review-layout columns). Bottom edge aligns beside "No approvals
-     yet" in the dashboard.  All extra tracks scroll inside this fixed window. */
+  /* Top workspace row: project/stem list and review dashboard share height.
+     Extra tracks scroll inside the fixed panel instead of stretching the page. */
   .app-shell:not(.setup-shell):not(.admin-shell) .track-list-panel {
     height: 100%;
-    max-height: none;
-    grid-template-rows: auto minmax(0, 1fr);
+    max-height: 100%;
+    grid-template-rows: minmax(0, 1fr);
     overflow: hidden;
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .track-list-panel.has-track-list-error {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .app-shell:not(.setup-shell):not(.admin-shell) .review-dashboard,
   .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel,
   .app-shell:not(.setup-shell):not(.admin-shell) .comment-sidebar {
     height: 100%;
-    max-height: none;
+    max-height: 100%;
   }
 
   .app-shell:not(.setup-shell):not(.admin-shell) .track-list-albums {
-    max-height: none;
     min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   /* ── 3a. Double individual track row height ─────────────────────────────────

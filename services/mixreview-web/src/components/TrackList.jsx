@@ -573,13 +573,17 @@ export const TrackList = memo(function TrackList({
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <section className="track-list-panel" aria-label="Project tracks">
-      <div className="track-list-header">
-        <div className="track-list-header-content">
-          {deleteError && <p className="upload-error">{deleteError}</p>}
+    <section
+      className={`track-list-panel${deleteError ? " has-track-list-error" : ""}`}
+      aria-label="Project tracks"
+    >
+      {deleteError && (
+        <div className="track-list-header">
+          <div className="track-list-header-content">
+            <p className="upload-error">{deleteError}</p>
+          </div>
         </div>
-
-      </div>
+      )}
 
       {effectiveAlbums.length > 0 ? (
         <div className="track-list-albums">
