@@ -63,14 +63,6 @@ const emptySessionDetails = {
   status: "Draft"
 };
 
-// Safe wrapper for sessionStorage access.  Raw window.sessionStorage.getItem()
-// calls throw SecurityError on some iOS versions during WebKit process
-// re-initialization after deep-sleep eviction.  All module-scope and
-// lazy-useState reads use this instead of calling the API directly.
-function safeSessionGet(key) {
-  try { return window.sessionStorage.getItem(key); } catch { return null; }
-}
-
 const routeParams = new URLSearchParams(window.location.search);
 const shareRoute = getShareRoute();
 const routeMode = routeParams.get("mode");
@@ -102,14 +94,10 @@ const initialVersions = initialActiveTrack?.versions || legacyInitialVersions;
 const initialReviewer =
   routeMode === "reviewer"
     ? "Artist"
-    : routeMode === "admin" && safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true"
-      ? "Engineer"
-      :
-  restoredSession?.currentReviewer === "Engineer" &&
-  safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) !== "true"
+    : restoredSession?.currentReviewer === "Engineer"
     ? "Artist"
     : restoredSession?.currentReviewer ||
-      (safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true" ? "Engineer" : "Artist");
+      "Artist";
 
 // Unlock the iOS audio session and start the persistent keep-alive AudioContext.
 // Called once from the first user Play tap.
@@ -147,6 +135,11 @@ export default function App({ onFirstRender } = {}) {
   // applied before we reveal the UI — eliminates the unstyled-HTML flash.
   useEffect(() => {
     onFirstRender?.();
+    try {
+      window.sessionStorage.removeItem(ADMIN_UNLOCK_SESSION_KEY);
+    } catch {
+      // Legacy unlock cleanup is best-effort; admin access is in-memory now.
+    }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [sessionId, setSessionId] = useState(
@@ -178,7 +171,7 @@ export default function App({ onFirstRender } = {}) {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState("");
   const [appView, setAppView] = useState(
-    !forceStartScreen && (routeSessionId || shareRoute || restoredSession)
+    !forceStartScreen && routeMode !== "admin" && (routeSessionId || shareRoute || restoredSession)
       ? "workspace"
       : "start",
   );
@@ -188,7 +181,7 @@ export default function App({ onFirstRender } = {}) {
   const [shareId, setShareId] = useState(shareRoute?.shareId || restoredSession?.shareId || null);
   const [isSharePanelOpen, setIsSharePanelOpen] = useState(false);
   const [hasStarted, setHasStarted] = useState(
-    Boolean(!forceStartScreen && (shareRoute || restoredSession)),
+    Boolean(!forceStartScreen && routeMode !== "admin" && (shareRoute || restoredSession)),
   );
   const [isSessionHydrating, setIsSessionHydrating] = useState(
     // Start hydrating whenever a session ID is present in the URL, even if a
@@ -220,7 +213,7 @@ export default function App({ onFirstRender } = {}) {
   const [importProgress, setImportProgress] = useState({ done: 0, total: 0, errors: 0 });
 
   const [isEngineerUnlocked, setIsEngineerUnlocked] = useState(
-    () => safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true",
+    false,
   );
   const activeMarkerRef = useRef(null);
   const playerRef = useRef(null);
@@ -768,7 +761,7 @@ export default function App({ onFirstRender } = {}) {
   const getReconnectReviewer = useCallback((accessState, storedSession) => {
     const requestedMode = routeMode || accessState?.mode;
     if (requestedMode === "admin" || accessState?.role === "Engineer") {
-      if (safeSessionGet(ADMIN_UNLOCK_SESSION_KEY) === "true") {
+      if (isEngineerUnlockedRef.current) {
         setIsEngineerUnlocked(true);
         return "Engineer";
       }
@@ -1759,7 +1752,6 @@ export default function App({ onFirstRender } = {}) {
         return;
       }
 
-      window.sessionStorage.setItem(ADMIN_UNLOCK_SESSION_KEY, "true");
       setIsEngineerUnlocked(true);
       setCurrentReviewer("Engineer");
       setLoginPassword("");
