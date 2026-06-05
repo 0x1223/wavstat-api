@@ -5014,8 +5014,7 @@ body:has(.app-shell.reviewer-mode) {
   max-height: 70%;
   min-height: 2px;
   border-radius: 1px;
-  background: color-mix(in srgb, currentColor 78%, #fff6dc);
-  box-shadow: 0 0 0 0.5px color-mix(in srgb, currentColor 28%, transparent);
+  background: currentColor;
 }
 
 .desktop-track-item.active .desktop-track-lane-bars {
