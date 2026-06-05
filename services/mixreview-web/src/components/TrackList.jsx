@@ -21,11 +21,6 @@ const AUDIO_ACCEPT = [
 const INITIAL_RENDERED_TRACKS = 14;
 const RENDERED_TRACK_BATCH = 12;
 
-function abbrev(str, len = 11) {
-  if (!str) return "Untitled";
-  return str.length > len ? str.slice(0, len) + "…" : str;
-}
-
 // 500 bars so the waveform fills the lane at any column width; overflow:hidden clips the rest.
 const WAVEFORM_BAR_COUNT = 500;
 // Max bar height (px) — fills the 40 px usable lane at ≥ 981 px viewport.
@@ -219,7 +214,7 @@ function useDeferredTrackLimit(resetKey, total) {
 }
 
 // ── TrackRow ──────────────────────────────────────────────────────────────────
-// Desktop layout: [badge] [name] [waveform lane ···] [comment count]
+// Desktop layout: DAW-style [track header] [timeline clip lane].
 // Edit actions (Replace / S / M / Delete) overlay on hover.
 const TrackRow = memo(function TrackRow({
   track,
@@ -240,7 +235,6 @@ const TrackRow = memo(function TrackRow({
   onToggleMute,
 }) {
   const title      = track.title || `Track ${index + 1}`;
-  const shortTitle = abbrev(title);
   const activeVersion  = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
   const commentCount   = activeVersion?.comments?.length ?? 0;
   const audioSource    = activeVersion?.audioSource || null;
@@ -265,11 +259,22 @@ const TrackRow = memo(function TrackRow({
         type="button"
         className={`desktop-track-item${isActive ? " active" : ""}`}
         onClick={() => onTrackSelect(track.id)}
+        aria-label={`Track ${index + 1}: ${title}. ${commentCount} comment${commentCount === 1 ? "" : "s"}.`}
       >
-        <span className="desktop-track-badge">{index + 1}</span>
-        <span className="desktop-track-name">{title}</span>
-        <StemLane label={shortTitle} audioSource={audioSource} />
-        <span className="desktop-track-count">{commentCount}</span>
+        <span className="desktop-track-header" aria-hidden="true">
+          <span className="desktop-track-color-rail" />
+          <span className="desktop-track-meta">
+            <span className="desktop-track-title-row">
+              <span className="desktop-track-badge">{index + 1}</span>
+              <span className="desktop-track-name">{title}</span>
+            </span>
+            <span className="desktop-track-comments">
+              <span>Comments</span>
+              <strong>{commentCount}</strong>
+            </span>
+          </span>
+        </span>
+        <StemLane label={title} audioSource={audioSource} />
       </button>
 
       {/* ── Edit actions — overlay on hover ─────────────────────────────── */}

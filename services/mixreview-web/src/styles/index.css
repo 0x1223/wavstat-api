@@ -4766,7 +4766,7 @@ body:has(.app-shell.reviewer-mode) {
   flex-direction: column;
   overflow-x: hidden;
   overflow-y: visible;
-  gap: 4px;
+  gap: 3px;
   padding-bottom: 0;
 }
 
@@ -4790,19 +4790,19 @@ body:has(.app-shell.reviewer-mode) {
 
 /* ── Desktop track item: full-width horizontal row ─────────────────────────── */
 .desktop-track-item {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  gap: 8px;
+  display: grid !important;
+  grid-template-columns: minmax(164px, 196px) minmax(0, 1fr);
+  align-items: stretch !important;
+  gap: 0;
   width: 100%;
-  min-height: 38px;
-  padding: 0 8px !important;
-  border: 1px solid color-mix(in srgb, var(--stem-progress-color, #d6a354) 54%, rgba(255, 255, 255, 0.12)) !important;
-  border-radius: 6px !important;
+  min-height: 68px;
+  padding: 0 !important;
+  border: 1px solid rgba(0, 0, 0, 0.86) !important;
+  border-radius: 3px !important;
   color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 20%, transparent) 0 3px, transparent 3px),
-    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 19%, transparent), rgba(255, 255, 255, 0.035)) !important;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 46%),
+    #171717 !important;
   cursor: pointer;
   text-align: left;
   overflow: hidden;
@@ -4813,19 +4813,52 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 .desktop-track-item:hover {
-  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 70%, #ffffff) !important;
+  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 52%, #050505) !important;
 }
 
 .desktop-track-item.active {
-  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 82%, #ffffff) !important;
+  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 72%, #ffffff) !important;
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 34%, transparent) 0 3px, transparent 3px),
-    linear-gradient(180deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 16%, transparent), rgba(255, 255, 255, 0.045)) !important;
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 10%, rgba(255, 255, 255, 0.035)), rgba(0, 0, 0, 0.06)),
+    #191919 !important;
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--stem-progress-color, #d6a354) 30%, transparent),
-    inset 0 0 16px color-mix(in srgb, var(--stem-progress-color, #d6a354) 10%, transparent),
-    0 2px 8px color-mix(in srgb, var(--stem-progress-color, #d6a354) 12%, transparent);
+    inset 0 0 18px color-mix(in srgb, var(--stem-progress-color, #d6a354) 9%, transparent);
   color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 88%, #ffffff);
+}
+
+.desktop-track-header {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr);
+  align-self: stretch;
+  border-right: 1px solid rgba(0, 0, 0, 0.88);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #1f2a35) 26%, rgba(255, 255, 255, 0.045)), rgba(0, 0, 0, 0.12)),
+    #18212b;
+}
+
+.desktop-track-color-rail {
+  width: 100%;
+  background: var(--stem-progress-color, #d6a354);
+  box-shadow:
+    inset -1px 0 0 rgba(0, 0, 0, 0.45),
+    0 0 16px color-mix(in srgb, var(--stem-progress-color, #d6a354) 28%, transparent);
+}
+
+.desktop-track-meta {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 9px 10px 8px;
+}
+
+.desktop-track-title-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* ── Track number badge ─────────────────────────────────────────────────────── */
@@ -4833,14 +4866,14 @@ body:has(.app-shell.reviewer-mode) {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 4px;
   flex-shrink: 0;
   font-size: 0.63rem;
-  font-weight: 800;
-  background: color-mix(in srgb, var(--stem-progress-color, #d6a354) 22%, transparent);
-  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 82%, #ffffff);
+  font-weight: 900;
+  background: rgba(0, 0, 0, 0.35);
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 70%, #ffffff);
 }
 
 .desktop-track-item.active .desktop-track-badge {
@@ -4850,19 +4883,43 @@ body:has(.app-shell.reviewer-mode) {
 
 /* ── Track name (truncated) ─────────────────────────────────────────────────── */
 .desktop-track-name {
-  font-size: 0.75rem;
-  font-weight: 700;
+  font-size: 0.78rem;
+  font-weight: 850;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
-  min-width: 90px;
-  max-width: 190px;
-  flex-shrink: 0;
+  color: #f7f0df;
+  min-width: 0;
+  max-width: none;
+  flex: 1;
 }
 
 .desktop-track-item.active .desktop-track-name {
-  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 90%, #ffffff);
+  color: #fff8e8;
+}
+
+.desktop-track-comments {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 0.58rem;
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.desktop-track-comments strong {
+  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Waveform bar preview — stretches across remaining row width ────────────── */
@@ -4870,18 +4927,26 @@ body:has(.app-shell.reviewer-mode) {
   position: relative;
   flex: 1;
   min-width: 0;
-  height: 24px;
+  height: 100%;
+  min-height: 68px;
   display: flex;
   align-items: center;
   overflow: hidden;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--stem-wave-color, #6d6457) 7%, transparent);
+  border-radius: 0;
+  border-left: 1px solid rgba(255, 255, 255, 0.09);
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.11) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.13) 50%, transparent 51%),
+    linear-gradient(180deg, #333 0%, #242424 100%);
+  background-size: 82px 100%, 100% 100%, 100% 100%;
 }
 
 .desktop-track-lane.has-bars {
   background:
-    linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color, #d6a354) 16%, transparent), transparent 58%),
-    color-mix(in srgb, var(--stem-wave-color, #6d6457) 12%, transparent);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.11) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.13) 50%, transparent 51%),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 16%, #303030), #242424);
+  background-size: 82px 100%, 100% 100%, 100% 100%;
 }
 
 .desktop-track-item.active .desktop-track-lane {
@@ -4896,43 +4961,49 @@ body:has(.app-shell.reviewer-mode) {
 
 .desktop-track-lane-label {
   position: absolute;
-  left: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 0.56rem;
-  font-weight: 800;
-  letter-spacing: 0.03em;
+  left: 9px;
+  top: 5px;
+  transform: none;
+  max-width: calc(100% - 18px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0;
   white-space: nowrap;
-  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 42%, transparent);
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
   z-index: 2;
   pointer-events: none;
 }
 
 .desktop-track-item.active .desktop-track-lane-label {
-  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 52%, transparent);
+  color: #fff8e8;
 }
 
 .desktop-track-lane-bars {
   position: absolute;
-  inset: 0;
+  inset: 18px 6px 5px;
   display: flex;
   align-items: center;
   gap: 1.5px;
-  padding: 2px 3px;
-  opacity: 0.48;
+  padding: 0;
+  color: var(--stem-progress-color, #d6a354);
+  opacity: 0.9;
   overflow: hidden;
 }
 
 .desktop-track-item.active .desktop-track-lane-bars {
-  opacity: 0.84;
+  opacity: 1;
 }
 
 .desktop-track-lane-bars i {
   display: block;
   width: 2.5px;
   flex-shrink: 0;
-  border-radius: 1px;
+  border-radius: 999px;
   background: currentColor;
+  box-shadow: 0 0 8px color-mix(in srgb, currentColor 24%, transparent);
 }
 
 /* ── Comment count badge ────────────────────────────────────────────────────── */
@@ -5324,23 +5395,18 @@ body:has(.app-shell.reviewer-mode) {
     overscroll-behavior: contain;
   }
 
-  /* ── 3a. Double individual track row height ─────────────────────────────────
-     Each stem/track lane grows from 38 px → 76 px so the waveform preview
-     has more vertical breathing room. All badge/label sizes scale up to match. */
+  /* ── 3a. DAW-style track lane height ─────────────────────────────────────── */
   .desktop-track-item {
-    min-height: 76px !important;
-    padding: 0 10px !important;
-    gap: 10px;
+    min-height: 70px !important;
   }
 
-  /* Waveform preview lane — taller to fill the doubled row */
+  /* Waveform timeline lane fills the full track row height */
   .desktop-track-lane {
-    height: 48px;
+    height: 100%;
+    min-height: 70px;
   }
 
-  /* Bar sparkline — taller max bar to fill the new lane height */
   .desktop-track-lane-bars {
-    padding: 4px 3px;
     gap: 2px;
   }
 
@@ -5348,23 +5414,14 @@ body:has(.app-shell.reviewer-mode) {
     width: 3px;
   }
 
-  /* Track number badge — slightly larger to breathe in the taller row */
   .desktop-track-badge {
-    width: 26px;
-    height: 26px;
+    width: 24px;
+    height: 24px;
     font-size: 0.68rem;
   }
 
-  /* Track name — fractionally larger font for the taller row */
   .desktop-track-name {
     font-size: 0.8rem;
-    min-width: 100px;
-  }
-
-  /* Comment count badge — taller to fill the row */
-  .desktop-track-count {
-    height: 22px;
-    font-size: 0.65rem;
   }
 
   /* Hover actions overlay — remains vertically centred at 50 % (no change needed
