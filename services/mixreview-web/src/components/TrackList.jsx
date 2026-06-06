@@ -509,7 +509,7 @@ const TrackRow = memo(function TrackRow({
               <span className="desktop-track-badge">{index + 1}</span>
               <span className="desktop-track-name">{title}</span>
             </span>
-            <div className="track-metadata-row" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div className="track-metadata-row">
               <span className="comments-text-label">Comments</span>
               {isStemTrack && (
                 <>
