@@ -4857,34 +4857,28 @@ body:has(.app-shell.reviewer-mode) {
   color: #fff8e8;
 }
 
-/* ── Metadata row: flat inline-flex bar at the bottom of .desktop-track-meta */
-.track-metadata-row {
+/* ── Comments pill — sits in the auto grid row of .desktop-track-meta ─────── */
+.desktop-track-comments {
+  min-width: 0;
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 100%;
-  min-width: 0;
-  color: rgba(255, 255, 255, 0.40);
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.22);
+  color: rgba(255, 255, 255, 0.48);
   font-size: 0.58rem;
   font-weight: 850;
   letter-spacing: 0.07em;
   text-transform: uppercase;
 }
 
-.comments-text-label {
+.desktop-track-comments-label {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.comments-count-value {
-  flex-shrink: 0;
-  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
-  font-size: 0.75rem;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ── Studio toggle badges: M / S ────────────────────────────────────────── */
