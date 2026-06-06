@@ -2778,10 +2778,12 @@ export default function App({ onFirstRender } = {}) {
       onPrev={handlePrevTrack}
       onNext={handleNextTrack}
       onRepeatChange={handleRepeatChange}
-      onReviewNotesToggle={() => setIsMarkerToolActive((v) => !v)}
-      isReviewNotesActive={isMarkerToolActive}
-      onCommentsToggle={() => setIsSidePanelOpen((v) => !v)}
-      isCommentsActive={isSidePanelOpen}
+      canReview={duration > 0}
+      reviewLabel={isActiveStemProject ? "Comments" : "Review"}
+      isReviewActive={isActiveStemProject ? isSidePanelOpen : isMarkerToolActive}
+      onReviewToggle={isActiveStemProject
+        ? () => setIsSidePanelOpen((v) => !v)
+        : () => setIsMarkerToolActive((v) => !v)}
     />
   ) : null;
 

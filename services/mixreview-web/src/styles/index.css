@@ -2786,18 +2786,21 @@ h2 {
   font-weight: 800;
 }
 
-.transport-action-btn {
+.transport-review-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 96px !important;
+  gap: 7px;
+  min-width: 104px !important;
   color: #cfc6b6;
-  font-size: 0.72rem;
-  font-weight: 850;
-  letter-spacing: 0.04em;
 }
 
-.transport-action-btn.active {
+.transport-review-button span:last-child {
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.transport-review-button.active {
   color: #130d04;
   border-color: rgba(215, 173, 98, 0.55);
   background: linear-gradient(180deg, #ffd889, #d6a354);
