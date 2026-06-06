@@ -2926,10 +2926,10 @@ export default function App({ onFirstRender } = {}) {
           )}
 
           {/* Player selection:
-              1. Admin + stem project           → audio lives in TrackList StemLanes
-              2. Reviewer + stem project selected
-                 + mobile viewport              → MobileStemStack
+              1. Reviewer + stem + mobile       → MobileStemStack
+              2. Engineer + stem (desktop)      → null  (audio is in StemLane <audio> elements)
               3. Everything else                → WaveformReview (single track)
+                 Includes: reviewer desktop stem, engineer non-stem, reviewer non-stem
               key={…?.id} forces a clean remount on project switch so stale
               WaveSurfer instances are fully torn down before new ones start. */}
           {isReviewerMode && isReviewerStemProject && isMobileViewport() ? (
@@ -2942,7 +2942,7 @@ export default function App({ onFirstRender } = {}) {
               onPlaybackChange={setIsPlaying}
               onMobileNoteRequest={openMobileNote}
             />
-          ) : !isActiveStemProject && activeTrack ? (
+          ) : !(isEngineerMode && isActiveStemProject) && activeTrack ? (
             <WaveformReview
               audioSource={audioSource}
               comments={comments}

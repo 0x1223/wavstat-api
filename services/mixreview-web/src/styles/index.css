@@ -5502,16 +5502,18 @@ button.stem-toggle-action.solo-btn.active {
 }
 
 /* ── Stem Timeline Ruler ──────────────────────────────────────────────────── */
-/* Two-column grid row that aligns the clickable progress rail with the        */
-/* waveform canvas lanes (196px spacer = .desktop-track-header width).         */
-.stem-timeline-row {
+/* All rules are scoped under .stem-view (added to <main> only when            */
+/* isEngineerMode && isActiveStemProject) so zero pixels shift in the          */
+/* standard stereo mix view.                                                   */
+
+.stem-view .stem-timeline-row {
   display: grid;
   grid-template-columns: 196px minmax(0, 1fr);
   height: 20px;
   margin: 2px 0 6px;
 }
 
-.stem-timeline {
+.stem-view .stem-timeline {
   position: relative;
   height: 100%;
   background: rgba(255, 255, 255, 0.028);
@@ -5524,11 +5526,11 @@ button.stem-toggle-action.solo-btn.active {
   transition: background 120ms ease;
 }
 
-.stem-timeline:hover {
+.stem-view .stem-timeline:hover {
   background: rgba(255, 255, 255, 0.055);
 }
 
-.stem-timeline-playhead {
+.stem-view .stem-timeline-playhead {
   position: absolute;
   top: 0;
   bottom: 0;
