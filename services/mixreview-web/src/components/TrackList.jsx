@@ -168,6 +168,20 @@ function drawWaveformOnCanvas(canvas, bars, color) {
   const cy      = H / 2;
   const maxHalf = H * 0.34; // ±34 % → 68 % total waveform height
 
+  // Soft elliptical halo — track color radiates outward from lane center.
+  // We translate+scale to turn a circular radialGradient into a lane-shaped
+  // ellipse that fills the full width without any horizontal clipping.
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(W / H, 1);
+  const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, H * 0.6);
+  halo.addColorStop(0,   `rgba(${r},${g},${b},0.06)`);
+  halo.addColorStop(0.5, `rgba(${r},${g},${b},0.04)`);
+  halo.addColorStop(1,   `rgba(${r},${g},${b},0)`);
+  ctx.fillStyle = halo;
+  ctx.fillRect(-(H / 2), -(H / 2), H, H);
+  ctx.restore();
+
   // Faint centerlane baseline
   ctx.beginPath();
   ctx.moveTo(0, cy);

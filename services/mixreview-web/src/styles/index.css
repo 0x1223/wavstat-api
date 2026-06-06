@@ -4950,33 +4950,33 @@ body:has(.app-shell.reviewer-mode) {
   border-radius: 0;
   border-left: 1px solid rgba(255, 255, 255, 0.09);
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.11) 1px, transparent 1px),
-    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.13) 50%, transparent 51%),
-    linear-gradient(180deg, #333 0%, #242424 100%);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.09) 50%, transparent 51%),
+    linear-gradient(180deg, #111 0%, #080808 100%);
   background-size: 82px 100%, 100% 100%, 100% 100%;
 }
 
 .desktop-track-lane.has-bars {
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.11) 1px, transparent 1px),
-    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.13) 50%, transparent 51%),
-    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 16%, #303030), #242424);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.09) 50%, transparent 51%),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 10%, #0e0e0e), #080808);
   background-size: 82px 100%, 100% 100%, 100% 100%;
 }
 
 .desktop-track-item.active .desktop-track-lane {
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.13) 1px, transparent 1px),
-    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.15) 50%, transparent 51%),
-    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 18%, #333), #242424);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.11) 50%, transparent 51%),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 14%, #111), #090909);
   background-size: 82px 100%, 100% 100%, 100% 100%;
 }
 
 .desktop-track-item.active .desktop-track-lane.has-bars {
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.13) 1px, transparent 1px),
-    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.15) 50%, transparent 51%),
-    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 20%, #363636), #252525);
+    linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(180deg, transparent 49%, rgba(255, 255, 255, 0.11) 50%, transparent 51%),
+    linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color, #6d6457) 16%, #131313), #0a0a0a);
   background-size: 82px 100%, 100% 100%, 100% 100%;
 }
 
