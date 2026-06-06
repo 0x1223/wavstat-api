@@ -5500,6 +5500,54 @@ button.stem-toggle-action.solo-btn.active {
   }
 }
 
+/* ── Desktop stem multitrack transport/lane repair ───────────────────────────
+   Stem mode has no separate WaveformReview card in engineer desktop view, so
+   .review-main contains only TrackList + TransportBar. Keep that grid to two
+   rows so the transport copies the standard project footer size instead of
+   stretching into the missing waveform row.                                   */
+@media (min-width: 1024px) {
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .transport {
+    align-self: end;
+    min-height: 78px;
+    height: auto;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 18px;
+    padding: 14px 20px;
+  }
+
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .transport.has-review-action {
+    grid-template-columns: 1fr auto auto 1fr;
+  }
+
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .track-list-panel,
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .track-list-albums,
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .track-list-album,
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .track-list,
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .track-row,
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .desktop-track-item,
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .desktop-track-lane {
+    width: 100%;
+    max-width: none;
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .desktop-track-lane {
+    flex: 1 1 auto;
+  }
+
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .desktop-track-lane-canvas {
+    width: 100%;
+    max-width: none;
+  }
+}
+
 /* ── Stem Timeline Ruler ──────────────────────────────────────────────────── */
 /* All rules are scoped under .stem-view (added to <main> only when            */
 /* isEngineerMode && isActiveStemProject) so zero pixels shift in the          */
