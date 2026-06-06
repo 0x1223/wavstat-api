@@ -1132,7 +1132,7 @@ h2 {
   min-width: 180px;
 }
 
-.colored-track-row button {
+.colored-track-row button:not(.stem-track-solo):not(.stem-track-mute) {
   position: relative;
   overflow: hidden;
   border-color: color-mix(in srgb, var(--stem-progress-color) 42%, rgba(255, 255, 255, 0.1));
@@ -1141,8 +1141,8 @@ h2 {
     linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color) 22%, transparent), rgba(255, 255, 255, 0.035));
 }
 
-.colored-track-row button:hover,
-.colored-track-row button.active {
+.colored-track-row button:not(.stem-track-solo):not(.stem-track-mute):hover,
+.colored-track-row button:not(.stem-track-solo):not(.stem-track-mute).active {
   border-color: color-mix(in srgb, var(--stem-progress-color) 72%, #ffffff);
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color) 30%, transparent) 0 4px, transparent 4px),
@@ -1169,62 +1169,6 @@ h2 {
 .track-row:focus-within .track-row-actions {
   opacity: 1;
   pointer-events: auto;
-}
-
-/* ── Solo / Mute inline toggle buttons ───────────────────────────────── */
-.track-row-solo,
-.track-row-mute {
-  background: none;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 4px;
-  padding: 0;
-  min-width: 18px;
-  min-height: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.62rem;
-  font-weight: 900;
-  font-family: inherit;
-  cursor: pointer;
-  letter-spacing: 0.03em;
-  transition:
-    background 120ms ease,
-    color 120ms ease,
-    border-color 120ms ease;
-}
-
-.track-row-solo {
-  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 72%, rgba(255, 255, 255, 0.5));
-  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 36%, transparent);
-}
-
-.track-row-mute {
-  color: rgba(255, 255, 255, 0.4);
-  border-color: rgba(255, 255, 255, 0.12);
-}
-
-.track-row-solo:hover {
-  color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 90%, #ffffff);
-  border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 60%, transparent);
-}
-
-.track-row-mute:hover {
-  color: rgba(255, 255, 255, 0.7);
-  border-color: rgba(255, 255, 255, 0.28);
-}
-
-/* Active (toggled on) states */
-.track-row-solo.active {
-  color: #130d04;
-  background: var(--stem-progress-color, #d6a354);
-  border-color: var(--stem-progress-color, #d6a354);
-}
-
-.track-row-mute.active {
-  color: #fff3ea;
-  background: rgba(255, 75, 55, 0.72);
-  border-color: rgba(255, 75, 55, 0.5);
 }
 
 .track-row-replace {
@@ -4932,7 +4876,7 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 .desktop-track-comments-label {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -4945,12 +4889,16 @@ body:has(.app-shell.reviewer-mode) {
 /* ── Stem-only Solo / Mute toggle buttons — persistent in the track header ── */
 .stem-track-solo,
 .stem-track-mute {
-  flex-shrink: 0;
+  flex: 0 0 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 16px;
+  width: 20px;
+  min-width: 20px;
+  max-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  max-height: 20px;
   border-radius: 3px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(0, 0, 0, 0.35);
@@ -4963,6 +4911,7 @@ body:has(.app-shell.reviewer-mode) {
   cursor: pointer;
   padding: 0;
   line-height: 1;
+  appearance: none;
   transition:
     background 120ms ease,
     color 120ms ease,
@@ -4982,20 +4931,26 @@ body:has(.app-shell.reviewer-mode) {
   background: rgba(255, 80, 45, 0.08);
 }
 
-/* Solo lit — vivid studio yellow, classic hardware console convention */
-.stem-track-solo.active {
-  color: #0d0a00;
-  background: #f5e022;
-  border-color: #e8d318;
-  box-shadow: 0 0 6px rgba(245, 224, 34, 0.45);
+.stem-track-solo:focus-visible,
+.stem-track-mute:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.78);
+  outline-offset: 1px;
 }
 
-/* Mute lit — studio red-amber, standard "muted channel" color */
+/* Solo lit — solid yellow/green badge */
+.stem-track-solo.active {
+  color: #071104;
+  background: #cbea38;
+  border-color: #a9d826;
+  box-shadow: none;
+}
+
+/* Mute lit — solid amber/red badge */
 .stem-track-mute.active {
-  color: #fff0ea;
-  background: rgba(255, 55, 35, 0.88);
-  border-color: rgba(255, 55, 35, 0.65);
-  box-shadow: 0 0 6px rgba(255, 55, 35, 0.38);
+  color: #fff5ed;
+  background: #d8562f;
+  border-color: #f08b3e;
+  box-shadow: none;
 }
 
 /* ── Waveform bar preview — stretches across remaining row width ────────────── */
@@ -5087,42 +5042,6 @@ body:has(.app-shell.reviewer-mode) {
 
 .desktop-track-lane.is-loading-preview .desktop-track-lane-canvas {
   opacity: 0.62;
-}
-
-/* ── (Unused) bar layer kept for CSS completeness ──────────────────────────── */
-.desktop-track-lane-bars {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: 1.5px;
-  padding: 0 8px;
-  color: var(--stem-progress-color, #d6a354);
-  overflow: hidden;
-  pointer-events: none;
-  opacity: 0.32;
-}
-
-.desktop-track-lane-bars i {
-  display: block;
-  flex: 0 0 2.5px;
-  max-height: 70%;
-  min-height: 2px;
-  border-radius: 1px;
-  background: currentColor;
-}
-
-.desktop-track-item.active .desktop-track-lane-bars {
-  opacity: 0.44;
-}
-
-.desktop-track-lane.is-loading-preview .desktop-track-lane-bars {
-  opacity: 0.72;
-  filter: saturate(0.95);
 }
 
 /* ── Comment count badge ────────────────────────────────────────────────────── */
