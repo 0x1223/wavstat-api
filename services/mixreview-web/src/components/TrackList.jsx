@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useMemo, memo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, memo, useCallback } from "react";
 import { getStemColor } from "../lib/stemColors.js";
 import { apiUrl } from "../config/api.js";
 
@@ -115,73 +115,72 @@ async function decodePreviewPeaks(audioUrl) {
 
 function hexToRgb(hex) {
   const h = (hex || "#d6a354").replace("#", "");
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+  ];
 }
 
-function drawWaveformOnCanvas(canvas, bars, progressColor) {
-  if (!canvas) return;
+function drawWaveformOnCanvas(canvas, bars, color) {
+  if (!canvas || !bars?.length) return;
+
+  // Use clientWidth/clientHeight from parent — more reliable than
+  // getBoundingClientRect in Safari when the element is newly mounted.
+  const parent = canvas.parentElement;
+  const W = (parent ? parent.clientWidth  : canvas.clientWidth)  || 0;
+  const H = (parent ? parent.clientHeight : canvas.clientHeight) || 0;
+  if (W <= 0 || H <= 0) return; // defer — ResizeObserver will retry
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const pw  = Math.round(W * dpr);
+  const ph  = Math.round(H * dpr);
+
+  if (canvas.width !== pw || canvas.height !== ph) {
+    canvas.width  = pw;
+    canvas.height = ph;
+  }
+
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const bounds = canvas.getBoundingClientRect();
-  const parentBounds = canvas.parentElement?.getBoundingClientRect();
-  const W = Math.round(bounds.width || parentBounds?.width || canvas.offsetWidth || 0);
-  const H = Math.round(bounds.height || parentBounds?.height || canvas.offsetHeight || 0);
-  if (W <= 0 || H <= 0) return;
 
-  const pW = Math.round(W * dpr);
-  const pH = Math.round(H * dpr);
-  if (canvas.width !== pW || canvas.height !== pH) {
-    canvas.width  = pW;
-    canvas.height = pH;
-  }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
-  if (!bars?.length) return;
 
-  const [r, g, b] = hexToRgb(progressColor);
-  const cy = H / 2;
-  const maxHalf = (H * 0.70) / 2;
-  const columnStep = W < 700 ? 1 : 2;
-  const sourceStep = bars.length / Math.max(1, Math.ceil(W / columnStep));
+  const [r, g, b] = hexToRgb(color);
+  const cy      = H / 2;
+  const maxHalf = H * 0.34; // ±34 % → 68 % total waveform height
 
+  // Faint centerlane baseline
   ctx.beginPath();
   ctx.moveTo(0, cy);
   ctx.lineTo(W, cy);
-  ctx.strokeStyle = `rgba(${r},${g},${b},0.26)`;
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = `rgba(${r},${g},${b},0.22)`;
+  ctx.lineWidth   = 0.5;
   ctx.stroke();
 
+  // High-density vertical peak bars — one stroke per 2 px column
+  const colPx    = 2;
+  const colCount = Math.ceil(W / colPx);
+  const srcStep  = bars.length / colCount;
+
   ctx.beginPath();
-  for (let x = 0, column = 0; x < W; x += columnStep, column += 1) {
-    const start = Math.floor(column * sourceStep);
-    const end = Math.max(start + 1, Math.min(Math.ceil((column + 1) * sourceStep), bars.length));
-    let minPeak = 0;
-    let maxPeak = 0;
-
-    for (let i = start; i < end; i += 1) {
-      const value = Number.isFinite(bars[i]) ? Math.max(-1, Math.min(1, bars[i])) : 0;
-      if (value < 0) {
-        minPeak = Math.min(minPeak, value);
-      } else {
-        maxPeak = Math.max(maxPeak, value);
-        minPeak = Math.min(minPeak, -value);
-      }
+  for (let col = 0; col < colCount; col += 1) {
+    const s = Math.floor(col * srcStep);
+    const e = Math.min(bars.length, Math.ceil((col + 1) * srcStep));
+    let peak = 0;
+    for (let i = s; i < e; i += 1) {
+      const v = Number.isFinite(bars[i]) ? Math.abs(bars[i]) : 0;
+      if (v > peak) peak = v;
     }
-
-    const top = Math.max(cy - maxHalf, cy + minPeak * maxHalf);
-    const bottom = Math.min(cy + maxHalf, cy + maxPeak * maxHalf);
-    const crispX = Math.round(x) + 0.5;
-
-    ctx.moveTo(crispX, top);
-    ctx.lineTo(crispX, bottom);
+    const barH = Math.max(0.5, Math.min(1, peak) * maxHalf);
+    const x    = col * colPx + 0.5;
+    ctx.moveTo(x, cy - barH);
+    ctx.lineTo(x, cy + barH);
   }
-
-  ctx.lineWidth = 1;
-  ctx.lineCap = "butt";
-  ctx.lineJoin = "miter";
-  ctx.shadowBlur = 0;
-  ctx.strokeStyle = `rgba(${r},${g},${b},0.94)`;
+  ctx.lineWidth   = 1;
+  ctx.lineCap     = "butt";
+  ctx.strokeStyle = `rgba(${r},${g},${b},0.90)`;
   ctx.stroke();
 }
 
@@ -252,64 +251,60 @@ function StemLane({ label, audioSource, trackColor }) {
     audioSource?.url,
   ]);
 
-  // Deterministic synthetic waveform shown while real peaks are in flight.
-  // Always generated when there's an audioSource so the lane is never blank.
+  // Deterministic synthetic waveform drawn instantly while real peaks load.
+  // Uses a seeded LCG so each track gets a unique but stable pattern.
   const fallbackBars = useMemo(() => {
     if (peakBars?.length) return [];
-    let seed = 0;
+
+    let s = 0;
     for (let i = 0; i < (label || "").length; i += 1) {
-      seed = (seed * 31 + label.charCodeAt(i)) % 9973;
+      s = (((s << 5) - s) + label.charCodeAt(i)) | 0;
     }
+    s = (Math.abs(s) || 0xdeadbe) & 0x7fffffff;
+    const rand = () => {
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      return s / 0x7fffffff;
+    };
+
+    // Two envelope frequencies give each track a distinct "song shape"
+    const env1Cycles = 2 + (s & 3);       // 2–5 slow arcs across the lane
+    const env2Cycles = 7 + ((s >> 4) & 5); // 7–11 faster modulation
+    const phase1 = rand() * Math.PI * 2;
+    const phase2 = rand() * Math.PI * 2;
+
     return Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => {
-      const a = Math.sin((i + seed) * 0.115);
-      const b = Math.sin((i + seed) * 0.031);
-      const c = Math.sin((i + seed) * 0.007);
-      return Math.max(0.04, Math.abs(a * 0.46 + b * 0.34 + c * 0.20));
+      const t = i / WAVEFORM_BAR_COUNT;
+      const envelope =
+        (0.35 + 0.65 * Math.abs(Math.sin(t * Math.PI * env1Cycles + phase1))) *
+        (0.50 + 0.50 * Math.abs(Math.sin(t * Math.PI * env2Cycles + phase2)));
+      const noise = 0.30 + 0.70 * rand();
+      return Math.max(0.04, Math.min(1, noise * envelope));
     });
-  }, [audioSource, label, peakBars?.length]);
+  }, [label, peakBars?.length]);
 
   const bars          = peakBars?.length ? peakBars : fallbackBars;
   const progressColor = trackColor?.progress || "#d6a354";
   const isLoading     = !peakBars?.length;
-  const visibleBars   = useMemo(() => {
-    if (!bars.length) return [];
 
-    const targetCount = Math.min(WAVEFORM_BAR_COUNT, Math.max(180, bars.length));
-    const step = bars.length / targetCount;
-
-    return Array.from({ length: targetCount }, (_, index) => {
-      const start = Math.floor(index * step);
-      const end = Math.max(start + 1, Math.min(bars.length, Math.ceil((index + 1) * step)));
-      let peak = 0;
-
-      for (let i = start; i < end; i += 1) {
-        const value = Number.isFinite(bars[i]) ? Math.abs(bars[i]) : 0;
-        peak = Math.max(peak, Math.min(1, value));
-      }
-
-      return Math.max(0.035, peak);
-    });
-  }, [bars]);
-
-  // Draw (or redraw on resize) synchronously before browser paint so there's
-  // no blank flash on mount. ResizeObserver keeps canvas crisp after layout shifts.
-  useLayoutEffect(() => {
+  // Redraw whenever peaks or color change; ResizeObserver handles layout shifts.
+  // useEffect (post-paint) avoids Safari issues with useLayoutEffect + canvas.
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
     let rafId = 0;
     const draw = () => drawWaveformOnCanvas(canvas, bars, progressColor);
-    const scheduleDraw = () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        rafId = 0;
-        draw();
-      });
+    const schedule = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(draw);
     };
-    scheduleDraw();
-    const ro = new ResizeObserver(draw);
-    ro.observe(canvas.parentElement || canvas);
+
+    schedule();
+    const ro = new ResizeObserver(schedule);
+    ro.observe(canvas.parentElement ?? canvas);
+
     return () => {
-      if (rafId) cancelAnimationFrame(rafId);
+      cancelAnimationFrame(rafId);
       ro.disconnect();
     };
   }, [bars, progressColor]);
@@ -323,15 +318,8 @@ function StemLane({ label, audioSource, trackColor }) {
       ].filter(Boolean).join(" ")}
       aria-hidden="true"
     >
-      <span className="desktop-track-lane-label">{label}</span>
       <canvas ref={canvasRef} className="desktop-track-lane-canvas" />
-      {visibleBars.length > 0 ? (
-        <span className="desktop-track-lane-bars">
-          {visibleBars.map((height, index) => (
-            <i key={index} style={{ height: `${Math.round(4 + height * 36)}px` }} />
-          ))}
-        </span>
-      ) : null}
+      <span className="desktop-track-lane-label">{label}</span>
     </span>
   );
 }

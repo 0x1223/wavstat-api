@@ -4985,7 +4985,7 @@ body:has(.app-shell.reviewer-mode) {
   white-space: nowrap;
   color: rgba(255, 255, 255, 0.82);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
-  z-index: 2;
+  z-index: 10;
   pointer-events: none;
 }
 
@@ -4993,30 +4993,35 @@ body:has(.app-shell.reviewer-mode) {
   color: #fff8e8;
 }
 
-/* ── Canvas waveform — rendered behind bar overlay and label ───────────────── */
+/* ── Canvas waveform — primary DAW peak renderer, behind label ─────────────── */
+/* Explicit top/left/right/bottom instead of inset shorthand for Safari <14.1  */
 .desktop-track-lane-canvas {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 0;
-  width: 100%;
-  height: 100%;
   display: block;
   pointer-events: none;
-  opacity: 0.82;
+  opacity: 0.88;
 }
 
 .desktop-track-item.active .desktop-track-lane-canvas {
-  opacity: 0.92;
+  opacity: 0.96;
 }
 
 .desktop-track-lane.is-loading-preview .desktop-track-lane-canvas {
-  opacity: 0.52;
+  opacity: 0.62;
 }
 
-/* ── Desktop DAW waveform — simplified bar layer over the canvas ───────────── */
+/* ── (Unused) bar layer kept for CSS completeness ──────────────────────────── */
 .desktop-track-lane-bars {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   z-index: 1;
   display: flex;
   align-items: center;
