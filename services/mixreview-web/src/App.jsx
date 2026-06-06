@@ -2778,9 +2778,10 @@ export default function App({ onFirstRender } = {}) {
       onPrev={handlePrevTrack}
       onNext={handleNextTrack}
       onRepeatChange={handleRepeatChange}
-      canReview={isEngineerMode && !isActiveStemProject && duration > 0}
-      isReviewActive={isMarkerToolActive}
-      onReviewToggle={() => setIsMarkerToolActive((value) => !value)}
+      onReviewNotesToggle={() => setIsMarkerToolActive((v) => !v)}
+      isReviewNotesActive={isMarkerToolActive}
+      onCommentsToggle={() => setIsSidePanelOpen((v) => !v)}
+      isCommentsActive={isSidePanelOpen}
     />
   ) : null;
 
@@ -2912,6 +2913,8 @@ export default function App({ onFirstRender } = {}) {
             onDurationChange={updateDuration}
             onPlaybackChange={setIsPlaying}
             stemDuration={isActiveStemProject ? duration : 0}
+            stemCurrentTime={isActiveStemProject ? currentTime : 0}
+            stemIsPlaying={isActiveStemProject ? isPlaying : false}
             onSeek={isActiveStemProject ? (t) => playerRef.current?.seekToTime(t) : undefined}
           />
 

@@ -14,9 +14,10 @@ export function TransportBar({
   onPrev,
   onNext,
   onRepeatChange,
-  canReview = false,
-  isReviewActive = false,
-  onReviewToggle,
+  onReviewNotesToggle,
+  isReviewNotesActive = false,
+  onCommentsToggle,
+  isCommentsActive = false,
 }) {
   const repeatSymbol = repeatMode === "one" ? "↺¹" : "↺";
   const repeatTitle =
@@ -25,25 +26,37 @@ export function TransportBar({
     "Repeat all — click to disable repeat";
 
   const isRepeatActive = repeatMode !== "off";
+  const hasReviewActions = onReviewNotesToggle || onCommentsToggle;
 
   return (
-    <footer className={`transport${canReview ? " has-review-action" : ""}`} aria-label="Playback controls">
+    <footer className={`transport${hasReviewActions ? " has-review-action" : ""}`} aria-label="Playback controls">
       <div className="transport-time">
         <span>{formatTimecode(currentTime)}</span>
         <span>{formatTimecode(duration)}</span>
       </div>
 
-      {canReview && (
-        <div className="transport-review">
-          <button
-            type="button"
-            className={`transport-review-button${isReviewActive ? " active" : ""}`}
-            aria-pressed={isReviewActive}
-            onClick={onReviewToggle}
-          >
-            <span aria-hidden="true">✍️</span>
-            <span>Review</span>
-          </button>
+      {hasReviewActions && (
+        <div className="transport-review-panel-actions" style={{ display: "flex", alignItems: "center", gap: "12px", marginLeft: "24px" }}>
+          {onReviewNotesToggle && (
+            <button
+              type="button"
+              className={`transport-action-btn review-notes-toggle${isReviewNotesActive ? " active" : ""}`}
+              aria-pressed={isReviewNotesActive}
+              onClick={onReviewNotesToggle}
+            >
+              REVIEW NOTES
+            </button>
+          )}
+          {onCommentsToggle && (
+            <button
+              type="button"
+              className={`transport-action-btn comments-toggle${isCommentsActive ? " active" : ""}`}
+              aria-pressed={isCommentsActive}
+              onClick={onCommentsToggle}
+            >
+              COMMENTS
+            </button>
+          )}
         </div>
       )}
 

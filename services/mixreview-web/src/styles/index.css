@@ -2786,21 +2786,18 @@ h2 {
   font-weight: 800;
 }
 
-.transport-review-button {
+.transport-action-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  min-width: 104px !important;
+  min-width: 96px !important;
   color: #cfc6b6;
-}
-
-.transport-review-button span:last-child {
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 850;
+  letter-spacing: 0.04em;
 }
 
-.transport-review-button.active {
+.transport-action-btn.active {
   color: #130d04;
   border-color: rgba(215, 173, 98, 0.55);
   background: linear-gradient(180deg, #ffd889, #d6a354);
@@ -5541,6 +5538,22 @@ button.stem-toggle-action.solo-btn.active {
   pointer-events: none;
   will-change: left;
   box-shadow: 0 0 8px rgba(0, 255, 136, 0.35);
+}
+
+/* ── DAW playhead overlay ───────────────────────────────────────────────── */
+.stem-view .track-list {
+  position: relative;
+}
+
+.daw-global-vertical-line {
+  position: absolute !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: 1.5px !important;
+  background-color: #22c55e !important;
+  z-index: 9999 !important;
+  pointer-events: none !important;
+  transition: left 0.05s linear !important;
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
