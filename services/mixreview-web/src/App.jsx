@@ -2973,7 +2973,7 @@ export default function App({ onFirstRender } = {}) {
             />
           ) : null}
 
-          {isEngineerMode && !isActiveStemProject && transportBar}
+          {isEngineerMode && transportBar}
         </div>
 
         <div className="review-side">
@@ -3097,7 +3097,7 @@ export default function App({ onFirstRender } = {}) {
   </>
 )}
 
-      {(isEngineerMode && isActiveStemProject || !isEngineerMode) && transportBar}
+      {!isEngineerMode && transportBar}
 
       {isReviewerMode && mobileNoteDraft && (
         <>

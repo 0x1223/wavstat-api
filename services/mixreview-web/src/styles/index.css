@@ -5479,23 +5479,14 @@ button.stem-toggle-action.solo-btn.active {
     padding-bottom: 4px;
   }
 
-  /* ── 3d. Stem view: transport at viewport bottom, track list fills all height ─
-     When isActiveStemProject is true, App adds .stem-view to <main>. The
-     transport moves from inside .review-main to the app-shell's 3rd grid row
-     (same slot as the reviewer transport). .review-main shrinks to 1 row so the
-     track list fills the entire workspace without a capped max-height.         */
-  .app-shell.stem-view:not(.setup-shell):not(.admin-shell) {
-    grid-template-rows: auto minmax(0, 1fr) auto;
-  }
-
-  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
-    grid-template-rows: 1fr;
-  }
-
-  /* Track list panel fills the full height of its grid cell (no 38dvh cap) */
+  /* ── 3d. Stem view: track list fills available height (no 38dvh cap) ──────
+     Transport stays inside .review-main (same position as standard project).
+     Track-list-panel overrides the flex: 0 0 auto + 38dvh cap from the base
+     rule so it expands to fill the workspace above the transport.             */
   .app-shell.stem-view:not(.setup-shell):not(.admin-shell) .track-list-panel {
-    height: 100%;
-    max-height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
     grid-template-rows: minmax(0, 1fr);
     overflow: hidden;
   }
