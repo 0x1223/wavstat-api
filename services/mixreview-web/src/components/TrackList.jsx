@@ -464,15 +464,14 @@ const TrackRow = memo(function TrackRow({
   isDeleting,
   trackColor,
   isStemTrack,
-  isSoloed,
-  isMuted,
-  onToggleSolo,
-  onToggleMute,
 }) {
-  const title      = track.title || `Track ${index + 1}`;
-  const activeVersion  = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
-  const commentCount   = activeVersion?.comments?.length ?? 0;
-  const audioSource    = activeVersion?.audioSource || null;
+  const [isMuted,  setIsMuted]  = useState(false);
+  const [isSoloed, setIsSoloed] = useState(false);
+
+  const title         = track.title || `Track ${index + 1}`;
+  const activeVersion = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
+  const commentCount  = activeVersion?.comments?.length ?? 0;
+  const audioSource   = activeVersion?.audioSource || null;
 
   return (
     <div
@@ -503,42 +502,37 @@ const TrackRow = memo(function TrackRow({
         }}
         aria-label={`Track ${index + 1}: ${title}. ${commentCount} comment${commentCount === 1 ? "" : "s"}.`}
       >
-        <span className="desktop-track-header" aria-hidden="true">
+        <span className="desktop-track-header">
           <span className="desktop-track-color-rail" />
           <span className="desktop-track-meta">
             <span className="desktop-track-title-row">
               <span className="desktop-track-badge">{index + 1}</span>
               <span className="desktop-track-name">{title}</span>
             </span>
-            <span className="desktop-track-comments">
-              <span className="desktop-track-comments-label">Comments</span>
+            <div className="track-metadata-row" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className="comments-text-label">Comments</span>
               {isStemTrack && (
                 <>
-                  {/* S / M — wire to audio context node in a future pass */}
                   <button
                     type="button"
-                    className={`stem-track-solo${isSoloed ? " active" : ""}`}
-                    onClick={(e) => { e.stopPropagation(); onToggleSolo?.(track.id); }}
-                    aria-label={isSoloed ? "Unsolo track" : "Solo track"}
-                    aria-pressed={isSoloed}
-                    title={isSoloed ? "Unsolo" : "Solo"}
-                  >
-                    S
-                  </button>
-                  <button
-                    type="button"
-                    className={`stem-track-mute${isMuted ? " active" : ""}`}
-                    onClick={(e) => { e.stopPropagation(); onToggleMute?.(track.id); }}
+                    className={`studio-toggle-badge mute-btn${isMuted ? " active" : ""}`}
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); setIsMuted(!isMuted); }}
                     aria-label={isMuted ? "Unmute track" : "Mute track"}
                     aria-pressed={isMuted}
                     title={isMuted ? "Unmute" : "Mute"}
-                  >
-                    M
-                  </button>
+                  >M</button>
+                  <button
+                    type="button"
+                    className={`studio-toggle-badge solo-btn${isSoloed ? " active" : ""}`}
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); setIsSoloed(!isSoloed); }}
+                    aria-label={isSoloed ? "Unsolo track" : "Solo track"}
+                    aria-pressed={isSoloed}
+                    title={isSoloed ? "Unsolo" : "Solo"}
+                  >S</button>
                 </>
               )}
-              <strong>{commentCount}</strong>
-            </span>
+              <span className="comments-count-value">{commentCount}</span>
+            </div>
           </span>
         </span>
         <StemLane label={title} audioSource={audioSource} trackColor={trackColor} renderIndex={index} />
@@ -560,28 +554,6 @@ const TrackRow = memo(function TrackRow({
             />
             <span>Replace</span>
           </label>
-          {isStemTrack && (
-            <>
-              <button
-                type="button"
-                className={`track-row-solo${isSoloed ? " active" : ""}`}
-                onClick={(e) => { e.stopPropagation(); onToggleSolo?.(track.id); }}
-                aria-label={isSoloed ? "Unsolo" : "Solo"}
-                tabIndex={-1}
-              >
-                S
-              </button>
-              <button
-                type="button"
-                className={`track-row-mute${isMuted ? " active" : ""}`}
-                onClick={(e) => { e.stopPropagation(); onToggleMute?.(track.id); }}
-                aria-label={isMuted ? "Unmute" : "Mute"}
-                tabIndex={-1}
-              >
-                M
-              </button>
-            </>
-          )}
           <button
             type="button"
             className={`track-row-delete${isDeleting ? " is-deleting" : ""}`}

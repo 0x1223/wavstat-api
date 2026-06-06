@@ -1132,7 +1132,7 @@ h2 {
   min-width: 180px;
 }
 
-.colored-track-row button:not(.stem-track-solo):not(.stem-track-mute) {
+.colored-track-row button:not(.studio-toggle-badge) {
   position: relative;
   overflow: hidden;
   border-color: color-mix(in srgb, var(--stem-progress-color) 42%, rgba(255, 255, 255, 0.1));
@@ -1141,8 +1141,8 @@ h2 {
     linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color) 22%, transparent), rgba(255, 255, 255, 0.035));
 }
 
-.colored-track-row button:not(.stem-track-solo):not(.stem-track-mute):hover,
-.colored-track-row button:not(.stem-track-solo):not(.stem-track-mute).active {
+.colored-track-row button:not(.studio-toggle-badge):hover,
+.colored-track-row button:not(.studio-toggle-badge).active {
   border-color: color-mix(in srgb, var(--stem-progress-color) 72%, #ffffff);
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color) 30%, transparent) 0 4px, transparent 4px),
@@ -4721,9 +4721,9 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 /* Reset card-style button defaults so desktop-track-item takes over fully */
-/* stem-track-solo/mute are excluded — they carry their own visual treatment  */
-.track-list-panel .track-list button:not(.stem-track-solo):not(.stem-track-mute),
-.track-list-panel .colored-track-row button:not(.stem-track-solo):not(.stem-track-mute) {
+/* studio-toggle-badge is excluded — it carries its own visual treatment */
+.track-list-panel .track-list button:not(.studio-toggle-badge),
+.track-list-panel .colored-track-row button:not(.studio-toggle-badge) {
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -4857,100 +4857,76 @@ body:has(.app-shell.reviewer-mode) {
   color: #fff8e8;
 }
 
-.desktop-track-comments {
+/* ── Metadata row: sits in the auto grid row of .desktop-track-meta ──────── */
+.track-metadata-row {
   min-width: 0;
   width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 24px;
-  padding: 0 7px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.22);
-  color: rgba(255, 255, 255, 0.48);
+  min-height: 22px;
+  color: rgba(255, 255, 255, 0.40);
   font-size: 0.58rem;
   font-weight: 850;
   letter-spacing: 0.07em;
   text-transform: uppercase;
+  overflow: hidden;
 }
 
-.desktop-track-comments-label {
+.comments-text-label {
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.desktop-track-comments strong {
+.comments-count-value {
+  flex-shrink: 0;
   color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
   font-size: 0.75rem;
+  font-weight: 900;
   font-variant-numeric: tabular-nums;
 }
 
-/* ── Stem-only Solo / Mute toggle buttons — persistent in the track header ── */
-.stem-track-solo,
-.stem-track-mute {
-  flex: 0 0 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  min-width: 20px;
-  max-width: 20px;
-  height: 20px;
-  min-height: 20px;
-  max-height: 20px;
-  border-radius: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(0, 0, 0, 0.35);
-  color: rgba(255, 255, 255, 0.38);
-  font-size: 0.60rem;
-  font-weight: 900;
-  font-family: inherit;
-  letter-spacing: 0;
-  text-transform: none;
-  cursor: pointer;
-  padding: 0;
-  line-height: 1;
-  appearance: none;
-  transition:
-    background 120ms ease,
-    color 120ms ease,
-    border-color 120ms ease,
-    box-shadow 120ms ease;
+/* ── Studio toggle badges: M / S ────────────────────────────────────────── */
+.studio-toggle-badge {
+  width: 18px !important;
+  height: 18px !important;
+  min-width: 18px !important;
+  max-width: 18px !important;
+  padding: 0 !important;
+  border: 1px solid #333 !important;
+  border-radius: 3px !important;
+  background: #1a1a1a !important;
+  color: #555 !important;
+  font-size: 10px !important;
+  font-weight: bold !important;
+  line-height: 18px !important;
+  text-align: center !important;
+  cursor: pointer !important;
+  display: inline-block !important;
+  flex-shrink: 0 !important;
+  transition: all 0.1s ease !important;
 }
 
-.stem-track-solo:hover {
-  color: rgba(245, 220, 30, 0.92);
-  border-color: rgba(245, 220, 30, 0.45);
-  background: rgba(245, 220, 30, 0.08);
+.studio-toggle-badge:hover {
+  color: #999 !important;
+  border-color: #555 !important;
 }
 
-.stem-track-mute:hover {
-  color: rgba(255, 130, 80, 0.92);
-  border-color: rgba(255, 80, 45, 0.42);
-  background: rgba(255, 80, 45, 0.08);
+.studio-toggle-badge:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.78) !important;
+  outline-offset: 1px !important;
 }
 
-.stem-track-solo:focus-visible,
-.stem-track-mute:focus-visible {
-  outline: 1px solid rgba(255, 255, 255, 0.78);
-  outline-offset: 1px;
+button.studio-toggle-badge.mute-btn.active {
+  background: #ef4444 !important;
+  color: #ffffff !important;
+  border-color: #f87171 !important;
 }
 
-/* Solo lit — solid yellow/green badge */
-.stem-track-solo.active {
-  color: #071104;
-  background: #cbea38;
-  border-color: #a9d826;
-  box-shadow: none;
-}
-
-/* Mute lit — solid amber/red badge */
-.stem-track-mute.active {
-  color: #fff5ed;
-  background: #d8562f;
-  border-color: #f08b3e;
-  box-shadow: none;
+button.studio-toggle-badge.solo-btn.active {
+  background: #eab308 !important;
+  color: #000000 !important;
+  border-color: #facc15 !important;
 }
 
 /* ── Waveform bar preview — stretches across remaining row width ────────────── */
