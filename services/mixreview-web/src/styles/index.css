@@ -1132,7 +1132,7 @@ h2 {
   min-width: 180px;
 }
 
-.colored-track-row button:not(.studio-toggle-badge) {
+.colored-track-row button:not(.stem-toggle-action) {
   position: relative;
   overflow: hidden;
   border-color: color-mix(in srgb, var(--stem-progress-color) 42%, rgba(255, 255, 255, 0.1));
@@ -1141,8 +1141,8 @@ h2 {
     linear-gradient(180deg, color-mix(in srgb, var(--stem-wave-color) 22%, transparent), rgba(255, 255, 255, 0.035));
 }
 
-.colored-track-row button:not(.studio-toggle-badge):hover,
-.colored-track-row button:not(.studio-toggle-badge).active {
+.colored-track-row button:not(.stem-toggle-action):hover,
+.colored-track-row button:not(.stem-toggle-action).active {
   border-color: color-mix(in srgb, var(--stem-progress-color) 72%, #ffffff);
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--stem-progress-color) 30%, transparent) 0 4px, transparent 4px),
@@ -4721,9 +4721,9 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 /* Reset card-style button defaults so desktop-track-item takes over fully */
-/* studio-toggle-badge is excluded — it carries its own visual treatment */
-.track-list-panel .track-list button:not(.studio-toggle-badge),
-.track-list-panel .colored-track-row button:not(.studio-toggle-badge) {
+/* stem-toggle-action is excluded — it carries its own visual treatment */
+.track-list-panel .track-list button:not(.stem-toggle-action),
+.track-list-panel .colored-track-row button:not(.stem-toggle-action) {
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -4882,43 +4882,44 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 /* ── Studio toggle badges: M / S ────────────────────────────────────────── */
-.studio-toggle-badge {
+.stem-toggle-action {
   width: 18px !important;
   height: 18px !important;
+  min-width: 18px !important;
+  max-width: 18px !important;
+  padding: 0 !important;
+  margin: 0 2px !important;
+  background: #1e1e1e !important;
+  border: 1px solid #3a3a3a !important;
+  border-radius: 3px !important;
+  color: #777 !important;
+  font-size: 10px !important;
+  font-weight: bold !important;
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  background: #1a1a1a !important;
-  border: 1px solid #333 !important;
-  border-radius: 3px !important;
-  color: #666 !important;
-  font-size: 10px !important;
-  font-weight: bold !important;
   cursor: pointer !important;
-  padding: 0 !important;
-  flex-shrink: 0 !important;
-  transition: background 0.1s ease;
 }
 
-.studio-toggle-badge:hover {
-  color: #999 !important;
-  border-color: #555 !important;
+.stem-toggle-action:hover {
+  color: #bbb !important;
+  border-color: #666 !important;
 }
 
-.studio-toggle-badge:focus-visible {
+.stem-toggle-action:focus-visible {
   outline: 1px solid rgba(255, 255, 255, 0.78) !important;
   outline-offset: 1px !important;
 }
 
-button.studio-toggle-badge.mute-btn.active {
+button.stem-toggle-action.mute-btn.active {
   background: #ef4444 !important;
-  color: #ffffff !important;
+  color: #fff !important;
   border-color: #f87171 !important;
 }
 
-button.studio-toggle-badge.solo-btn.active {
+button.stem-toggle-action.solo-btn.active {
   background: #eab308 !important;
-  color: #000000 !important;
+  color: #000 !important;
   border-color: #facc15 !important;
 }
 

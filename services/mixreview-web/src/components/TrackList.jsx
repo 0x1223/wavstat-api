@@ -515,7 +515,7 @@ const TrackRow = memo(function TrackRow({
                 <>
                   <button
                     type="button"
-                    className={`studio-toggle-badge mute-btn${isMuted ? " active" : ""}`}
+                    className={`stem-toggle-action mute-btn${isMuted ? " active" : ""}`}
                     onClick={(e) => { e.stopPropagation(); e.preventDefault(); setIsMuted(!isMuted); }}
                     aria-label={isMuted ? "Unmute track" : "Mute track"}
                     aria-pressed={isMuted}
@@ -523,7 +523,7 @@ const TrackRow = memo(function TrackRow({
                   >M</button>
                   <button
                     type="button"
-                    className={`studio-toggle-badge solo-btn${isSoloed ? " active" : ""}`}
+                    className={`stem-toggle-action solo-btn${isSoloed ? " active" : ""}`}
                     onClick={(e) => { e.stopPropagation(); e.preventDefault(); setIsSoloed(!isSoloed); }}
                     aria-label={isSoloed ? "Unsolo track" : "Solo track"}
                     aria-pressed={isSoloed}
