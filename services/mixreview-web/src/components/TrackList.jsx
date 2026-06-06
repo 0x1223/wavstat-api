@@ -122,6 +122,45 @@ function hexToRgb(hex) {
   ];
 }
 
+// ── Peak column cache ─────────────────────────────────────────────────────────
+// Keyed by bars array identity (WeakMap) so entries are GC'd automatically when
+// a track's bars array is released. The inner Map stores per-width Float32Arrays
+// so the expensive bars→columns reduction runs exactly once per (bars, width)
+// pair regardless of how many RAF or ResizeObserver callbacks fire.
+const columnCache = new WeakMap();
+
+function getOrComputePeakColumns(bars, W) {
+  const wKey = Math.round(W);
+  let widthMap = columnCache.get(bars);
+  if (!widthMap) {
+    widthMap = new Map();
+    columnCache.set(bars, widthMap);
+  }
+  if (widthMap.has(wKey)) return widthMap.get(wKey);
+
+  const colPx    = 2;
+  const colCount = Math.ceil(W / colPx);
+  const srcStep  = bars.length / colCount;
+  const cols     = new Float32Array(colCount);
+
+  for (let col = 0; col < colCount; col += 1) {
+    const s = Math.floor(col * srcStep);
+    const e = Math.min(bars.length, Math.ceil((col + 1) * srcStep));
+    let peak = 0;
+    for (let i = s; i < e; i += 1) {
+      const v = Number.isFinite(bars[i]) ? Math.abs(bars[i]) : 0;
+      if (v > peak) peak = v;
+    }
+    cols[col] = peak;
+  }
+
+  // Cap to 8 widths per bars array — a lane rarely resizes to more than a few
+  // distinct pixel widths, so this bounds memory without any real eviction cost.
+  if (widthMap.size >= 8) widthMap.delete(widthMap.keys().next().value);
+  widthMap.set(wKey, cols);
+  return cols;
+}
+
 function drawWaveformOnCanvas(canvas, bars, color) {
   // Strict DOM guard — canvas may be mid-unmount during a rapid track reorder.
   // canvas.getContext check confirms the element is still a live canvas node;
@@ -197,21 +236,14 @@ function drawWaveformOnCanvas(canvas, bars, color) {
   ctx.lineWidth   = 0.5;
   ctx.stroke();
 
-  // High-density vertical peak bars — one stroke per 2 px column
-  const colPx    = 2;
-  const colCount = Math.ceil(W / colPx);
-  const srcStep  = bars.length / colCount;
+  // High-density vertical peak bars — columns are precomputed once per
+  // (bars, W) pair by getOrComputePeakColumns and read here in O(colCount).
+  const cols  = getOrComputePeakColumns(bars, W);
+  const colPx = 2;
 
   ctx.beginPath();
-  for (let col = 0; col < colCount; col += 1) {
-    const s = Math.floor(col * srcStep);
-    const e = Math.min(bars.length, Math.ceil((col + 1) * srcStep));
-    let peak = 0;
-    for (let i = s; i < e; i += 1) {
-      const v = Number.isFinite(bars[i]) ? Math.abs(bars[i]) : 0;
-      if (v > peak) peak = v;
-    }
-    const barH = Math.max(0.5, Math.min(1, peak) * maxHalf);
+  for (let col = 0; col < cols.length; col += 1) {
+    const barH = Math.max(0.5, Math.min(1, cols[col]) * maxHalf);
     const x    = col * colPx + 0.5;
     ctx.moveTo(x, cy - barH);
     ctx.lineTo(x, cy + barH);
@@ -238,8 +270,12 @@ async function loadPreviewPeaksForAudio(audioSource) {
 // key while metadata is catching up, then falls back to browser audio decoding.
 // While real peaks are loading, deterministic synthetic bars are rendered
 // instantly from the track title so the lane is never blank.
-function StemLane({ label, audioSource, trackColor }) {
+function StemLane({ label, audioSource, trackColor, renderIndex = 0 }) {
   const canvasRef = useRef(null);
+  // Capture renderIndex once at mount — used to stagger the first network fetch
+  // so all tracks in a large session don't race to the server simultaneously.
+  // Not updated on reorder: we don't want a re-fetch just because a track moved.
+  const staggerIndexRef = useRef(renderIndex);
 
   const [peakBars, setPeakBars] = useState(() => {
     // Sync init from cache so cached tracks render immediately on first paint.
@@ -266,14 +302,21 @@ function StemLane({ label, audioSource, trackColor }) {
           ? previewPeaksCache.get(`decode:${audioUrl}`)
           : undefined,
     );
-    const retryDelays = [0, 2500, 5000, 10000, 15000];
+
+    // Stagger the first fetch by 80 ms × track index so a 30-track session
+    // doesn't fire 30 simultaneous requests at mount or after a reorder.
+    const firstDelay = staggerIndexRef.current * 80;
+    const retryDelays = [firstDelay, 2500, 5000, 10000, 15000];
     const timers = [];
 
     retryDelays.forEach((delay) => {
       const timer = window.setTimeout(() => {
-        loadPreviewPeaksForAudio(audioSource).then((data) => {
-          if (!cancelled && data) setPeakBars(data);
-        });
+        loadPreviewPeaksForAudio(audioSource)
+          .then((data) => { if (!cancelled && data) setPeakBars(data); })
+          .catch(() => {
+            // Fetch/decode error — keep the synthetic waveform. Do NOT surface
+            // this as a "Load failed" banner or modify global application state.
+          });
       }, delay);
       timers.push(timer);
     });
@@ -326,37 +369,48 @@ function StemLane({ label, audioSource, trackColor }) {
   const progressColor = trackColor?.progress || "#d6a354";
   const isLoading     = !peakBars?.length;
 
-  // Redraw whenever peaks or color change; ResizeObserver handles layout shifts.
+  // Redraw whenever peaks, color, or render position changes.
   // useEffect (post-paint) avoids Safari issues with useLayoutEffect + canvas.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    let rafId = 0;
+    let rafId     = 0;
+    let staggerId = 0;
+    // destroyed gate — prevents any queued RO callback or RAF from running after
+    // this effect's cleanup fires (e.g. mid-flight during a track reorder).
+    let destroyed = false;
 
     const draw = () => {
-      // Always re-read the ref — the closed-over `canvas` value may have been
-      // unmounted and replaced by React during a rapid track-row reorder.
+      if (destroyed) return;
+      // Re-read the live ref — the closed-over value may be a stale unmounted canvas.
       const c = canvasRef.current;
       if (!c || !c.parentElement) return;
       drawWaveformOnCanvas(c, bars, progressColor);
     };
 
     const schedule = () => {
+      if (destroyed) return;
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(draw);
     };
 
-    schedule();
+    // Stagger the initial draw by one frame-width (16 ms) per track index so
+    // mounting or reordering 30 tracks doesn't flush all canvases in one frame.
+    staggerId = window.setTimeout(schedule, renderIndex * 16);
 
     const ro = new ResizeObserver(schedule);
     ro.observe(canvas.parentElement ?? canvas);
 
     return () => {
+      destroyed = true;
+      window.clearTimeout(staggerId);
       cancelAnimationFrame(rafId);
+      // Explicit disconnect stops any queued ResizeObserver callbacks from
+      // firing on a detached element after the effect re-runs during reorder.
       ro.disconnect();
     };
-  }, [bars, progressColor]);
+  }, [bars, progressColor, renderIndex]);
 
   return (
     <span
@@ -487,7 +541,7 @@ const TrackRow = memo(function TrackRow({
             </span>
           </span>
         </span>
-        <StemLane label={title} audioSource={audioSource} trackColor={trackColor} />
+        <StemLane label={title} audioSource={audioSource} trackColor={trackColor} renderIndex={index} />
       </div>
 
       {/* ── Edit actions — overlay on hover ─────────────────────────────── */}
