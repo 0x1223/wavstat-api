@@ -4777,8 +4777,9 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 /* Reset card-style button defaults so desktop-track-item takes over fully */
-.track-list-panel .track-list button,
-.track-list-panel .colored-track-row button {
+/* stem-track-solo/mute are excluded — they carry their own visual treatment  */
+.track-list-panel .track-list button:not(.stem-track-solo):not(.stem-track-mute),
+.track-list-panel .colored-track-row button:not(.stem-track-solo):not(.stem-track-mute) {
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -4915,10 +4916,9 @@ body:has(.app-shell.reviewer-mode) {
 .desktop-track-comments {
   min-width: 0;
   width: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   min-height: 24px;
   padding: 0 7px;
   border: 1px solid rgba(255, 255, 255, 0.10);
@@ -4931,10 +4931,71 @@ body:has(.app-shell.reviewer-mode) {
   text-transform: uppercase;
 }
 
+.desktop-track-comments-label {
+  flex: 1;
+  min-width: 0;
+}
+
 .desktop-track-comments strong {
   color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 78%, #ffffff);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── Stem-only Solo / Mute toggle buttons — persistent in the track header ── */
+.stem-track-solo,
+.stem-track-mute {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.38);
+  font-size: 0.60rem;
+  font-weight: 900;
+  font-family: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.stem-track-solo:hover {
+  color: rgba(245, 220, 30, 0.92);
+  border-color: rgba(245, 220, 30, 0.45);
+  background: rgba(245, 220, 30, 0.08);
+}
+
+.stem-track-mute:hover {
+  color: rgba(255, 130, 80, 0.92);
+  border-color: rgba(255, 80, 45, 0.42);
+  background: rgba(255, 80, 45, 0.08);
+}
+
+/* Solo lit — vivid studio yellow, classic hardware console convention */
+.stem-track-solo.active {
+  color: #0d0a00;
+  background: #f5e022;
+  border-color: #e8d318;
+  box-shadow: 0 0 6px rgba(245, 224, 34, 0.45);
+}
+
+/* Mute lit — studio red-amber, standard "muted channel" color */
+.stem-track-mute.active {
+  color: #fff0ea;
+  background: rgba(255, 55, 35, 0.88);
+  border-color: rgba(255, 55, 35, 0.65);
+  box-shadow: 0 0 6px rgba(255, 55, 35, 0.38);
 }
 
 /* ── Waveform bar preview — stretches across remaining row width ────────────── */

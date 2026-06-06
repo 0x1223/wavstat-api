@@ -441,7 +441,32 @@ const TrackRow = memo(function TrackRow({
               <span className="desktop-track-name">{title}</span>
             </span>
             <span className="desktop-track-comments">
-              <span>Comments</span>
+              <span className="desktop-track-comments-label">Comments</span>
+              {isStemTrack && (
+                <>
+                  {/* S / M — wire to audio context node in a future pass */}
+                  <button
+                    type="button"
+                    className={`stem-track-solo${isSoloed ? " active" : ""}`}
+                    onClick={(e) => { e.stopPropagation(); onToggleSolo?.(track.id); }}
+                    aria-label={isSoloed ? "Unsolo track" : "Solo track"}
+                    aria-pressed={isSoloed}
+                    title={isSoloed ? "Unsolo" : "Solo"}
+                  >
+                    S
+                  </button>
+                  <button
+                    type="button"
+                    className={`stem-track-mute${isMuted ? " active" : ""}`}
+                    onClick={(e) => { e.stopPropagation(); onToggleMute?.(track.id); }}
+                    aria-label={isMuted ? "Unmute track" : "Mute track"}
+                    aria-pressed={isMuted}
+                    title={isMuted ? "Unmute" : "Mute"}
+                  >
+                    M
+                  </button>
+                </>
+              )}
               <strong>{commentCount}</strong>
             </span>
           </span>
