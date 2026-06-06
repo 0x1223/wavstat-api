@@ -4993,7 +4993,27 @@ body:has(.app-shell.reviewer-mode) {
   color: #fff8e8;
 }
 
-/* ── Desktop DAW waveform — high-density bars over the lane background ─────── */
+/* ── Canvas waveform — rendered behind bar overlay and label ───────────────── */
+.desktop-track-lane-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  opacity: 0.82;
+}
+
+.desktop-track-item.active .desktop-track-lane-canvas {
+  opacity: 0.92;
+}
+
+.desktop-track-lane.is-loading-preview .desktop-track-lane-canvas {
+  opacity: 0.52;
+}
+
+/* ── Desktop DAW waveform — simplified bar layer over the canvas ───────────── */
 .desktop-track-lane-bars {
   position: absolute;
   inset: 0;
@@ -5005,7 +5025,7 @@ body:has(.app-shell.reviewer-mode) {
   color: var(--stem-progress-color, #d6a354);
   overflow: hidden;
   pointer-events: none;
-  opacity: 0.86;
+  opacity: 0.32;
 }
 
 .desktop-track-lane-bars i {
@@ -5018,7 +5038,7 @@ body:has(.app-shell.reviewer-mode) {
 }
 
 .desktop-track-item.active .desktop-track-lane-bars {
-  opacity: 0.94;
+  opacity: 0.44;
 }
 
 .desktop-track-lane.is-loading-preview .desktop-track-lane-bars {
