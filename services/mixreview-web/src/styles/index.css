@@ -2792,18 +2792,26 @@ h2 {
   justify-content: center;
   gap: 7px;
   min-width: 104px !important;
-  color: #cfc6b6;
+  color: #ffe0a3;
+  border: 1px solid rgba(215, 173, 98, 0.32) !important;
+  border-radius: 6px;
+  background:
+    linear-gradient(180deg, rgba(255, 215, 130, 0.11), rgba(215, 173, 98, 0.06)),
+    rgba(215, 173, 98, 0.08) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .transport-review-button span:last-child {
-  font-size: 0.78rem;
-  font-weight: 850;
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 
 .transport-review-button.active {
   color: #130d04;
-  border-color: rgba(215, 173, 98, 0.55);
-  background: linear-gradient(180deg, #ffd889, #d6a354);
+  border-color: rgba(215, 173, 98, 0.7) !important;
+  background: linear-gradient(180deg, #ffd889, #d6a354) !important;
   box-shadow: 0 6px 18px rgba(215, 173, 98, 0.2);
 }
 
