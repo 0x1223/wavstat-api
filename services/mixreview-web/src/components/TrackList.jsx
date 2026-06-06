@@ -616,6 +616,63 @@ const TrackRow = memo(function TrackRow({
   );
 });
 
+// ── StemTimeline ──────────────────────────────────────────────────────────────
+// Clickable/draggable horizontal progress bar that spans the waveform lane area.
+// Uses RAF to poll the leader audio element directly, giving smooth 60fps movement
+// without threading currentTime through React state on every animation frame.
+function StemTimeline({ audioElsRef, duration, onSeek }) {
+  const railRef     = useRef(null);
+  const playheadRef = useRef(null);
+  const rafRef      = useRef(null);
+
+  useEffect(() => {
+    const tick = () => {
+      const leader = [...audioElsRef.current.values()].sort((a, b) => a.index - b.index)[0]?.el;
+      if (leader && playheadRef.current) {
+        const dur = leader.duration || duration || 0;
+        const pct = dur > 0 ? Math.min(Math.max(leader.currentTime / dur, 0), 1) : 0;
+        playheadRef.current.style.left = `${pct * 100}%`;
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [audioElsRef, duration]);
+
+  const handlePointerDown = useCallback((e) => {
+    const rail = railRef.current;
+    if (!rail) return;
+    e.preventDefault();
+    const seek = (clientX) => {
+      const rect = rail.getBoundingClientRect();
+      const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+      const dur = duration || [...audioElsRef.current.values()].sort((a, b) => a.index - b.index)[0]?.el?.duration || 0;
+      if (dur > 0) onSeek?.(ratio * dur);
+    };
+    seek(e.clientX);
+    const onMove = (ev) => seek(ev.clientX);
+    const onUp   = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup",   onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup",   onUp);
+  }, [audioElsRef, duration, onSeek]);
+
+  return (
+    <div className="stem-timeline-row" aria-hidden="true">
+      <div className="stem-timeline-spacer" />
+      <div
+        className="stem-timeline"
+        ref={railRef}
+        onPointerDown={handlePointerDown}
+      >
+        <div className="stem-timeline-playhead" ref={playheadRef} />
+      </div>
+    </div>
+  );
+}
+
 // ── TypeBadge ─────────────────────────────────────────────────────────────────
 function TypeBadge({ type }) {
   const isStem = type === "stem_project";
@@ -645,6 +702,8 @@ export const TrackList = memo(function TrackList({
   onTimeUpdate,
   onDurationChange,
   onPlaybackChange,
+  stemDuration,
+  onSeek,
 }) {
   const [collapsed,            setCollapsed]            = useState({});
   const [renamingAlbumId,      setRenamingAlbumId]      = useState(null);
@@ -1224,6 +1283,15 @@ export const TrackList = memo(function TrackList({
                 <p className="desktop-track-section-label">
                   {isStemProject ? "Stems" : "Tracks"}
                 </p>
+
+                {/* Global playhead timeline — stem projects only */}
+                {isStemProject && !isCollapsed && albumTracks.length > 0 && (
+                  <StemTimeline
+                    audioElsRef={audioElsRef}
+                    duration={stemDuration}
+                    onSeek={onSeek}
+                  />
+                )}
 
                 {!isCollapsed && (
                   <div className="track-list">

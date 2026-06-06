@@ -5478,6 +5478,67 @@ button.stem-toggle-action.solo-btn.active {
     background: #0e0e0e;
     padding-bottom: 4px;
   }
+
+  /* ── 3d. Stem view: transport at viewport bottom, track list fills all height ─
+     When isActiveStemProject is true, App adds .stem-view to <main>. The
+     transport moves from inside .review-main to the app-shell's 3rd grid row
+     (same slot as the reviewer transport). .review-main shrinks to 1 row so the
+     track list fills the entire workspace without a capped max-height.         */
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell) {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
+    grid-template-rows: 1fr;
+  }
+
+  /* Track list panel fills the full height of its grid cell (no 38dvh cap) */
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell) .track-list-panel {
+    height: 100%;
+    max-height: 100%;
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+}
+
+/* ── Stem Timeline Ruler ──────────────────────────────────────────────────── */
+/* Two-column grid row that aligns the clickable progress rail with the        */
+/* waveform canvas lanes (196px spacer = .desktop-track-header width).         */
+.stem-timeline-row {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  height: 20px;
+  margin: 2px 0 6px;
+}
+
+.stem-timeline {
+  position: relative;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 2px;
+  cursor: col-resize;
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+  transition: background 120ms ease;
+}
+
+.stem-timeline:hover {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.stem-timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: rgba(0, 255, 136, 0.82);
+  transform: translateX(-50%);
+  pointer-events: none;
+  will-change: left;
+  box-shadow: 0 0 8px rgba(0, 255, 136, 0.35);
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

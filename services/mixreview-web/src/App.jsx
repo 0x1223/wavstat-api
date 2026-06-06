@@ -2785,7 +2785,7 @@ export default function App({ onFirstRender } = {}) {
   ) : null;
 
   return (
-    <main className={`app-shell${isReviewerMode ? " reviewer-mode" : ""}`}>
+    <main className={`app-shell${isReviewerMode ? " reviewer-mode" : ""}${isEngineerMode && isActiveStemProject ? " stem-view" : ""}`}>
       <div className="top-stack">
         <Header
           projectName={projectName}
@@ -2911,6 +2911,8 @@ export default function App({ onFirstRender } = {}) {
             onTimeUpdate={handlePlaybackTimeUpdate}
             onDurationChange={updateDuration}
             onPlaybackChange={setIsPlaying}
+            stemDuration={isActiveStemProject ? duration : 0}
+            onSeek={isActiveStemProject ? (t) => playerRef.current?.seekToTime(t) : undefined}
           />
 
           {activeTrack && !hasPlayableAudio && (
@@ -2966,7 +2968,7 @@ export default function App({ onFirstRender } = {}) {
             />
           ) : null}
 
-          {isEngineerMode && transportBar}
+          {isEngineerMode && !isActiveStemProject && transportBar}
         </div>
 
         <div className="review-side">
@@ -3090,7 +3092,7 @@ export default function App({ onFirstRender } = {}) {
   </>
 )}
 
-      {!isEngineerMode && transportBar}
+      {(isEngineerMode && isActiveStemProject || !isEngineerMode) && transportBar}
 
       {isReviewerMode && mobileNoteDraft && (
         <>
