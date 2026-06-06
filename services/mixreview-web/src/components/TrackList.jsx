@@ -125,12 +125,25 @@ function hexToRgb(hex) {
 function drawWaveformOnCanvas(canvas, bars, color) {
   if (!canvas || !bars?.length) return;
 
-  // Use clientWidth/clientHeight from parent — more reliable than
-  // getBoundingClientRect in Safari when the element is newly mounted.
   const parent = canvas.parentElement;
-  const W = (parent ? parent.clientWidth  : canvas.clientWidth)  || 0;
-  const H = (parent ? parent.clientHeight : canvas.clientHeight) || 0;
-  if (W <= 0 || H <= 0) return; // defer — ResizeObserver will retry
+  let W = (parent ? parent.clientWidth  : canvas.clientWidth)  || 0;
+  let H = (parent ? parent.clientHeight : canvas.clientHeight) || 0;
+
+  // Safari: clientWidth/Height can return 0 for newly-mounted absolutely-
+  // positioned elements before the first composited paint. Fall back to
+  // getBoundingClientRect which reads the actual rendered geometry.
+  if (W === 0 || H === 0) {
+    const rect = (parent || canvas).getBoundingClientRect();
+    W = rect.width  || 0;
+    H = rect.height || 0;
+  }
+
+  // Still zero — layout isn't committed yet. Schedule one more attempt on
+  // the next animation frame instead of bailing out permanently.
+  if (W <= 0 || H <= 0) {
+    requestAnimationFrame(() => drawWaveformOnCanvas(canvas, bars, color));
+    return;
+  }
 
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const pw  = Math.round(W * dpr);
@@ -144,7 +157,11 @@ function drawWaveformOnCanvas(canvas, bars, color) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // ctx.save/scale/restore is more reliable than setTransform in Safari
+  // when the canvas backing buffer has just been resized — setTransform can
+  // silently no-op in some Safari versions immediately after a resize.
+  ctx.save();
+  ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, W, H);
 
   const [r, g, b] = hexToRgb(color);
@@ -182,6 +199,8 @@ function drawWaveformOnCanvas(canvas, bars, color) {
   ctx.lineCap     = "butt";
   ctx.strokeStyle = `rgba(${r},${g},${b},0.90)`;
   ctx.stroke();
+
+  ctx.restore();
 }
 
 async function loadPreviewPeaksForAudio(audioSource) {
@@ -317,9 +336,10 @@ function StemLane({ label, audioSource, trackColor }) {
         isLoading && audioSource ? "is-loading-preview" : "",
       ].filter(Boolean).join(" ")}
       aria-hidden="true"
+      style={{ position: "relative" }}
     >
       <canvas ref={canvasRef} className="desktop-track-lane-canvas" />
-      <span className="desktop-track-lane-label">{label}</span>
+      <span className="desktop-track-lane-label" style={{ position: "absolute", zIndex: 10 }}>{label}</span>
     </span>
   );
 }
@@ -386,10 +406,17 @@ const TrackRow = memo(function TrackRow({
       onDragEnd={onDragEnd}
     >
       {/* ── Main selectable row ─────────────────────────────────────────── */}
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         className={`desktop-track-item${isActive ? " active" : ""}`}
         onClick={() => onTrackSelect(track.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onTrackSelect(track.id);
+          }
+        }}
         aria-label={`Track ${index + 1}: ${title}. ${commentCount} comment${commentCount === 1 ? "" : "s"}.`}
       >
         <span className="desktop-track-header" aria-hidden="true">
@@ -406,7 +433,7 @@ const TrackRow = memo(function TrackRow({
           </span>
         </span>
         <StemLane label={title} audioSource={audioSource} trackColor={trackColor} />
-      </button>
+      </div>
 
       {/* ── Edit actions — overlay on hover ─────────────────────────────── */}
       {canEdit && (

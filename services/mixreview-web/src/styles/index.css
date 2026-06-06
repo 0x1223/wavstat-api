@@ -4816,6 +4816,15 @@ body:has(.app-shell.reviewer-mode) {
   border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 52%, #050505) !important;
 }
 
+.desktop-track-item:focus {
+  outline: none;
+}
+
+.desktop-track-item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--stem-progress-color, #d6a354) 72%, #ffffff);
+  outline-offset: -2px;
+}
+
 .desktop-track-item.active {
   border-color: color-mix(in srgb, var(--stem-progress-color, #d6a354) 72%, #ffffff) !important;
   background:
@@ -4995,12 +5004,16 @@ body:has(.app-shell.reviewer-mode) {
 
 /* ── Canvas waveform — primary DAW peak renderer, behind label ─────────────── */
 /* Explicit top/left/right/bottom instead of inset shorthand for Safari <14.1  */
+/* width/height: 100% forces Safari to resolve layout dimensions on the element */
+/* itself, preventing getBoundingClientRect from returning zero on first paint. */
 .desktop-track-lane-canvas {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
+  width: 100%;
+  height: 100%;
   z-index: 0;
   display: block;
   pointer-events: none;
