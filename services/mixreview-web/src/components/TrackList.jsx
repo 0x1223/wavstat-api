@@ -123,7 +123,11 @@ function hexToRgb(hex) {
 }
 
 function drawWaveformOnCanvas(canvas, bars, color) {
-  if (!canvas || !bars?.length) return;
+  // Strict DOM guard — canvas may be mid-unmount during a rapid track reorder.
+  // canvas.getContext check confirms the element is still a live canvas node;
+  // parentElement check confirms it is still attached to the layout tree.
+  if (!canvas || !canvas.getContext || !canvas.parentElement) return;
+  if (!bars?.length) return;
 
   const parent = canvas.parentElement;
   let W = (parent ? parent.clientWidth  : canvas.clientWidth)  || 0;
@@ -138,10 +142,13 @@ function drawWaveformOnCanvas(canvas, bars, color) {
     H = rect.height || 0;
   }
 
-  // Still zero — layout isn't committed yet. Schedule one more attempt on
-  // the next animation frame instead of bailing out permanently.
+  // Still zero — layout isn't committed yet. Schedule one retry on the next
+  // animation frame. Re-check the DOM guard first so a detached canvas from
+  // a concurrent reorder does not start an infinite retry loop.
   if (W <= 0 || H <= 0) {
-    requestAnimationFrame(() => drawWaveformOnCanvas(canvas, bars, color));
+    requestAnimationFrame(() => {
+      if (canvas.parentElement) drawWaveformOnCanvas(canvas, bars, color);
+    });
     return;
   }
 
@@ -326,13 +333,22 @@ function StemLane({ label, audioSource, trackColor }) {
     if (!canvas) return;
 
     let rafId = 0;
-    const draw = () => drawWaveformOnCanvas(canvas, bars, progressColor);
+
+    const draw = () => {
+      // Always re-read the ref — the closed-over `canvas` value may have been
+      // unmounted and replaced by React during a rapid track-row reorder.
+      const c = canvasRef.current;
+      if (!c || !c.parentElement) return;
+      drawWaveformOnCanvas(c, bars, progressColor);
+    };
+
     const schedule = () => {
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(draw);
     };
 
     schedule();
+
     const ro = new ResizeObserver(schedule);
     ro.observe(canvas.parentElement ?? canvas);
 

@@ -1,5 +1,15 @@
 import { apiUrl } from "../config/api.js";
 
+// Shared auth header builder — mirrors the pattern in saveSessionToApi so all
+// requests that touch protected API routes carry the same Bearer token.
+function adminHeaders(extra = {}) {
+  const adminKey = import.meta.env.VITE_ADMIN_API_KEY;
+  return {
+    ...extra,
+    ...(adminKey ? { "Authorization": `Bearer ${adminKey}` } : {}),
+  };
+}
+
 export async function loadSessionFromApi(sessionId, options = {}) {
   if (!sessionId) {
     return null;
@@ -12,6 +22,7 @@ export async function loadSessionFromApi(sessionId, options = {}) {
     {
       cache: "no-store",
       signal,
+      headers: adminHeaders(),
     },
   );
   if (response.status === 404) {
@@ -26,7 +37,9 @@ export async function loadSessionFromApi(sessionId, options = {}) {
 }
 
 export async function listSessionsFromApi() {
-  const response = await fetch(apiUrl("/api/sessions"));
+  const response = await fetch(apiUrl("/api/sessions"), {
+    headers: adminHeaders(),
+  });
   if (!response.ok) {
     throw new Error("Sessions could not be loaded.");
   }
