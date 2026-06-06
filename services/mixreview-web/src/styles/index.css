@@ -4926,6 +4926,38 @@ button.stem-toggle-action.solo-btn.active {
   border-color: #facc15 !important;
 }
 
+/* ── Mute / Solo visual state ────────────────────────────────────────────── */
+.desktop-track-item[data-muted] .desktop-track-lane {
+  opacity: 0.22;
+  filter: grayscale(1);
+  transition: opacity 120ms ease, filter 120ms ease;
+}
+
+.desktop-track-item[data-muted] .desktop-track-header {
+  opacity: 0.45;
+  transition: opacity 120ms ease;
+}
+
+.desktop-track-item[data-dimmed] .desktop-track-lane {
+  opacity: 0.18;
+  filter: grayscale(0.85);
+  transition: opacity 120ms ease, filter 120ms ease;
+}
+
+.desktop-track-item[data-dimmed] .desktop-track-header {
+  opacity: 0.38;
+  transition: opacity 120ms ease;
+}
+
+/* ── Drag-and-drop insertion indicator ───────────────────────────────────── */
+.track-row.drag-insert-above {
+  box-shadow: 0 -2px 0 0 rgba(214, 163, 84, 0.85);
+}
+
+.track-row.drag-insert-below {
+  box-shadow: 0 2px 0 0 rgba(214, 163, 84, 0.85);
+}
+
 /* ── Waveform bar preview — stretches across remaining row width ────────────── */
 .desktop-track-lane {
   position: relative;

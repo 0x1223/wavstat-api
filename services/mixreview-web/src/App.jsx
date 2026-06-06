@@ -1451,12 +1451,17 @@ export default function App({ onFirstRender } = {}) {
   // The track is removed from ALL albums first (guard against duplicates),
   // then appended to the target album. Works with functional updater so it
   // never captures a stale albums snapshot from the closure.
-  const handleMoveTrack = useCallback((trackId, targetAlbumId) => {
+  const handleMoveTrack = useCallback((trackId, targetAlbumId, insertAtIndex) => {
     if (!trackId || !targetAlbumId) return;
     setAlbums((prev) =>
       prev.map((album) => {
         const without = album.trackIds.filter((id) => id !== trackId);
         if (album.id === targetAlbumId) {
+          if (typeof insertAtIndex === "number" && insertAtIndex >= 0) {
+            const next = [...without];
+            next.splice(Math.min(insertAtIndex, next.length), 0, trackId);
+            return { ...album, trackIds: next };
+          }
           return { ...album, trackIds: [...without, trackId] };
         }
         return { ...album, trackIds: without };

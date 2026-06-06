@@ -461,21 +461,28 @@ const TrackRow = memo(function TrackRow({
   onTrackReplace,
   onDragStart,
   onDragEnd,
+  onTrackDragOver,
   isDeleting,
   trackColor,
   isStemTrack,
+  isSoloed,
+  isMuted,
+  onToggleSolo,
+  onToggleMute,
+  isDimmedBySolo,
+  isDragTarget,
+  dragInsertAbove,
 }) {
-  const [isMuted,  setIsMuted]  = useState(false);
-  const [isSoloed, setIsSoloed] = useState(false);
-
   const title         = track.title || `Track ${index + 1}`;
   const activeVersion = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
   const commentCount  = activeVersion?.comments?.length ?? 0;
   const audioSource   = activeVersion?.audioSource || null;
 
+  const dragClass = isDragTarget ? (dragInsertAbove ? " drag-insert-above" : " drag-insert-below") : "";
+
   return (
     <div
-      className={`track-row${trackColor ? " colored-track-row" : ""}`}
+      className={`track-row${trackColor ? " colored-track-row" : ""}${dragClass}`}
       style={
         trackColor
           ? {
@@ -487,12 +494,19 @@ const TrackRow = memo(function TrackRow({
       draggable={canEdit}
       onDragStart={canEdit ? (e) => onDragStart(e, track.id) : undefined}
       onDragEnd={onDragEnd}
+      onDragOver={canEdit ? (e) => {
+        e.preventDefault();
+        const rect = e.currentTarget.getBoundingClientRect();
+        onTrackDragOver?.(track.id, e.clientY < rect.top + rect.height / 2);
+      } : undefined}
     >
       {/* ── Main selectable row ─────────────────────────────────────────── */}
       <div
         role="button"
         tabIndex={0}
         className={`desktop-track-item${isActive ? " active" : ""}`}
+        data-muted={isMuted || undefined}
+        data-dimmed={isDimmedBySolo || undefined}
         onClick={() => onTrackSelect(track.id)}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -516,7 +530,7 @@ const TrackRow = memo(function TrackRow({
                   <button
                     type="button"
                     className={`stem-toggle-action mute-btn${isMuted ? " active" : ""}`}
-                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); setIsMuted(!isMuted); }}
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); onToggleMute?.(track.id); }}
                     aria-label={isMuted ? "Unmute track" : "Mute track"}
                     aria-pressed={isMuted}
                     title={isMuted ? "Unmute" : "Mute"}
@@ -524,7 +538,7 @@ const TrackRow = memo(function TrackRow({
                   <button
                     type="button"
                     className={`stem-toggle-action solo-btn${isSoloed ? " active" : ""}`}
-                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); setIsSoloed(!isSoloed); }}
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); onToggleSolo?.(track.id); }}
                     aria-label={isSoloed ? "Unsolo track" : "Solo track"}
                     aria-pressed={isSoloed}
                     title={isSoloed ? "Unsolo" : "Solo"}
@@ -603,6 +617,8 @@ export const TrackList = memo(function TrackList({
   const [renamingAlbumId,      setRenamingAlbumId]      = useState(null);
   const [renameValue,          setRenameValue]          = useState("");
   const [dragOverAlbumId,      setDragOverAlbumId]      = useState(null);
+  const [dragOverTrackId,      setDragOverTrackId]      = useState(null);
+  const [dragAbove,            setDragAbove]            = useState(false);
   const [deletingTrackId,      setDeletingTrackId]      = useState(null);
   const [deleteError,          setDeleteError]          = useState("");
   const [showTypePicker,       setShowTypePicker]       = useState(false);
@@ -770,14 +786,37 @@ export const TrackList = memo(function TrackList({
     }
   }, []);
 
+  const handleTrackDragOver = useCallback((trackId, isAbove) => {
+    setDragOverTrackId(trackId);
+    setDragAbove(isAbove);
+  }, []);
+
   const handleDrop = useCallback((e, albumId) => {
     e.preventDefault();
     const trackId = e.dataTransfer.getData("text/plain");
-    if (trackId) onMoveTrack?.(trackId, albumId);
-    setDragOverAlbumId(null);
-  }, [onMoveTrack]);
+    if (!trackId) { setDragOverAlbumId(null); setDragOverTrackId(null); return; }
 
-  const handleDragEnd = useCallback(() => setDragOverAlbumId(null), []);
+    if (dragOverTrackId && dragOverTrackId !== trackId) {
+      // Find the album that owns the hovered track so cross-album drops work too
+      const ownerAlbum = effectiveAlbums.find((a) => (a.trackIds || []).includes(dragOverTrackId));
+      const resolvedAlbumId = ownerAlbum?.id || albumId;
+      // Compute insertion index relative to the album's current order (sans the dragged track)
+      const currentIds = (ownerAlbum?.trackIds || []).filter((id) => id !== trackId);
+      const targetIdx  = currentIds.indexOf(dragOverTrackId);
+      const insertIdx  = targetIdx >= 0 ? (dragAbove ? targetIdx : targetIdx + 1) : currentIds.length;
+      onMoveTrack?.(trackId, resolvedAlbumId, insertIdx);
+    } else {
+      onMoveTrack?.(trackId, albumId);
+    }
+
+    setDragOverAlbumId(null);
+    setDragOverTrackId(null);
+  }, [onMoveTrack, effectiveAlbums, dragOverTrackId, dragAbove]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragOverAlbumId(null);
+    setDragOverTrackId(null);
+  }, []);
 
   const handleToggleSolo = useCallback((trackId) => {
     setSoloedTracks((prev) => {
@@ -1059,6 +1098,7 @@ export const TrackList = memo(function TrackList({
                         onTrackReplace={onTrackReplace}
                         onDragStart={handleDragStart}
                         onDragEnd={handleDragEnd}
+                        onTrackDragOver={handleTrackDragOver}
                         isDeleting={deletingTrackId === track.id}
                         trackColor={getStemColor(index)}
                         isStemTrack={isStemProject}
@@ -1066,6 +1106,9 @@ export const TrackList = memo(function TrackList({
                         isMuted={mutedTracks.has(track.id)}
                         onToggleSolo={handleToggleSolo}
                         onToggleMute={handleToggleMute}
+                        isDimmedBySolo={soloedTracks.size > 0 && !soloedTracks.has(track.id)}
+                        isDragTarget={dragOverTrackId === track.id}
+                        dragInsertAbove={dragAbove}
                       />
                     ))}
                     {visibleAlbumTracks.length < albumTracks.length && (
