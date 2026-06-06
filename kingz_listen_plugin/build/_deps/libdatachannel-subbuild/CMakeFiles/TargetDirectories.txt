@@ -1,3 +1,0 @@
-/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/CMakeFiles/libdatachannel-populate.dir
-/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/CMakeFiles/edit_cache.dir
-/Users/kingzbreadentertainment/wavstat/kingz_listen_plugin/build/_deps/libdatachannel-subbuild/CMakeFiles/rebuild_cache.dir
