@@ -4887,6 +4887,7 @@ body:has(.app-shell.reviewer-mode) {
   height: 18px !important;
   min-width: 18px !important;
   max-width: 18px !important;
+  min-height: 0 !important;
   padding: 0 !important;
   margin: 0 2px !important;
   background: #1e1e1e !important;
@@ -4895,10 +4896,12 @@ body:has(.app-shell.reviewer-mode) {
   color: #777 !important;
   font-size: 10px !important;
   font-weight: bold !important;
+  line-height: 1 !important;
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
   cursor: pointer !important;
+  box-sizing: border-box !important;
 }
 
 .stem-toggle-action:hover {
