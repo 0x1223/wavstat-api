@@ -9,7 +9,7 @@ import { StartScreen } from "./components/StartScreen.jsx";
 import { TrackList } from "./components/TrackList.jsx";
 import { TransportBar } from "./components/TransportBar.jsx";
 import { WaveformReview } from "./components/WaveformReview.jsx";
-import { StemPlayer } from "./components/StemPlayer.jsx";
+// StemPlayer removed — stem audio now lives in TrackList StemLane elements
 import { MobileStemStack } from "./components/MobileStemStack.jsx";
 import { getStemColor } from "./lib/stemColors.js";
 import {
@@ -269,24 +269,6 @@ export default function App({ onFirstRender } = {}) {
   const isActiveStemProject =
     activeAlbum?.type === "stem_project";
 
-  // Build the ordered stems array for StemPlayer (admin stem-project view only).
-  // Each entry mirrors the shape StemPlayer expects: { id, title, audioSource }.
-  const stemTracks = useMemo(() => {
-    if (!isActiveStemProject || !activeAlbum) return [];
-    return (activeAlbum.trackIds || [])
-      .map((id) => tracks.find((t) => t.id === id))
-      .filter(Boolean)
-      .map((track) => {
-        const ver =
-          track.versions.find((v) => v.id === track.activeVersionId) ||
-          track.versions[0];
-        return {
-          id: track.id,
-          title: track.title,
-          audioSource: ver?.audioSource ? normalizeAudioSource(ver.audioSource) : null,
-        };
-      });
-  }, [isActiveStemProject, activeAlbum, tracks]);
 
   // ── Mobile reviewer: track which project the reviewer has selected ────────
   // Separate from the admin activeAlbum so the two modes never interfere.
@@ -2925,6 +2907,10 @@ export default function App({ onFirstRender } = {}) {
             onUpdateAlbumType={handleUpdateAlbumType}
             onMoveTrack={handleMoveTrack}
             onDeleteProject={handleDeleteProject}
+            onStemControlsReady={handlePlayerReady}
+            onTimeUpdate={handlePlaybackTimeUpdate}
+            onDurationChange={updateDuration}
+            onPlaybackChange={setIsPlaying}
           />
 
           {activeTrack && !hasPlayableAudio && (
@@ -2938,24 +2924,13 @@ export default function App({ onFirstRender } = {}) {
           )}
 
           {/* Player selection:
-              1. Admin + stem project           → StemPlayer (desktop multi-lane)
+              1. Admin + stem project           → audio lives in TrackList StemLanes
               2. Reviewer + stem project selected
                  + mobile viewport              → MobileStemStack
               3. Everything else                → WaveformReview (single track)
               key={…?.id} forces a clean remount on project switch so stale
               WaveSurfer instances are fully torn down before new ones start. */}
-          {isEngineerMode && isActiveStemProject ? (
-            <StemPlayer
-              key={activeAlbum?.id}
-              stems={stemTracks}
-              trackTitle={activeAlbum?.title}
-              selectedTime={selectedTime}
-              onReady={handlePlayerReady}
-              onTimeUpdate={handlePlaybackTimeUpdate}
-              onDurationChange={updateDuration}
-              onPlaybackChange={setIsPlaying}
-            />
-          ) : isReviewerMode && isReviewerStemProject && isMobileViewport() ? (
+          {isReviewerMode && isReviewerStemProject && isMobileViewport() ? (
             <MobileStemStack
               key={reviewerAlbum?.id}
               stems={reviewerStemTracks}
@@ -2965,7 +2940,7 @@ export default function App({ onFirstRender } = {}) {
               onPlaybackChange={setIsPlaying}
               onMobileNoteRequest={openMobileNote}
             />
-          ) : activeTrack ? (
+          ) : !isActiveStemProject && activeTrack ? (
             <WaveformReview
               audioSource={audioSource}
               comments={comments}

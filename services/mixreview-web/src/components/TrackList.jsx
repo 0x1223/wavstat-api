@@ -270,8 +270,22 @@ async function loadPreviewPeaksForAudio(audioSource) {
 // key while metadata is catching up, then falls back to browser audio decoding.
 // While real peaks are loading, deterministic synthetic bars are rendered
 // instantly from the track title so the lane is never blank.
-function StemLane({ label, audioSource, trackColor, renderIndex = 0 }) {
+function StemLane({ label, audioSource, trackColor, renderIndex = 0, isStemTrack = false, onAudioMount, onAudioUnmount }) {
   const canvasRef = useRef(null);
+
+  // Stable refs so the audio ref callback never changes identity (avoids
+  // React re-calling it with null then the element on every parent re-render).
+  const onAudioMountRef   = useRef(onAudioMount);
+  const onAudioUnmountRef = useRef(onAudioUnmount);
+  useEffect(() => {
+    onAudioMountRef.current   = onAudioMount;
+    onAudioUnmountRef.current = onAudioUnmount;
+  });
+
+  const audioRefCallback = useCallback((el) => {
+    if (el) onAudioMountRef.current?.(el);
+    else    onAudioUnmountRef.current?.();
+  }, []);
   // Capture renderIndex once at mount — used to stagger the first network fetch
   // so all tracks in a large session don't race to the server simultaneously.
   // Not updated on reorder: we don't want a re-fetch just because a track moved.
@@ -412,6 +426,8 @@ function StemLane({ label, audioSource, trackColor, renderIndex = 0 }) {
     };
   }, [bars, progressColor, renderIndex]);
 
+  const playbackUrl = getPreviewPlaybackUrl(audioSource);
+
   return (
     <span
       className={[
@@ -422,6 +438,9 @@ function StemLane({ label, audioSource, trackColor, renderIndex = 0 }) {
       aria-hidden="true"
       style={{ position: "relative" }}
     >
+      {isStemTrack && playbackUrl && (
+        <audio ref={audioRefCallback} src={playbackUrl} preload="auto" style={{ display: "none" }} />
+      )}
       <canvas ref={canvasRef} className="desktop-track-lane-canvas" />
       <span className="desktop-track-lane-label" style={{ position: "absolute", zIndex: 10 }}>{label}</span>
     </span>
@@ -472,6 +491,8 @@ const TrackRow = memo(function TrackRow({
   isDimmedBySolo,
   isDragTarget,
   dragInsertAbove,
+  onAudioMount,
+  onAudioUnmount,
 }) {
   const title         = track.title || `Track ${index + 1}`;
   const activeVersion = track.versions.find((v) => v.id === track.activeVersionId) || track.versions[0];
@@ -549,7 +570,15 @@ const TrackRow = memo(function TrackRow({
             </span>
           </span>
         </span>
-        <StemLane label={title} audioSource={audioSource} trackColor={trackColor} renderIndex={index} />
+        <StemLane
+          label={title}
+          audioSource={audioSource}
+          trackColor={trackColor}
+          renderIndex={index}
+          isStemTrack={isStemTrack}
+          onAudioMount={onAudioMount ? (el) => onAudioMount(track.id, index, el) : undefined}
+          onAudioUnmount={onAudioUnmount ? () => onAudioUnmount(track.id) : undefined}
+        />
       </div>
 
       {/* ── Edit actions — overlay on hover ─────────────────────────────── */}
@@ -612,6 +641,10 @@ export const TrackList = memo(function TrackList({
   onUpdateAlbumType,
   onMoveTrack,
   onDeleteProject,
+  onStemControlsReady,
+  onTimeUpdate,
+  onDurationChange,
+  onPlaybackChange,
 }) {
   const [collapsed,            setCollapsed]            = useState({});
   const [renamingAlbumId,      setRenamingAlbumId]      = useState(null);
@@ -624,6 +657,114 @@ export const TrackList = memo(function TrackList({
   const [showTypePicker,       setShowTypePicker]       = useState(false);
   const [soloedTracks,         setSoloedTracks]         = useState(() => new Set());
   const [mutedTracks,          setMutedTracks]          = useState(() => new Set());
+
+  // ── Stem audio element registry ──────────────────────────────────────────────
+  // Maps trackId → { el: HTMLAudioElement, index: number }
+  // Ref (not state) so mutations don't cause renders — only updated via callbacks.
+  const audioElsRef       = useRef(new Map());
+  const leaderCleanupRef  = useRef(null);
+
+  // Stable refs for stem transport callbacks — updated every render so handlers
+  // always call the latest prop value without needing to be in dep arrays.
+  const stemCbRef = useRef({ onStemControlsReady, onTimeUpdate, onDurationChange, onPlaybackChange });
+  useEffect(() => {
+    stemCbRef.current = { onStemControlsReady, onTimeUpdate, onDurationChange, onPlaybackChange };
+  });
+
+  // Stable refs for current mute/solo sets — read inside callbacks that have
+  // empty dep arrays (cannot close over state without stale value problems).
+  const soloedTracksRef = useRef(soloedTracks);
+  const mutedTracksRef  = useRef(mutedTracks);
+  useEffect(() => {
+    soloedTracksRef.current = soloedTracks;
+    mutedTracksRef.current  = mutedTracks;
+  });
+
+  // Emit transport controls whenever the audio element map changes.
+  const emitStemControls = useCallback(() => {
+    const { onStemControlsReady: ready } = stemCbRef.current;
+    if (!ready) return;
+    const sorted = [...audioElsRef.current.values()].sort((a, b) => a.index - b.index);
+    if (!sorted.length) { ready(null); return; }
+
+    const allEls   = () => [...audioElsRef.current.values()].sort((a, b) => a.index - b.index).map((e) => e.el);
+    const leaderEl = () => allEls()[0];
+
+    ready({
+      play:       () => Promise.allSettled(allEls().map((el) => el.play())),
+      pause:      () => allEls().forEach((el) => el.pause()),
+      playPause:  () => {
+        const l = leaderEl();
+        if (!l) return;
+        if (l.paused) return Promise.allSettled(allEls().map((el) => el.play()));
+        allEls().forEach((el) => el.pause());
+      },
+      seekToTime: (t) => allEls().forEach((el) => { el.currentTime = Math.min(Math.max(t, 0), el.duration || 0); }),
+      skip:       (s) => {
+        const l = leaderEl();
+        if (!l) return;
+        const next = Math.min(Math.max((l.currentTime || 0) + s, 0), l.duration || 0);
+        allEls().forEach((el) => { el.currentTime = next; });
+      },
+    });
+  }, []);
+
+  // Attach timeupdate / durationchange / play / pause listeners to the leader
+  // (lowest-index) audio element. Re-runs whenever the map changes.
+  const reattachLeaderListeners = useCallback(() => {
+    leaderCleanupRef.current?.();
+    leaderCleanupRef.current = null;
+    const sorted = [...audioElsRef.current.values()].sort((a, b) => a.index - b.index);
+    const leader = sorted[0]?.el;
+    if (!leader) return;
+
+    const onTime  = () => stemCbRef.current.onTimeUpdate?.(leader.currentTime);
+    const onDur   = () => stemCbRef.current.onDurationChange?.(leader.duration);
+    const onPlay  = () => stemCbRef.current.onPlaybackChange?.(true);
+    const onPause = () => stemCbRef.current.onPlaybackChange?.(false);
+    const onEnd   = () => stemCbRef.current.onPlaybackChange?.(false);
+
+    leader.addEventListener("timeupdate",    onTime);
+    leader.addEventListener("durationchange", onDur);
+    leader.addEventListener("play",           onPlay);
+    leader.addEventListener("pause",          onPause);
+    leader.addEventListener("ended",          onEnd);
+
+    leaderCleanupRef.current = () => {
+      leader.removeEventListener("timeupdate",    onTime);
+      leader.removeEventListener("durationchange", onDur);
+      leader.removeEventListener("play",           onPlay);
+      leader.removeEventListener("pause",          onPause);
+      leader.removeEventListener("ended",          onEnd);
+    };
+  }, []);
+
+  const handleStemAudioMount = useCallback((trackId, index, audioEl) => {
+    audioElsRef.current.set(trackId, { el: audioEl, index });
+    // Apply the current mute/solo state immediately so the new element starts
+    // in the right state without waiting for the next soloedTracks/mutedTracks effect.
+    const soloSet = soloedTracksRef.current;
+    const muteSet = mutedTracksRef.current;
+    audioEl.muted = soloSet.size > 0 ? !soloSet.has(trackId) : muteSet.has(trackId);
+    reattachLeaderListeners();
+    emitStemControls();
+  }, [reattachLeaderListeners, emitStemControls]);
+
+  const handleStemAudioUnmount = useCallback((trackId) => {
+    audioElsRef.current.delete(trackId);
+    reattachLeaderListeners();
+    emitStemControls();
+  }, [reattachLeaderListeners, emitStemControls]);
+
+  // Sync audio element muted states whenever solo/mute sets change.
+  useEffect(() => {
+    audioElsRef.current.forEach(({ el }, trackId) => {
+      el.muted = soloedTracks.size > 0 ? !soloedTracks.has(trackId) : mutedTracks.has(trackId);
+    });
+  }, [soloedTracks, mutedTracks]);
+
+  // Clean up leader listeners when TrackList unmounts.
+  useEffect(() => () => leaderCleanupRef.current?.(), []);
 
   // ── Desktop project selector state ──────────────────────────────────────────
   const [desktopSelectedAlbumId, setDesktopSelectedAlbumId] = useState(null);
@@ -1109,6 +1250,8 @@ export const TrackList = memo(function TrackList({
                         isDimmedBySolo={soloedTracks.size > 0 && !soloedTracks.has(track.id)}
                         isDragTarget={dragOverTrackId === track.id}
                         dragInsertAbove={dragAbove}
+                        onAudioMount={isStemProject ? handleStemAudioMount : undefined}
+                        onAudioUnmount={isStemProject ? handleStemAudioUnmount : undefined}
                       />
                     ))}
                     {visibleAlbumTracks.length < albumTracks.length && (
