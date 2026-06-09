@@ -2797,7 +2797,7 @@ export default function App({ onFirstRender } = {}) {
       onPrev={handlePrevTrack}
       onNext={handleNextTrack}
       onRepeatChange={handleRepeatChange}
-      canReview={duration > 0}
+      canReview={isMobileViewport() && duration > 0}
       reviewLabel="Review"
       isReviewActive={isMarkerToolActive}
       onReviewToggle={() => setIsMarkerToolActive((v) => !v)}
@@ -2911,6 +2911,26 @@ export default function App({ onFirstRender } = {}) {
                 selectTrack(trackId);
               }}
             />
+          )}
+
+          {/* Desktop engineer stem mode: Review button above stem lanes.
+              Reviewer stem mode uses WaveformReview's internal review-console.
+              Only shown once audio has loaded (duration > 0) to avoid layout jump. */}
+          {isEngineerMode && isActiveStemProject && duration > 0 && (
+            <div className="stem-review-bar">
+              <button
+                type="button"
+                className={`marker-tool-toggle${isMarkerToolActive ? " active" : ""}`}
+                aria-pressed={isMarkerToolActive}
+                onClick={() => setIsMarkerToolActive((v) => !v)}
+              >
+                <span aria-hidden="true">✍️</span>
+                <span className="tool-label">Review</span>
+              </button>
+              {isMarkerToolActive && (
+                <span className="marker-tool-hint">Click the waveform to place a marker</span>
+              )}
+            </div>
           )}
 
           <TrackList

@@ -1941,7 +1941,7 @@ h2 {
 
 .waveform-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(300px, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(300px, 1fr);
   gap: 18px;
   padding: 22px;
   overflow: hidden;
@@ -2073,6 +2073,7 @@ h2 {
 }
 
 .waveform-stage {
+  grid-row: 4; /* always in the large minmax row; prevents collapse when review-console is absent */
   position: relative;
   min-height: 320px;
   display: grid;
@@ -2272,6 +2273,7 @@ h2 {
 }
 
 .review-console {
+  grid-row: 3; /* sits above waveform-stage (row 4) in the waveform-panel grid */
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -2324,6 +2326,16 @@ h2 {
   color: #a89a7e;
   font-size: 0.78rem;
   font-style: italic;
+}
+
+/* ── Desktop engineer stem mode: Review bar above stem lanes ── */
+.stem-review-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 10px 20px 6px;
+  flex-shrink: 0;
 }
 
 /* ── Desktop inline comment box ── */
@@ -2943,6 +2955,15 @@ h2 {
   .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel {
     flex: 1 1 auto;
     min-height: 0;
+  }
+
+  /* ── Desktop review-console: center the Review button above the waveform ── */
+  .waveform-panel .review-console {
+    justify-content: center;
+    border-top: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-top: 0;
+    padding-bottom: 14px;
   }
 
   .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel.stem-player {
@@ -5507,7 +5528,20 @@ button.stem-toggle-action.solo-btn.active {
    stretching into the missing waveform row.                                   */
 @media (min-width: 1024px) {
   .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
-    grid-template-rows: minmax(0, 1fr) auto;
+    /* row 1: stem-review-bar (auto, collapses when absent) */
+    /* row 2: TrackList stem lanes (fills remaining height) */
+    /* row 3: transport bar (auto) */
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+
+  /* Pin TrackList and transport to their correct rows so the stem-review-bar
+     can appear/disappear without shifting them. */
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main .track-list-panel {
+    grid-row: 2;
+  }
+
+  .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main .transport {
+    grid-row: 3;
   }
 
   .app-shell.stem-view:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .transport {
