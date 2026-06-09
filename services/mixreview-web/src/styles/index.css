@@ -5253,10 +5253,12 @@ button.stem-toggle-action.solo-btn.active {
   flex-direction: column;
   border: 1px solid rgba(215, 173, 98, 0.22);
   border-radius: 8px;
-  background: rgba(10, 9, 6, 0.97);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.65);
+  /* Fully opaque — no backdrop-filter. backdrop-filter inside an overflow-y:auto
+     scroll container composites incorrectly in Safari/WebKit, making the panel
+     appear semi-transparent and letting underlying track names ghost through.
+     A solid background at z-index:60 reliably covers all track rows beneath. */
+  background: #0d0b08;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.80), 0 2px 8px rgba(0, 0, 0, 0.60);
   overflow: hidden;
 }
 
