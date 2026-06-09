@@ -5590,21 +5590,6 @@ button.stem-toggle-action.solo-btn.active {
   box-shadow: 0 0 8px rgba(0, 255, 136, 0.35);
 }
 
-/* ── DAW playhead overlay ───────────────────────────────────────────────── */
-.stem-view .track-list {
-  position: relative;
-}
-
-.daw-global-vertical-line {
-  position: absolute !important;
-  top: 0 !important;
-  bottom: 0 !important;
-  width: 1.5px !important;
-  background-color: #22c55e !important;
-  z-index: 9999 !important;
-  pointer-events: none !important;
-  transition: left 0.05s linear !important;
-}
 
 /* ════════════════════════════════════════════════════════════════════════════
    DESKTOP ADMIN UI REFINEMENTS — track header, badges, review status

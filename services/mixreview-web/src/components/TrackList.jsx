@@ -1320,12 +1320,6 @@ export const TrackList = memo(function TrackList({
 
                 {!isCollapsed && (
                   <div className="track-list">
-                    {isStemProject && stemIsPlaying && (
-                      <div
-                        className="daw-global-vertical-line"
-                        style={{ left: `${(stemCurrentTime / stemDuration) * 100}%` }}
-                      />
-                    )}
                     {visibleAlbumTracks.map((track, index) => (
                       <TrackRow
                         key={track.id}
