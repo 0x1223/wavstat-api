@@ -3776,9 +3776,14 @@ function buildInitialAlbums(session) {
     return [];
   }
 
+  // IMPORTANT: do NOT use session?.projectName here.  Using the session title as the
+  // default album title caused the album to inherit a name like "Artists - Recently
+  // Recorded" that the user never chose, and a stale-save race on another device would
+  // silently restore that derived name even after the user had manually renamed it.
+  // Use a neutral default so the user always has to deliberately set the album title.
   return [{
     id: "album-default",
-    title: session?.projectName || emptyProjectName,
+    title: "New Project",
     type: "album",
     trackIds: rawTracks.map((t) => t.id).filter(Boolean),
     createdAt: session?.createdAt || new Date().toISOString()
