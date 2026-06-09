@@ -975,6 +975,11 @@ export const TrackList = memo(function TrackList({
   // ── Close dropdown on outside click ─────────────────────────────────────────
   useEffect(() => {
     if (!desktopDropdownOpen) return;
+    // Only attach the outside-click listener when the dropdown is actually open.
+    // When closed, there's nothing to dismiss and attaching a document-level
+    // pointerdown listener on every click (even if the setState is a no-op) is
+    // unnecessary and can interfere with other pointer interactions.
+    if (!desktopDropdownOpen) return;
     const handleOutside = (e) => {
       if (
         desktopSelectorRef.current &&

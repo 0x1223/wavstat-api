@@ -815,12 +815,15 @@ export default function App({ onFirstRender } = {}) {
     // (which would abort in-flight reconnect requests via the cleanup).
     const currentView = appViewRef.current;
     if (currentView === "admin") {
+      console.log("[MixReview] Reconnect skipped — admin view", { reason });
       return;
     }
     if (currentView === "setup") {
+      console.log("[MixReview] Reconnect skipped — setup view", { reason });
       return;
     }
     if (currentView === "start") {
+      console.log("[MixReview] Reconnect skipped — start view", { reason });
       return;
     }
 
@@ -984,17 +987,24 @@ export default function App({ onFirstRender } = {}) {
   useEffect(() => {
     const runReconnect = (reason) => {
       if (document.visibilityState === "hidden") {
+        console.log("[MixReview] Reconnect skipped — page hidden", { reason });
         return;
       }
       if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        console.log("[MixReview] Reconnect skipped — offline", { reason });
         return;
       }
 
       const now = Date.now();
       if (now - lastReconnectAtRef.current < 1500) {
+        console.log("[MixReview] Reconnect skipped — debounce", {
+          reason,
+          msSinceLast: now - lastReconnectAtRef.current,
+        });
         return;
       }
       lastReconnectAtRef.current = now;
+      console.log("[MixReview] Reconnect fired", { reason, appView: appViewRef.current });
       reconnectAndHydrateSession(reason);
     };
 

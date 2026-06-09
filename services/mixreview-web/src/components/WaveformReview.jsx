@@ -386,6 +386,7 @@ export function WaveformReview({
     let wavesurfer = null;
     let decodeTimeout = null;
     let audioReadyTimer = null;
+    let wakeRecoveryListener = null; // set once wavesurfer is created; cleaned up in effect return
 
     const peaksStartTime = Date.now();
     console.log("[WaveformReview] Peaks lookup start", {
@@ -437,6 +438,50 @@ export function WaveformReview({
       });
 
       wavesurferRef.current = wavesurfer;
+
+      // ── Wake-from-sleep loading recovery ────────────────────────────────────
+      // If the device sleeps or the tab is backgrounded while audio is loading,
+      // the browser can throttle or defer setTimeout callbacks. On return, the
+      // "Preparing waveform" overlay stays visible even though the media element
+      // already has buffered data (canplay has been received but the 1.5s grace
+      // timer hasn't fired yet). When the page becomes visible again we check
+      // readyState directly and surface audio-only mode immediately instead of
+      // waiting for the next timer tick.
+      wakeRecoveryListener = () => {
+        if (isDisposed || hasLoaded || document.visibilityState !== "visible") return;
+        const mediaEl = wavesurfer?.getMediaElement?.();
+        if (mediaEl && !mediaEl.error && mediaEl.readyState >= 2) {
+          hasLoaded = true;
+          clearTimeout(audioReadyTimer);
+          clearTimeout(decodeTimeout);
+          const dur = Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0;
+          console.log("[WaveformReview] Wake recovery — clearing stuck loading overlay", {
+            readyState: mediaEl.readyState,
+            dur,
+            fileName: audioSource?.fileName ?? "(unknown)",
+          });
+          mediaEl.muted = false;
+          mediaEl.volume = 1;
+          setDuration(dur);
+          setIsLoading(false);
+          setLoadError(dur > 0 ? "" : "Waveform loading… tap ▶ to listen now");
+          callbacksRef.current.onDurationChange(dur);
+          callbacksRef.current.onReady({
+            wavesurfer,
+            mediaElement: mediaEl,
+            play: async () => { await wavesurfer.play(); },
+            pause: () => wavesurfer.pause(),
+            playPause: async () => { await wavesurfer.playPause(); },
+            skip: (s) => wavesurfer.skip(s),
+            seekToTime: (time) => {
+              const t = Math.min(Math.max(time, 0), wavesurfer.getDuration() || dur);
+              wavesurfer.setTime(t);
+              callbacksRef.current.onTimeUpdate(t);
+            },
+          });
+        }
+      };
+      document.addEventListener("visibilitychange", wakeRecoveryListener);
 
       // ── canplay fast-path ──────────────────────────────────────────────────
       // decodeAudioData for large files can take 10–30 s on slow devices even
@@ -647,6 +692,9 @@ export function WaveformReview({
       cancelAnimationFrame(rafId);
       clearTimeout(decodeTimeout);
       clearTimeout(audioReadyTimer);
+      if (wakeRecoveryListener) {
+        document.removeEventListener("visibilitychange", wakeRecoveryListener);
+      }
       if (wavesurfer) {
         if (wavesurferRef.current === wavesurfer) wavesurferRef.current = null;
         wavesurfer.destroy();
