@@ -251,6 +251,9 @@ export default function App({ onFirstRender } = {}) {
   const activeTrackIdRef = useRef(activeTrackId);
   const selectTrackRef = useRef(null);
   const repeatModeRef = useRef("off");
+  // isPlayingRef — always-current mirror of isPlaying state used by
+  // selectProjectTrack to set autoPlayNextRef before React re-renders.
+  const isPlayingRef = useRef(false);
   // Holds the seekAndPlay fn once its lazy chunk has been loaded.
   // Pre-warmed when the comment drawer opens so the click handler is
   // synchronous — required to preserve the iOS audio gesture token.
@@ -1880,6 +1883,16 @@ export default function App({ onFirstRender } = {}) {
 
   const selectProjectTrack = useCallback((trackId, options = {}) => {
     setActiveStemPreviewAlbumId(options.previewStemAlbumId || null);
+    // Desktop resume: if audio is currently playing when the user clicks a
+    // different track, mark autoPlayNextRef so the new track starts automatically
+    // — matching the mobile-reviewer resume behavior (isMobileReviewerResume in
+    // the isPlayerReady effect). Prev/Next already set this flag; this covers
+    // direct track clicks from TrackList. Mobile is excluded here because it
+    // uses the isMobileReviewerResume path which also handles the iOS audio
+    // session unlock sequence; setting autoPlayNextRef on mobile would bypass it.
+    if (!isMobileViewport() && isPlayingRef.current) {
+      autoPlayNextRef.current = true;
+    }
     selectTrack(trackId);
   }, [selectTrack]);
 
@@ -1908,6 +1921,12 @@ export default function App({ onFirstRender } = {}) {
   useEffect(() => {
     repeatModeRef.current = repeatMode;
   }, [repeatMode]);
+
+  // Keep isPlayingRef current so selectProjectTrack can read it synchronously
+  // inside its useCallback without isPlaying in its dependency array.
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
   // ── Transport: Repeat / Prev / Next ──────────────────────────────────────
   const handleRepeatChange = useCallback(() => {
