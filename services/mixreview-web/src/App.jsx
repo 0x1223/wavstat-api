@@ -2779,7 +2779,7 @@ export default function App({ onFirstRender } = {}) {
       onNext={handleNextTrack}
       onRepeatChange={handleRepeatChange}
       canReview={duration > 0}
-      reviewLabel={isActiveStemProject ? "Comments" : "Review"}
+      reviewLabel="Review"
       isReviewActive={isActiveStemProject ? isSidePanelOpen : isMarkerToolActive}
       onReviewToggle={isActiveStemProject
         ? () => setIsSidePanelOpen((v) => !v)
