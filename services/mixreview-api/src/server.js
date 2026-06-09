@@ -77,6 +77,24 @@ if (isProduction && !hasR2Config) {
   console.warn("R2 credentials are not configured; MixReview API is using local storage fallback.");
 }
 
+// Maximum time to wait for any single R2 SDK call.
+// Prevents indefinite hangs when R2 is unreachable from the Railway container.
+const R2_TIMEOUT_MS      = 8_000;   // normal reads / writes
+const R2_LONG_TIMEOUT_MS = 60_000;  // large-file reads (peaks generation, transcode)
+
+// sendR2 — wraps r2Client.send() with a hard AbortController timeout so no
+// R2 operation can stall the Node.js event loop indefinitely.
+function sendR2(command, timeoutMs = R2_TIMEOUT_MS) {
+  if (!r2Client) throw new Error("R2 client is not configured.");
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(new Error(`R2 timeout after ${timeoutMs}ms — ${command.constructor.name}`)),
+    timeoutMs,
+  );
+  return r2Client.send(command, { abortSignal: controller.signal })
+    .finally(() => clearTimeout(timeoutId));
+}
+
 app.set("trust proxy", 1);
 const corsOptions = buildCorsOptions();
 app.use(cors(corsOptions));
@@ -98,6 +116,7 @@ function sendHealth(_req, res) {
 
 app.get("/health", sendHealth);
 app.get("/api/health", sendHealth);
+app.get("/api/r2-probe", sendR2Probe);
 
 app.get("/api/audio/playback/:encodedKey", streamAudioPlayback);
 
@@ -245,7 +264,7 @@ async function handleAudioUpload(req, res, next) {
 }
 
 async function uploadAudioToR2(objectKey, audioFile, contentType, req) {
-  await r2Client.send(
+  await sendR2(
     new PutObjectCommand({
       Bucket: r2Config.bucketName,
       Key: objectKey,
@@ -457,7 +476,7 @@ async function confirmAudioUpload(req, res, next) {
 async function generateAndUploadPeaks(audioBuffer, peaksKey, numPoints = 800) {
   const peaks = await generatePeaksWithFfmpeg(audioBuffer, numPoints);
   const body = JSON.stringify(peaks);
-  await r2Client.send(
+  await sendR2(
     new PutObjectCommand({
       Bucket: r2Config.bucketName,
       Key: peaksKey,
@@ -465,7 +484,8 @@ async function generateAndUploadPeaks(audioBuffer, peaksKey, numPoints = 800) {
       ContentType: "application/json",
       CacheControl: "public, max-age=31536000",
       ContentDisposition: "inline"
-    })
+    }),
+    R2_LONG_TIMEOUT_MS,
   );
   console.log("[MixReview] Peaks uploaded", { peaksKey, numPoints: peaks.length });
 }
@@ -479,7 +499,7 @@ async function generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, s
 }
 
 async function generateAndStoreSessionPeaksFromR2(originalKey, peaksKey, apiBaseUrl, sessionId, trackId, versionId) {
-  const r2Obj = await r2Client.send(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }));
+  const r2Obj = await sendR2(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }), R2_LONG_TIMEOUT_MS);
   const chunks = [];
   for await (const chunk of r2Obj.Body) chunks.push(chunk);
   const audioBuffer = Buffer.concat(chunks);
@@ -667,13 +687,27 @@ async function streamAudioPlayback(req, res, next) {
       return res.redirect(302, `/uploads/${objectKey}`);
     }
 
-    const response = await r2Client.send(
-      new GetObjectCommand({
-        Bucket: r2Config.bucketName,
-        Key: objectKey,
-        Range: req.headers.range
-      }),
+    // Abort the R2 connection attempt if it doesn't respond within R2_TIMEOUT_MS.
+    // Once send() resolves (headers received) the timer is cleared so the body
+    // stream is not cut short — the timeout only guards the initial connection.
+    const r2Controller = new AbortController();
+    const r2TimeoutId = setTimeout(
+      () => r2Controller.abort(new Error("R2 connection timeout")),
+      R2_TIMEOUT_MS,
     );
+    let response;
+    try {
+      response = await r2Client.send(
+        new GetObjectCommand({
+          Bucket: r2Config.bucketName,
+          Key: objectKey,
+          Range: req.headers.range,
+        }),
+        { abortSignal: r2Controller.signal },
+      );
+    } finally {
+      clearTimeout(r2TimeoutId);
+    }
 
     const statusCode = req.headers.range && response.ContentRange ? 206 : 200;
     res.status(statusCode);
@@ -703,10 +737,12 @@ async function streamAudioPlayback(req, res, next) {
     }
     response.Body.pipe(res);
   } catch (error) {
-    // R2 NoSuchKey → 404 so the browser and frontend receive a clean "not found"
-    // rather than a generic 500 that hides the real cause in logs.
     if (error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404) {
       return res.status(404).json({ error: "Audio object not found." });
+    }
+    if (error?.name === "AbortError" || error?.message?.includes("timeout")) {
+      console.error("[MixReview] R2 playback timeout — storage unreachable", { objectKey });
+      return res.status(503).json({ error: "Audio storage temporarily unavailable — please try again." });
     }
     next(error);
   }
@@ -771,18 +807,18 @@ async function transcodeToAac(inputBuffer) {
 // The lossless original is preserved under its original key for admin analysis.
 async function transcodeAndStorePreview(originalKey, previewKey, apiBaseUrl, sessionId, trackId, versionId) {
   try {
-    const r2Obj = await r2Client.send(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }));
+    const r2Obj = await sendR2(new GetObjectCommand({ Bucket: r2Config.bucketName, Key: originalKey }), R2_LONG_TIMEOUT_MS);
     const chunks = [];
     for await (const chunk of r2Obj.Body) chunks.push(chunk);
     const originalBuffer = Buffer.concat(chunks);
     console.log("[MixReview] Background transcode: fetched original", { originalKey, bytes: originalBuffer.length });
 
     const previewBuffer = await transcodeToAac(originalBuffer);
-    await r2Client.send(new PutObjectCommand({
+    await sendR2(new PutObjectCommand({
       Bucket: r2Config.bucketName, Key: previewKey,
       Body: previewBuffer, ContentType: "audio/mp4",
       CacheControl: "public, max-age=31536000",
-    }));
+    }), R2_LONG_TIMEOUT_MS);
 
     const previewUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(previewKey)}`;
     await patchSessionAudioMetadata(sessionId, trackId, versionId, {
@@ -1408,12 +1444,13 @@ async function purgeSessionFromR2(sessionId) {
 
   do {
     // List the next page of objects under this session prefix.
-    const listResponse = await r2Client.send(
+    const listResponse = await sendR2(
       new ListObjectsV2Command({
         Bucket: r2Config.bucketName,
         Prefix: prefix,
         ...(continuationToken ? { ContinuationToken: continuationToken } : {})
-      })
+      }),
+      30_000,
     );
 
     const objects = (listResponse.Contents || []).map((obj) => ({ Key: obj.Key }));
@@ -1421,11 +1458,12 @@ async function purgeSessionFromR2(sessionId) {
     if (objects.length > 0) {
       // DeleteObjects accepts up to 1000 keys per call; ListObjectsV2 pages
       // at 1000 by default, so one batch per page is always sufficient.
-      const deleteResponse = await r2Client.send(
+      const deleteResponse = await sendR2(
         new DeleteObjectsCommand({
           Bucket: r2Config.bucketName,
           Delete: { Objects: objects, Quiet: false }
-        })
+        }),
+        30_000,
       );
 
       const errors = deleteResponse.Errors || [];
@@ -1485,11 +1523,12 @@ async function deleteTrackAudioObjects(keySet) {
   let deletedCount = 0;
   for (let index = 0; index < keys.length; index += 1000) {
     const batch = keys.slice(index, index + 1000).map((Key) => ({ Key }));
-    const response = await r2Client.send(
+    const response = await sendR2(
       new DeleteObjectsCommand({
         Bucket: r2Config.bucketName,
         Delete: { Objects: batch, Quiet: false },
-      })
+      }),
+      30_000,
     );
     const failed = response.Errors?.length || 0;
     if (failed > 0) {
@@ -1607,15 +1646,17 @@ async function readDatabase() {
 
   if (hasR2Config) {
     try {
-      const response = await r2Client.send(
-        new GetObjectCommand({ Bucket: r2Config.bucketName, Key: SESSION_INDEX_KEY })
+      const response = await sendR2(
+        new GetObjectCommand({ Bucket: r2Config.bucketName, Key: SESSION_INDEX_KEY }),
       );
       const body = await response.Body.transformToString();
       return JSON.parse(body);
     } catch (error) {
-      // NoSuchKey → index has not been written to R2 yet; fall through.
-      if (error?.name !== "NoSuchKey" && error?.$metadata?.httpStatusCode !== 404) {
-        throw error;
+      const is404 = error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404;
+      if (!is404) {
+        // R2 connectivity failure (timeout, auth error, network issue).
+        // Fall through to local file so the request returns fast rather than hanging.
+        console.warn("[MixReview] R2 index read failed — falling back to local:", error.message);
       }
     }
   }
@@ -1650,13 +1691,13 @@ async function writeDatabase(database) {
   await writeFile(databasePath, body);
 
   if (hasR2Config) {
-    await r2Client.send(
+    await sendR2(
       new PutObjectCommand({
         Bucket: r2Config.bucketName,
         Key: SESSION_INDEX_KEY,
         Body: body,
         ContentType: "application/json"
-      })
+      }),
     );
   }
 }
@@ -1671,12 +1712,13 @@ async function scanR2ForSessions() {
   do {
     let listResponse;
     try {
-      listResponse = await r2Client.send(
+      listResponse = await sendR2(
         new ListObjectsV2Command({
           Bucket: r2Config.bucketName,
           Prefix: "sessions/",
           ...(continuationToken ? { ContinuationToken: continuationToken } : {})
-        })
+        }),
+        30_000,
       );
     } catch (e) {
       console.warn("[MixReview] R2 scan failed during index rebuild:", e.message);
@@ -1690,8 +1732,9 @@ async function scanR2ForSessions() {
 
     for (const key of sessionDocKeys) {
       try {
-        const docResponse = await r2Client.send(
-          new GetObjectCommand({ Bucket: r2Config.bucketName, Key: key })
+        const docResponse = await sendR2(
+          new GetObjectCommand({ Bucket: r2Config.bucketName, Key: key }),
+          30_000,
         );
         const session = normalizeSessionDocument(JSON.parse(await docResponse.Body.transformToString()));
         if (session) {
@@ -1738,7 +1781,7 @@ async function readSessionDocument(sessionId) {
 
   if (hasR2Config) {
     try {
-      const response = await r2Client.send(
+      const response = await sendR2(
         new GetObjectCommand({
           Bucket: r2Config.bucketName,
           Key: buildSessionObjectKey(safeSessionId)
@@ -1747,8 +1790,10 @@ async function readSessionDocument(sessionId) {
       const body = await response.Body.transformToString();
       return normalizeSessionDocument(JSON.parse(body));
     } catch (error) {
-      if (error?.name !== "NoSuchKey" && error?.$metadata?.httpStatusCode !== 404) {
-        throw error;
+      const is404 = error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404;
+      if (!is404) {
+        console.warn(`[MixReview] R2 session read failed for ${safeSessionId} — falling back to local:`, error.message);
+        // Fall through to local file / legacy database lookup.
       }
     }
   }
@@ -1772,7 +1817,7 @@ async function writeSessionDocument(sessionId, session) {
 
   const body = `${JSON.stringify(nextSession, null, 2)}\n`;
   if (hasR2Config) {
-    await r2Client.send(
+    await sendR2(
       new PutObjectCommand({
         Bucket: r2Config.bucketName,
         Key: buildSessionObjectKey(safeSessionId),
@@ -2111,6 +2156,47 @@ async function buildR2PlaybackUrl(objectKey) {
     }),
     { expiresIn: 60 * 60 },
   );
+}
+
+// sendR2Probe — diagnostic endpoint that reports R2 config and tests a live read.
+// Safe to call at any time; never modifies data.
+async function sendR2Probe(_req, res) {
+  const endpoint = r2Config.endpoint || (r2Config.accountId
+    ? `https://${r2Config.accountId}.r2.cloudflarestorage.com`
+    : "(not derivable — accountId missing)");
+
+  const report = {
+    endpoint,
+    bucketName:    r2Config.bucketName    || "(not set)",
+    accountId:     r2Config.accountId     || "(not set)",
+    accessKeyId:   r2Config.accessKeyId   ? `${r2Config.accessKeyId.slice(0, 6)}…` : "(not set)",
+    secretPresent: Boolean(r2Config.secretAccessKey),
+    hasR2Config,
+    indexRead:      null,
+    indexElapsedMs: null,
+    indexError:     null,
+  };
+
+  if (!hasR2Config) {
+    return res.json({ ok: false, reason: "R2 not configured", report });
+  }
+
+  const start = Date.now();
+  try {
+    await sendR2(
+      new GetObjectCommand({ Bucket: r2Config.bucketName, Key: SESSION_INDEX_KEY }),
+      R2_TIMEOUT_MS,
+    );
+    report.indexRead      = true;
+    report.indexElapsedMs = Date.now() - start;
+    return res.json({ ok: true, report });
+  } catch (error) {
+    report.indexRead      = false;
+    report.indexElapsedMs = Date.now() - start;
+    report.indexError     = `${error.name}: ${error.message}`;
+    const is404 = error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404;
+    return res.json({ ok: is404, reason: is404 ? "index not found (expected on first boot)" : "R2 read failed", report });
+  }
 }
 
 function getEnvValue(name) {
