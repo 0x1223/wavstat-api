@@ -96,8 +96,24 @@ async function decodePreviewPeaks(audioUrl) {
   const audioContext = getPreviewAudioContext();
   if (!audioContext) return null;
 
+  // 30 s gives large stems (100 MB+ WAV) enough headroom to download and decode.
+  // Previously 15 s — too short for slow connections or high-CPU decodes.
+  const DECODE_TIMEOUT_MS = 30_000;
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+  let timedOut = false;
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+    console.warn("[TrackList] Preview decode timed out — keeping synthetic waveform", {
+      url: audioUrl.slice(0, 120),
+      timeout: `${DECODE_TIMEOUT_MS / 1000}s`,
+    });
+  }, DECODE_TIMEOUT_MS);
+
+  console.log("[TrackList] Preview decode start (no peaks JSON found)", {
+    url: audioUrl.slice(0, 120),
+  });
+
   try {
     const response = await fetch(audioUrl, { signal: controller.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -105,8 +121,15 @@ async function decodePreviewPeaks(audioUrl) {
     const channelData = audioBuffer.getChannelData(0);
     const normalized = normalizePreviewPeaks(channelData);
     if (normalized) previewPeaksCache.set(cacheKey, normalized);
+    console.log("[TrackList] Preview decode success", { url: audioUrl.slice(0, 80) });
     return normalized;
-  } catch {
+  } catch (err) {
+    if (!timedOut) {
+      console.warn("[TrackList] Preview decode failed — keeping synthetic waveform", {
+        url: audioUrl.slice(0, 120),
+        error: err?.message,
+      });
+    }
     return null;
   } finally {
     window.clearTimeout(timeoutId);

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 import { formatTimecode } from "../lib/time.js";
 import { disposeMobileEngine, mountMobileEngine } from "../lib/mobileAudioEngine.js";
+import { apiUrl } from "../config/api.js";
 
 function getPlaybackUrl(audioSource) {
   return audioSource?.previewUrl || audioSource?.playbackUrl || audioSource?.url || "";
@@ -35,6 +36,24 @@ function fetchPeaks(peaksUrl, timeoutMs = 3000) {
       return null;
     })
     .finally(() => window.clearTimeout(timeoutId));
+}
+
+// Try explicit peaksUrl first, then derive from audioSource.key (mirrors the
+// fallback TrackList uses for thumbnail waveforms). When peaks are found,
+// WaveSurfer skips the full decodeAudioData decode — critical for large stems.
+function resolveWaveformPeaks(audioSource) {
+  const explicit = audioSource?.peaksUrl || null;
+  const key = audioSource?.key || null;
+  const derived = key
+    ? apiUrl(`/api/audio/playback/${encodeURIComponent(`${key}.peaks.json`)}`)
+    : null;
+
+  if (!explicit && !derived) return Promise.resolve(null);
+  if (!explicit) return fetchPeaks(derived);
+  if (!derived || derived === explicit) return fetchPeaks(explicit);
+
+  // Explicit URL available — try it, fall back to key-derived on miss.
+  return fetchPeaks(explicit).then((peaks) => peaks ?? fetchPeaks(derived));
 }
 
 
@@ -368,7 +387,19 @@ export function WaveformReview({
     let decodeTimeout = null;
     let audioReadyTimer = null;
 
-    const peaksFetch = fetchPeaks(audioSource?.peaksUrl || null);
+    const peaksStartTime = Date.now();
+    console.log("[WaveformReview] Peaks lookup start", {
+      fileName: audioSource?.fileName ?? "(unknown)",
+      fileSize,
+      ext,
+      peaksUrl: audioSource?.peaksUrl || null,
+      key: audioSource?.key || null,
+    });
+    // resolveWaveformPeaks tries the explicit peaksUrl then the key-derived
+    // .peaks.json URL as a fallback — matching TrackList's existing behaviour.
+    // When peaks are supplied to wavesurfer.load(), WaveSurfer skips the full
+    // decodeAudioData pass, which is the primary cause of timeouts on large files.
+    const peaksFetch = resolveWaveformPeaks(audioSource);
 
     // Defer DOM binding past first paint — same frame budget for initial load
     // and all subsequent manual track switches.
@@ -380,6 +411,7 @@ export function WaveformReview({
         ext,
         fileSize,
         peaksUrl: audioSource?.peaksUrl || null,
+        key: audioSource?.key || null,
       });
 
       // containerRef, height (180), and fillParent are intentionally fixed —
@@ -454,12 +486,27 @@ export function WaveformReview({
       // ── Desktop decode timeout ────────────────────────────────────────────
       // If WaveSurfer's fetch or decodeAudioData stalls, surface a clear
       // message rather than leaving the UI stuck on "Preparing waveform".
-      const DESKTOP_TIMEOUT_MS = 45_000;
+      // 90 s gives large stems (100 MB+ WAV) enough headroom for download +
+      // decode on slow connections. The canplay fast-path (1.5 s grace above)
+      // already surfaces audio-only mode as soon as the media element is ready,
+      // so the user is never blocked for the full 90 s on a playable file.
+      const DESKTOP_TIMEOUT_MS = 90_000;
       decodeTimeout = setTimeout(() => {
         if (isDisposed || hasLoaded) return;
         hasLoaded = true;
-        console.warn("[WaveformReview] Desktop decode timeout after", DESKTOP_TIMEOUT_MS, "ms");
         const mediaEl = wavesurfer.getMediaElement?.();
+        console.warn("[WaveformReview] Desktop decode timeout", {
+          elapsed: `${DESKTOP_TIMEOUT_MS / 1000}s`,
+          fileName: audioSource?.fileName ?? "(unknown)",
+          fileSize,
+          ext,
+          readyState: mediaEl?.readyState,
+          networkState: mediaEl?.networkState,
+          mediaError: mediaEl?.error?.code ?? null,
+          bufferedEnd: mediaEl?.buffered?.length
+            ? `${mediaEl.buffered.end(mediaEl.buffered.length - 1).toFixed(1)}s`
+            : "none",
+        });
         if (mediaEl && !mediaEl.error && mediaEl.readyState >= 2) {
           // Audio element has data even though waveform decode stalled — audio-only
           mediaEl.muted = false;
@@ -570,9 +617,15 @@ export function WaveformReview({
 
       peaksFetch.then((peaks) => {
         if (isDisposed || !wavesurfer) return;
-        console.log("[WaveformReview] Desktop loading with precomputed peaks", {
-          source: peaks ? "peaksUrl" : "decode",
-          points: peaks?.[0]?.length || 0,
+        const peaksElapsed = Date.now() - peaksStartTime;
+        console.log("[WaveformReview] Peaks resolved — loading waveform", {
+          source: peaks
+            ? (audioSource?.peaksUrl ? "peaksUrl" : "key-derived")
+            : "none (will decode audio)",
+          points: peaks?.[0]?.length ?? 0,
+          peaksElapsed: `${peaksElapsed}ms`,
+          fileSize,
+          ext,
         });
         wavesurfer.load(playbackUrl, peaks || undefined).catch((error) => {
           if (isDisposed || hasLoaded) return;
