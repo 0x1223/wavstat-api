@@ -902,18 +902,23 @@ export const TrackList = memo(function TrackList({
 
   // When showing the desktop selector, display ONLY the selected album's bucket
   // (reset previousTrackCount to 0 so the deferred render limit works correctly).
-  // Single-album: claim all session tracks regardless of album.trackIds linkage so
-  // flat-stored tracks (album.trackIds=[]) appear under the project bar identically
-  // to sessions where tracks are properly linked.
+  // Single-album fallback: use visibleTracks ONLY when trackIds are empty/missing
+  // (backward-compat for legacy flat-stored sessions). If trackIds are populated,
+  // always respect them so tracks are never leaked across projects.
   const displayBuckets = useMemo(() => {
     if (effectiveAlbums.length === 1) {
-      return [{ album: effectiveAlbums[0], albumTracks: visibleTracks, previousTrackCount: 0 }];
+      const soleAlbum = effectiveAlbums[0];
+      const albumTracks =
+        soleAlbum.trackIds?.length > 0
+          ? soleAlbum.trackIds.map((id) => trackMap[id]).filter(Boolean)
+          : visibleTracks;
+      return [{ album: soleAlbum, albumTracks, previousTrackCount: 0 }];
     }
     if (!multiAlbum) return albumBuckets;
     return albumBuckets
       .filter((b) => b.album.id === desktopSelectedAlbum?.id)
       .map((b) => ({ ...b, previousTrackCount: 0 }));
-  }, [albumBuckets, effectiveAlbums, multiAlbum, visibleTracks, desktopSelectedAlbum]);
+  }, [albumBuckets, effectiveAlbums, multiAlbum, visibleTracks, desktopSelectedAlbum, trackMap]);
 
   // X / Y counter shown inside the selector button
   const currentDesktopAlbumIndex = effectiveAlbums.findIndex(
@@ -922,7 +927,13 @@ export const TrackList = memo(function TrackList({
   const albumCount = effectiveAlbums.length;
   const selectedAlbumTrackCount = useMemo(() => {
     if (!desktopSelectedAlbum) return 0;
-    if (effectiveAlbums.length === 1) return visibleTracks.length;
+    if (effectiveAlbums.length === 1) {
+      // Mirror displayBuckets logic: respect trackIds when present, else fall
+      // back to all visible tracks for legacy flat-stored sessions.
+      return desktopSelectedAlbum.trackIds?.length > 0
+        ? (desktopSelectedAlbum.trackIds || []).filter((id) => trackMap[id]).length
+        : visibleTracks.length;
+    }
     return (desktopSelectedAlbum.trackIds || []).filter((id) => trackMap[id]).length;
   }, [desktopSelectedAlbum, effectiveAlbums.length, trackMap, visibleTracks.length]);
 
