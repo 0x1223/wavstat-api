@@ -874,14 +874,31 @@ async function loadSessionIndexForList() {
   }
 
   if (hasR2Config && database.sessions.some((session) => typeof session.commentCount !== "number")) {
-    console.log("[MixReview] Session index is missing review counters — refreshing from R2");
-    const rebuilt = await scanR2ForSessions();
-    if (rebuilt.length > 0) {
-      database = { sessions: rebuilt };
-      await writeDatabase(database).catch((e) =>
-        console.warn("[MixReview] Failed to persist review counter refresh:", e.message)
-      );
-    }
+    // Targeted repair: fetch each session document by its known ID and compute
+    // commentCount inline. This avoids the full R2 listing used by scanR2ForSessions
+    // (which lists ALL objects under sessions/, including audio files, and can take
+    // tens of seconds on large buckets — reliably exceeding the 10-second timeout).
+    console.log("[MixReview] Session index is missing review counters — patching from session documents");
+    const patched = await Promise.all(
+      database.sessions.map(async (summary) => {
+        if (typeof summary.commentCount === "number") {
+          return summary;
+        }
+        try {
+          const session = await readSessionDocument(summary.id);
+          const reviewSummary = session ? getSessionReviewSummary(session) : { comments: 0 };
+          return { ...summary, commentCount: reviewSummary.comments, reviewCount: reviewSummary.comments };
+        } catch (e) {
+          console.warn(`[MixReview] Could not fetch session ${summary.id} for commentCount:`, e.message);
+          return { ...summary, commentCount: 0, reviewCount: 0 };
+        }
+      })
+    );
+    database = { sessions: patched };
+    await writeDatabase(database).catch((e) =>
+      console.warn("[MixReview] Failed to persist review counter patch:", e.message)
+    );
+    console.log(`[MixReview] Patched commentCount for ${patched.length} session(s)`);
   }
 
   return database;
