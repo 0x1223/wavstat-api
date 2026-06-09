@@ -103,6 +103,7 @@ app.get("/api/audio/playback/:encodedKey", streamAudioPlayback);
 
 const sessionRouter = express.Router();
 sessionRouter.get("/", listSessions);
+sessionRouter.post("/repair-index", requireAdminAuth, repairSessionIndex);
 sessionRouter.post("/", createSession);
 sessionRouter.get("/:sessionId", getSession);
 sessionRouter.put("/:sessionId", requireAdminAuth, saveSession);
@@ -854,31 +855,23 @@ async function listSessions(_req, res, next) {
 async function loadSessionIndexForList() {
   let database = await readDatabase();
 
-  // If the index is empty and R2 is configured, scan R2 for existing session
-  // documents and rebuild the index. This recovers from two cases:
-  //   1. Railway redeploy wiped the local db.json before this fix was deployed
-  //      (R2 index does not exist yet — first boot with the new code).
-  //   2. Any future scenario where the index gets out of sync.
-  // After the rebuild, writeDatabase() persists the result to R2 so the next
-  // request finds the index immediately without re-scanning.
-  if (hasR2Config && database.sessions.length === 0) {
-    console.log("[MixReview] Session index is empty — scanning R2 to rebuild");
-    const rebuilt = await scanR2ForSessions();
-    if (rebuilt.length > 0) {
-      database = { sessions: rebuilt };
-      await writeDatabase(database).catch((e) =>
-        console.warn("[MixReview] Failed to persist rebuilt index:", e.message)
-      );
-      console.log(`[MixReview] Rebuilt session index with ${rebuilt.length} session(s)`);
-    }
+  if (database.sessions.length === 0) {
+    // Index is missing or empty. Do NOT scan R2 here — a full ListObjectsV2 over
+    // sessions/ (which includes all audio files) reliably exceeds the 10-second
+    // request timeout on large buckets. Return an empty list immediately and let
+    // the admin trigger a rebuild via POST /api/sessions/repair-index.
+    console.log("[MixReview] Session index missing or empty — returning empty list (use POST /api/sessions/repair-index to rebuild)");
+    console.log("[MixReview] R2 scan skipped on dashboard request");
+    return database;
   }
+
+  console.log(`[MixReview] Session index loaded — ${database.sessions.length} session(s)`);
 
   if (hasR2Config && database.sessions.some((session) => typeof session.commentCount !== "number")) {
     // Targeted repair: fetch each session document by its known ID and compute
-    // commentCount inline. This avoids the full R2 listing used by scanR2ForSessions
-    // (which lists ALL objects under sessions/, including audio files, and can take
-    // tens of seconds on large buckets — reliably exceeding the 10-second timeout).
-    console.log("[MixReview] Session index is missing review counters — patching from session documents");
+    // commentCount inline. This avoids a full R2 listing (scanR2ForSessions uses
+    // ListObjectsV2 over sessions/ which times out on large buckets).
+    console.log("[MixReview] Session index missing review counters — patching from session documents");
     const patched = await Promise.all(
       database.sessions.map(async (summary) => {
         if (typeof summary.commentCount === "number") {
@@ -902,6 +895,22 @@ async function loadSessionIndexForList() {
   }
 
   return database;
+}
+
+async function repairSessionIndex(_req, res, next) {
+  try {
+    console.log("[MixReview] Admin repair: scanning R2 for all sessions");
+    const rebuilt = await scanR2ForSessions();
+    if (rebuilt.length > 0) {
+      await writeDatabase({ sessions: rebuilt });
+      console.log(`[MixReview] Admin repair complete — ${rebuilt.length} session(s) indexed`);
+      return res.json({ ok: true, count: rebuilt.length, sessions: rebuilt });
+    }
+    console.log("[MixReview] Admin repair: R2 scan returned no sessions");
+    return res.json({ ok: true, count: 0, sessions: [] });
+  } catch (error) {
+    return next(error);
+  }
 }
 
 async function createSession(req, res) {
