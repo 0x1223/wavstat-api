@@ -11,6 +11,8 @@ import '../models/transport_config.dart';
 import '../services/lan_audio_client.dart';
 import '../widgets/connection_card.dart';
 import '../widgets/monitoring_mode_selector.dart';
+import '../widgets/qr_display_dialog.dart';
+import '../widgets/qr_scanner_page.dart';
 import '../widgets/now_listening_card.dart';
 import '../widgets/status_pill.dart';
 import '../widgets/stream_health_panel.dart';
@@ -389,6 +391,30 @@ class _ListenerScreenState extends State<ListenerScreen> {
     _lanAudioClient.prepare(mode);
   }
 
+  /// Web / desktop: generate and display a QR code from the current IP field.
+  Future<void> _showQrCode() async {
+    final host = _serverIpController.text.trim();
+    final port = int.tryParse(_portController.text.trim()) ?? 8080;
+    if (host.isEmpty) {
+      _setError('Enter server IP before generating QR');
+      return;
+    }
+    await QrDisplayDialog.show(context, host: host, port: port);
+  }
+
+  /// Mobile: open the camera scanner, fill IP/port from the result, then
+  /// connect via the same path the manual Connect button uses.
+  Future<void> _openQrScanner() async {
+    FocusScope.of(context).unfocus();
+    final result = await QrScannerPage.push(context);
+    if (result == null || !mounted) return;
+    setState(() {
+      _serverIpController.text = result.host;
+      _portController.text = result.port.toString();
+    });
+    await _connect();
+  }
+
   void _handlePlayerState(PlayerState playerState) {
     if (!mounted) {
       return;
@@ -515,6 +541,8 @@ class _ListenerScreenState extends State<ListenerScreen> {
                                 isConnected: _isConnected,
                                 onConnect: _connect,
                                 onDisconnect: _disconnect,
+                                onShowQr: kIsWeb ? _showQrCode : null,
+                                onScanQr: kIsWeb ? null : _openQrScanner,
                               ),
                               const SizedBox(height: 12),
                               NowListeningCard(
