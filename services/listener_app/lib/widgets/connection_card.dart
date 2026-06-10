@@ -56,6 +56,11 @@ class ConnectionCard extends StatelessWidget {
                 child: TextField(
                   controller: portController,
                   keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) {
+                    FocusScope.of(context).unfocus();
+                    if (!isConnected) onConnect();
+                  },
                   decoration: const InputDecoration(labelText: 'Port'),
                 ),
               ),

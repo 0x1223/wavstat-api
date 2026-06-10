@@ -130,6 +130,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
   }
 
   Future<void> _connect() async {
+    FocusScope.of(context).unfocus();
     final serverIp = _serverIpController.text.trim();
     final port = _portController.text.trim().isEmpty
         ? '8080'
@@ -247,7 +248,6 @@ class _ListenerScreenState extends State<ListenerScreen> {
       debugPrint('[KINGZ] _play: play() done');
     } catch (e, st) {
       debugPrint('[KINGZ] _play error: $e\n$st');
-      await _lanAudioClient.stopListening();
       _setError('Unable to play stream');
     } finally {
       if (mounted && operation == _playbackOperation) {
