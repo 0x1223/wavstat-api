@@ -45,6 +45,7 @@ class WebRtcPlaybackBridge {
   bool _peerReady = false;  // NEW: tracks if peer connection is created and ready
   bool _playbackStartedSignaled = false;
   bool _remoteDescriptionSet = false;
+  bool _processingSignal = false;  // NEW: guard against concurrent signal processing
   int _offerGeneration = 0;
   Timer? _disconnectTimer;
   final List<RTCIceCandidate> _pendingCandidates = [];
@@ -105,13 +106,21 @@ class WebRtcPlaybackBridge {
       return;
     }
 
-    final peer = _peer;
-    if (peer == null) {
-      debugPrint('[KINGZ WebRTC] ERROR: handleSignal called with peerReady=true but peer is null!');
+    // NEW: Prevent concurrent signal processing which can corrupt peer state
+    if (_processingSignal) {
+      debugPrint('[KINGZ WebRTC] WARNING: signal processing already in progress, queueing: type=$type');
+      _queuedSignalMessages.add(message);
       return;
     }
 
+    _processingSignal = true;
+
     try {
+      final peer = _peer;
+      if (peer == null) {
+        debugPrint('[KINGZ WebRTC] ERROR: handleSignal called with peerReady=true but peer is null!');
+        return;
+      }
       if (type == 'webrtc.answer') {
         if (!_matchesOfferGeneration(generation)) {
           debugPrint('[KINGZ WebRTC] stale answer (gen=$generation, expected=$_offerGeneration), ignoring');
@@ -123,13 +132,33 @@ class WebRtcPlaybackBridge {
         }
         debugPrint('[KINGZ WebRTC] answer received (gen=$generation, sdpLen=${sdp.length})');
 
+        // CRITICAL: Verify peer is still valid and in correct state
+        final currentPeer = _peer;
+        if (currentPeer == null) {
+          throw StateError('ERROR: peer was disposed before setRemoteDescription');
+        }
+        if (!_active) {
+          throw StateError('ERROR: WebRTC bridge is not active, ignoring answer');
+        }
+
         // Fix DTLS setup attribute for answerer role (flutter_webrtc strict validation)
         final fixedSdp = _fixAnswerSdpSetup(sdp);
+        debugPrint('[KINGZ WebRTC] fixed SDP: ${fixedSdp.length} bytes');
 
-        // Ensure local description is fully processed before setting remote
-        await Future.delayed(const Duration(milliseconds: 50));
+        // Wait for local description to be fully set
+        debugPrint('[KINGZ WebRTC] waiting for local description to be ready...');
+        await Future.delayed(const Duration(milliseconds: 100));
 
-        await peer.setRemoteDescription(
+        // Verify peer is STILL valid (not disposed during delay)
+        if (_peer == null) {
+          throw StateError('ERROR: peer was disposed while waiting to set remote description');
+        }
+        if (!_active) {
+          throw StateError('ERROR: bridge deactivated while waiting to set remote description');
+        }
+
+        debugPrint('[KINGZ WebRTC] calling setRemoteDescription with answer...');
+        await currentPeer.setRemoteDescription(
           RTCSessionDescription(fixedSdp, 'answer'),
         );
 
@@ -193,6 +222,8 @@ class WebRtcPlaybackBridge {
       debugPrint('[KINGZ WebRTC] handleSignal error: $error\n$stackTrace');
       await stop();
       onFallback?.call('signal-failed');
+    } finally {
+      _processingSignal = false;  // CRITICAL: always reset to allow next message
     }
   }
 
@@ -202,6 +233,7 @@ class WebRtcPlaybackBridge {
     _peerReady = false;
     _playbackStartedSignaled = false;
     _remoteDescriptionSet = false;
+    _processingSignal = false;  // Reset signal processing flag
     _pendingCandidates.clear();
     _queuedSignalMessages.clear();
     _disconnectTimer?.cancel();
