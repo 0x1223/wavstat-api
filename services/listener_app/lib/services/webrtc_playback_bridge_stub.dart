@@ -132,6 +132,21 @@ class WebRtcPlaybackBridge {
         }
         debugPrint('[KINGZ WebRTC] answer received (gen=$generation, sdpLen=${sdp.length})');
 
+        // LOG ENTIRE ANSWER SDP FOR DEBUGGING M-LINE ISSUES
+        debugPrint('[KINGZ WebRTC] === ANSWER SDP START ===');
+        final answerLines = sdp.split('\n');
+        int mLineCount = 0;
+        for (final line in answerLines) {
+          if (line.startsWith('m=')) {
+            mLineCount++;
+            debugPrint('[KINGZ WebRTC] ANSWER M-LINE #$mLineCount: $line');
+          } else if (line.startsWith('a=') || line.startsWith('v=') || line.startsWith('o=')) {
+            debugPrint('[KINGZ WebRTC] ANSWER: $line');
+          }
+        }
+        debugPrint('[KINGZ WebRTC] ANSWER: Total m= lines: $mLineCount');
+        debugPrint('[KINGZ WebRTC] === ANSWER SDP END ===');
+
         // CRITICAL: Verify peer is still valid and in correct state
         final currentPeer = _peer;
         if (currentPeer == null) {
@@ -145,6 +160,19 @@ class WebRtcPlaybackBridge {
         final fixedSdp = _fixAnswerSdpSetup(sdp);
         debugPrint('[KINGZ WebRTC] fixed SDP: ${fixedSdp.length} bytes');
 
+        // LOG FIXED SDP TO VERIFY M-LINES MATCH
+        debugPrint('[KINGZ WebRTC] === FIXED ANSWER SDP START ===');
+        final fixedLines = fixedSdp.split('\n');
+        int fixedMLineCount = 0;
+        for (final line in fixedLines) {
+          if (line.startsWith('m=')) {
+            fixedMLineCount++;
+            debugPrint('[KINGZ WebRTC] FIXED M-LINE #$fixedMLineCount: $line');
+          }
+        }
+        debugPrint('[KINGZ WebRTC] FIXED: Total m-lines: $fixedMLineCount');
+        debugPrint('[KINGZ WebRTC] === FIXED ANSWER SDP END ===');
+
         // Wait for local description to be fully set
         debugPrint('[KINGZ WebRTC] waiting for local description to be ready...');
         await Future.delayed(const Duration(milliseconds: 100));
@@ -157,7 +185,7 @@ class WebRtcPlaybackBridge {
           throw StateError('ERROR: bridge deactivated while waiting to set remote description');
         }
 
-        debugPrint('[KINGZ WebRTC] calling setRemoteDescription with answer...');
+        debugPrint('[KINGZ WebRTC] calling setRemoteDescription with answer ($fixedMLineCount m-lines)...');
         await currentPeer.setRemoteDescription(
           RTCSessionDescription(fixedSdp, 'answer'),
         );
@@ -276,6 +304,18 @@ class WebRtcPlaybackBridge {
       _peer = await createPeerConnection(config);
       final generation = ++_offerGeneration;
       debugPrint('[KINGZ WebRTC] peer connection created (generation=$generation)');
+
+      // AUDIT: Check for unexpected transceivers that could cause m-line mismatch
+      final peer = _peer!;
+      try {
+        final transceivers = await peer.getTransceivers();
+        debugPrint('[KINGZ WebRTC] transceivers after creation: ${transceivers.length}');
+        for (int i = 0; i < transceivers.length; i++) {
+          debugPrint('[KINGZ WebRTC]   transceiver #$i (audio)');
+        }
+      } catch (e) {
+        debugPrint('[KINGZ WebRTC] WARNING: could not audit transceivers: $e');
+      }
     } catch (error, stackTrace) {
       debugPrint('[KINGZ WebRTC] ERROR creating peer connection: $error\n$stackTrace');
       rethrow;
@@ -332,6 +372,7 @@ class WebRtcPlaybackBridge {
   }
 
   /// Create WebRTC offer and send to plugin.
+  /// CRITICAL: Use explicit constraints for audio-only stream to ensure m-line compatibility.
   Future<void> _createOffer() async {
     final peer = _peer;
     if (peer == null) {
@@ -339,14 +380,34 @@ class WebRtcPlaybackBridge {
     }
 
     try {
-      debugPrint('[KINGZ WebRTC] calling peer.createOffer()...');
-      final offer = await peer.createOffer({});
+      // CRITICAL: Explicit audio-only constraints to match JUCE's expected offer format
+      // This ensures the offer has ONLY audio m= line, no video or data channel m= lines
+      final constraints = <String, dynamic>{
+        'offerToReceiveAudio': true,
+        'offerToReceiveVideo': false,
+        'iceRestart': false,
+      };
+
+      debugPrint('[KINGZ WebRTC] calling peer.createOffer() with constraints: $constraints');
+      final offer = await peer.createOffer(constraints);
 
       if (offer.sdp == null || offer.sdp!.isEmpty) {
         throw StateError('ERROR: peer.createOffer() returned empty SDP');
       }
 
-      debugPrint('[KINGZ WebRTC] setting local description with offer (${offer.sdp!.length} bytes)');
+      debugPrint('[KINGZ WebRTC] offer created: ${offer.sdp!.length} bytes');
+
+      // LOG ENTIRE OFFER SDP FOR DEBUGGING M-LINE ISSUES
+      debugPrint('[KINGZ WebRTC] === OFFER SDP START ===');
+      final offerLines = offer.sdp!.split('\n');
+      for (final line in offerLines) {
+        if (line.startsWith('m=') || line.startsWith('a=') || line.startsWith('v=') || line.startsWith('o=')) {
+          debugPrint('[KINGZ WebRTC] OFFER: $line');
+        }
+      }
+      debugPrint('[KINGZ WebRTC] === OFFER SDP END ===');
+
+      debugPrint('[KINGZ WebRTC] setting local description with offer');
       await peer.setLocalDescription(offer);
 
       final generation = _offerGeneration;
