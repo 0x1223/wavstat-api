@@ -33,7 +33,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.kingzbreadent.kingzlisten</string>
+			<string>com.kingzbreadentertainment.kingzlisten</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>kingzlisten</string>
