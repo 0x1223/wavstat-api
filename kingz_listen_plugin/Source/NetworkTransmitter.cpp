@@ -522,8 +522,7 @@ void NetworkTransmitter::acceptPendingClient()
         const juce::ScopedLock lock { clientLock };
         clients.push_back (std::make_shared<ClientConnection> (socketHandle));
         connectedClients.store (static_cast<int> (clients.size()), std::memory_order_release);
-        activeClientCount.store (static_cast<int> (clients.size()), std::memory_order_release);
-        isConnected.store (! clients.empty(), std::memory_order_release);
+        // Do NOT increment activeClientCount here - wait until RTCDataChannel is open
     }
 }
 
@@ -543,12 +542,14 @@ void NetworkTransmitter::pumpClients()
             client->lastPingSentMs = now;
         }
 
+        // Start grace period for LOCAL clients if no heartbeat (external clients exempt - they negotiate async)
         if (client->websocket
-            && ! client->externalSignaling
+            && ! client->externalSignaling  // External clients don't send continuous messages during negotiation
             && now - client->lastSeenMs > heartbeatMs
             && client->graceStartedMs == 0)
             client->graceStartedMs = now;
 
+        // Close client if grace period exceeded
         if (client->graceStartedMs > 0 && now - client->graceStartedMs > graceHoldMs)
             client->closeRequested.store (true, std::memory_order_release);
     }
@@ -568,12 +569,13 @@ void NetworkTransmitter::pumpClients()
                                    }),
                    clients.end());
     connectedClients.store (static_cast<int> (clients.size()), std::memory_order_release);
+
+    // Only count clients with open PCM channels as active (not still negotiating)
     const auto activeCount = static_cast<int> (std::count_if (clients.begin(),
                                                              clients.end(),
                                                              [] (const std::shared_ptr<ClientConnection>& client)
                                                              {
-                                                                 return client != nullptr
-                                                                     && ! client->closeRequested.load (std::memory_order_acquire);
+                                                                 return isClientReadyForPcm (*client);
                                                              }));
     activeClientCount.store (activeCount, std::memory_order_release);
     isConnected.store (activeCount > 0, std::memory_order_release);
@@ -1106,31 +1108,65 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChu
 
     auto openPcmClientCount = 0;
     auto worstBufferedBytes = std::size_t { 0 };
+    auto criticalClientsCount = 0;
 
     for (auto& client : clients)
     {
         if (client == nullptr)
             continue;
 
+        // Only include clients with open channels in health calculation (exclude still-negotiating clients)
         if (auto channel = client->pcmChannel; channel != nullptr && channel->isOpen())
         {
             ++openPcmClientCount;
-            worstBufferedBytes = std::max (worstBufferedBytes, channel->bufferedAmount());
+            const auto clientBuffered = channel->bufferedAmount();
+            worstBufferedBytes = std::max (worstBufferedBytes, clientBuffered);
+
+            // Count clients in critical state (>10ms buffered)
+            if (clientBuffered > chunk.byteCount * 2)
+                ++criticalClientsCount;
         }
 
         trySendPcmChunk (*client, chunk);
     }
 
+    // If no clients have open PCM channels yet, health is perfect
     if (openPcmClientCount == 0)
     {
         bufferHealth.store (1.0f, std::memory_order_release);
         return;
     }
 
+    // Health = 1.0 - (ratio of buffer used on worst client)
+    // This excludes clients still in WebRTC negotiation
     const auto maxBufferedBytes = chunk.byteCount * 2;
     const auto ratio = static_cast<float> (worstBufferedBytes)
         / static_cast<float> (maxBufferedBytes);
-    bufferHealth.store (juce::jlimit (0.0f, 1.0f, 1.0f - ratio), std::memory_order_release);
+
+    const auto health = juce::jlimit (0.0f, 1.0f, 1.0f - ratio);
+    bufferHealth.store (health, std::memory_order_release);
+
+    // Log when health degrades below 80% (critical threshold)
+    if (health < 0.8f && health > 0.0f)
+    {
+        static auto lastLogTimeMs = juce::Time::getCurrentTime().toMilliseconds();
+        const auto nowMs = juce::Time::getCurrentTime().toMilliseconds();
+
+        // Rate-limit logging to once per second to avoid spam
+        if (nowMs - lastLogTimeMs > 1000)
+        {
+            lastLogTimeMs = nowMs;
+            const auto healthPercent = static_cast<int> (health * 100.0f);
+            juce::Logger::writeToLog (
+                juce::String ("BUFFER_HEALTH_WARN: health=") + juce::String (healthPercent) + "%"
+                + " worstClient=" + juce::String (static_cast<int> (worstBufferedBytes)) + "B"
+                + " clients=" + juce::String (openPcmClientCount)
+                + " critical=" + juce::String (criticalClientsCount)
+                + " dropped=" + juce::String (droppedPacketCount.load (std::memory_order_acquire))
+            );
+        }
+    }
+
     chunkSizeTransitionPending.store (false, std::memory_order_release);
 }
 
@@ -1144,7 +1180,52 @@ bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
     if (channel == nullptr || ! channel->isOpen())
         return false;
 
-    if (channel->bufferedAmount() > chunk.byteCount * 2)
+    const auto bufferedAmount = channel->bufferedAmount();
+    const auto targetLatencyBytes = chunk.byteCount;      // 1 chunk = 5ms
+    const auto maxQueueBytes = chunk.byteCount * 2;       // 10ms ceiling
+    const auto criticalThresholdBytes = chunk.byteCount * 3;  // 15ms = alert
+
+    // AGGRESSIVE DROP LOGIC: if buffer exceeds 10ms ceiling, we've hit TCP backpressure
+    if (bufferedAmount > maxQueueBytes)
+    {
+        // TCP is backed up — prefer a click over accumulated latency
+        // This signals to the client that network jitter is causing dropout
+        // Log to JUCE console for debugging
+        if (bufferHealthAlert.load (std::memory_order_acquire) == 0)
+        {
+            juce::Logger::writeToLog (
+                juce::String ("TCP_BACKPRESSURE: buffered=") + juce::String (bufferedAmount)
+                + " bytes maxQueue=" + juce::String (maxQueueBytes)
+                + " chunk=" + juce::String (chunk.byteCount)
+                + " dropCount=" + juce::String (droppedPacketCount.load (std::memory_order_acquire))
+            );
+            bufferHealthAlert.store (1, std::memory_order_release);
+        }
+        droppedPacketCount.fetch_add (1, std::memory_order_relaxed);
+        return false;  // Skip this packet — client will resync to live edge
+    }
+
+    // Clear alert if buffer is now healthy
+    if (bufferedAmount < targetLatencyBytes && bufferHealthAlert.load (std::memory_order_acquire) != 0)
+    {
+        juce::Logger::writeToLog (
+            juce::String ("TCP_BACKPRESSURE_RECOVERED: buffered=") + juce::String (bufferedAmount)
+            + " bytes normalcy restored"
+        );
+        bufferHealthAlert.store (0, std::memory_order_release);
+    }
+
+    // Critical alert if approaching 15ms — network is under stress
+    if (bufferedAmount > criticalThresholdBytes)
+    {
+        juce::Logger::writeToLog (
+            juce::String ("TCP_ALERT_CRITICAL: buffered=") + juce::String (bufferedAmount)
+            + " bytes (15ms+) dropCount=" + juce::String (droppedPacketCount.load (std::memory_order_acquire))
+        );
+    }
+
+    // Standard backpressure: don't queue if we're already at 10ms
+    if (bufferedAmount > chunk.byteCount * 2)
         return false;
 
     try
@@ -1155,6 +1236,18 @@ bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
     {
         return false;
     }
+}
+
+bool NetworkTransmitter::isClientReadyForPcm (const ClientConnection& client) noexcept
+{
+    // Client is ready for PCM if:
+    // 1. Not closed
+    // 2. Has an open PCM data channel
+    if (client.closeRequested.load (std::memory_order_acquire))
+        return false;
+
+    auto channel = client.pcmChannel;
+    return channel != nullptr && channel->isOpen();
 }
 
 void NetworkTransmitter::sendJson (ClientConnection& client, const juce::String& json)

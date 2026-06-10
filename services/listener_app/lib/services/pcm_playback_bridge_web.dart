@@ -212,7 +212,7 @@ class PcmPlaybackBridge {
       _logRecoveryState(
         'pcm-arrival-context-blocked',
         reason: 'pcm',
-        detail: 'arrival-count=$_pcmPacketArrivalCount',
+        detail: 'arrival-count=$_pcmPacketArrivalCount queueDepth=${_queuedPcmMessages.length}',
       );
       _logDiagnostic('pcm.arrived-context-blocked');
       _requestForegroundResume('chunk');
@@ -233,6 +233,11 @@ class PcmPlaybackBridge {
 
     final payload = message['payload'];
     if (payload is! String || payload.isEmpty) {
+      web.console.log(_structuredLog(
+        'pcm.decode-skip: empty payload',
+        event: 'pcm-decode-invalid',
+        reason: 'enqueue',
+      ).toJS);
       return _updateTelemetry(outputActive: false);
     }
 
@@ -245,23 +250,57 @@ class PcmPlaybackBridge {
     final chunkDurationMs = _readInt(pcm['chunkDurationMs'], fallback: 0);
 
     if (bitDepth != 16 || sampleRate <= 0) {
+      web.console.log(_structuredLog(
+        'pcm.decode-skip: invalid bitDepth=$bitDepth or sampleRate=$sampleRate',
+        event: 'pcm-decode-invalid-params',
+        reason: 'enqueue',
+      ).toJS);
       return _updateTelemetry(outputActive: false);
     }
 
     typed.Uint8List bytes;
     try {
       bytes = base64Decode(payload);
-    } catch (_) {
+    } catch (e) {
+      web.console.log(_structuredLog(
+        'pcm.decode-failed: base64 decode error: $e',
+        event: 'pcm-decode-base64-error',
+        reason: 'enqueue',
+      ).toJS);
       return _updateTelemetry(outputActive: false);
     }
 
     final bytesPerFrame = channels * 2;
     final frames = bytes.length ~/ bytesPerFrame;
     if (frames <= 0) {
+      web.console.log(_structuredLog(
+        'pcm.decode-skip: invalid frames=$frames (bytesLen=${bytes.length} bytesPerFrame=$bytesPerFrame)',
+        event: 'pcm-decode-invalid-frames',
+        reason: 'enqueue',
+      ).toJS);
       return _updateTelemetry(outputActive: false);
     }
 
     final now = context.currentTime;
+
+    // AGGRESSIVE QUEUE FLUSHING: if latency spike detected, drop oldest queued data
+    final scheduledLeadMs = ((_scheduledAt - now) * 1000).round().clamp(0, 1 << 31);
+    if (scheduledLeadMs > 100) {
+      // Latency exceeded 100ms — aggressive flush to reset
+      if (_sources.isNotEmpty) {
+        web.console.log(_structuredLog(
+          'backpressure-flush: leadMs=$scheduledLeadMs queuedMsgs=${_queuedPcmMessages.length} queuedBytes=${_queuedPcmBytes.length} sources=${_sources.length}',
+          event: 'pcm-backpressure-flush',
+          reason: 'enqueue',
+        ).toJS);
+        _generation += 1;
+        _stopSources();
+        _queuedPcmMessages.clear();
+        _queuedPcmBytes.clear();
+        _scheduledAt = now + _targetLeadSeconds;
+      }
+    }
+
     final worklet = _workletNode;
     if (worklet != null) {
       try {
@@ -294,7 +333,12 @@ class PcmPlaybackBridge {
             : ((frames / sampleRate) * 1000).round();
         _scheduledLeadMs = max(0, ((_scheduledAt - now) * 1000).round());
         return _updateTelemetry(outputActive: true);
-      } catch (_) {
+      } catch (e) {
+        web.console.log(_structuredLog(
+          'pcm.worklet-post-error: $e',
+          event: 'pcm-worklet-error',
+          reason: 'enqueue',
+        ).toJS);
         _workletUnavailable = true;
         _stopWorkletRenderer();
       }

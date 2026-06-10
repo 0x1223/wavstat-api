@@ -42,6 +42,8 @@ public:
     std::atomic<float> bufferHealth { 1.0f };
     std::atomic<int> targetChunkMs { AudioFifoWorker::chunkDurationMs };
     std::atomic<bool> chunkSizeTransitionPending { false };
+    std::atomic<int> droppedPacketCount { 0 };
+    std::atomic<int> bufferHealthAlert { 0 };
 
 private:
    #if JUCE_WINDOWS
@@ -65,7 +67,7 @@ private:
    #endif
 
     static constexpr juce::int64 heartbeatMs = 10000;
-    static constexpr juce::int64 graceHoldMs = 10 * 60 * 1000;
+    static constexpr juce::int64 graceHoldMs = 30 * 1000;  // 30 seconds grace for local clients only
     static constexpr std::size_t maxTextFrameBytes = 64 * 1024;
     static constexpr int pcmChunkMs = AudioFifoWorker::chunkDurationMs;
     static constexpr int pcmFramesPerChunk = AudioFifoWorker::framesPerChunk;
@@ -94,6 +96,7 @@ private:
                                int offerGeneration);
     void closePeerConnection (ClientConnection& client);
     void adaptPacketSize();
+    static bool isClientReadyForPcm (const ClientConnection& client) noexcept;
 
     void streamReadyPcmChunks();
     void broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChunk& chunk);
