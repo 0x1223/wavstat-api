@@ -217,29 +217,36 @@ class _ListenerScreenState extends State<ListenerScreen> {
       );
     });
 
+    debugPrint('[KINGZ] _play: streamUrl=$streamUrl kIsWeb=$kIsWeb mode=${_transportConfig.mode}');
     final operation = ++_playbackOperation;
     try {
       final pcmPlaybackActive = await _lanAudioClient.startListening(
         _transportConfig.mode,
         enablePcmPlayback: kIsWeb,
       );
+      debugPrint('[KINGZ] _play: startListening done pcmPlaybackActive=$pcmPlaybackActive');
       if (operation != _playbackOperation) {
         return;
       }
       if (kIsWeb && pcmPlaybackActive) {
+        debugPrint('[KINGZ] _play: returning early (web+pcm active)');
         return;
       }
       await _audioPlayer.stop();
       if (operation != _playbackOperation) {
         return;
       }
+      debugPrint('[KINGZ] _play: calling setUrl($streamUrl)');
       await _audioPlayer.setUrl(streamUrl.toString());
+      debugPrint('[KINGZ] _play: setUrl done, calling play()');
       if (operation != _playbackOperation) {
         return;
       }
       await _audioPlayer.setVolume(_muted ? 0 : _volume);
       await _audioPlayer.play();
-    } catch (_) {
+      debugPrint('[KINGZ] _play: play() done');
+    } catch (e, st) {
+      debugPrint('[KINGZ] _play error: $e\n$st');
       await _lanAudioClient.stopListening();
       _setError('Unable to play stream');
     } finally {

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/listener_playback_state.dart';
@@ -85,11 +86,13 @@ class LanAudioClient {
     _webRtcPlaybackBridge
         .configureTransport(_audioEngineService.transportConfig);
     _pcmPlaybackBridge.configureTransport(_audioEngineService.transportConfig);
+    debugPrint('[KINGZ] LanAudioClient: bridge=${_pcmPlaybackBridge.telemetry.audioContextState} kIsWeb=$kIsWeb');
   }
 
   Stream<LanAudioEvent> get events => _events.stream;
 
   Future<void> connect(Uri uri) async {
+    debugPrint('[KINGZ] connect: uri=$uri');
     await _subscription?.cancel();
     _subscription = null;
     _uri = uri;
@@ -145,6 +148,7 @@ class LanAudioClient {
     MonitoringMode mode, {
     bool enablePcmPlayback = false,
   }) async {
+    debugPrint('[KINGZ] startListening: mode=$mode enablePcmPlayback=$enablePcmPlayback kIsWeb=$kIsWeb');
     _wasListening = true;
     _pcmFallbackAllowed = enablePcmPlayback;
     _pcmFallbackActive = false;
@@ -420,6 +424,7 @@ class LanAudioClient {
   }
 
   void _handleConnectionLoss() {
+    debugPrint('[KINGZ] _handleConnectionLoss: manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed');
     if (_manualDisconnect || _isDisposed) {
       return;
     }
@@ -536,7 +541,8 @@ class LanAudioClient {
 
     try {
       channel.sink.add(jsonEncode(payload));
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[KINGZ] _send error (type=${payload['type']}): $e');
       _handleConnectionLoss();
     }
   }
