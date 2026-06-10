@@ -2088,7 +2088,7 @@ async function refreshSessionPlaybackUrls(session, req = null) {
         audioUrl: freshUrl,
         originalUrl,
         previewUrl,
-        peaksUrl: version.audioMetadata.peaksUrl || null,
+        peaksUrl: version.audioMetadata.peaksUrl || (key ? buildApiPlaybackUrl(req, `${key}.peaks.json`) : null),
       }
     };
   };

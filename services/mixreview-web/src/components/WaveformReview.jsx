@@ -86,6 +86,10 @@ export function WaveformReview({
 }) {
   const containerRef = useRef(null);
   const wavesurferRef = useRef(null);
+  // Tracks whether the current WaveSurfer instance has fired "ready" (waveform rendered).
+  // Used by the local peaks-polling loop and the separate peaksUrl effect to avoid
+  // calling wavesurfer.load() again after the waveform is already displayed.
+  const hasWavesurferRenderedRef = useRef(false);
   // Touch-gesture axis lock: populated on touchstart, read on touchmove.
   // touchStartRef   — {x, y} of the first touch point.
   // gestureAxisRef  — 'h' (horizontal/scrub) | 'v' (vertical/scroll) | null (undecided).
@@ -381,6 +385,7 @@ export function WaveformReview({
     // and producing a different rendering state than manually switched tracks
     // (which always run after layout is stable). Deferring one frame makes
     // both paths identical.
+    hasWavesurferRenderedRef.current = false;
     let isDisposed = false;
     let hasLoaded = false;
     let wavesurfer = null;
@@ -585,6 +590,10 @@ export function WaveformReview({
 
       wavesurfer.on("ready", () => {
         if (isDisposed) return;
+        // Mark rendered before the hasLoaded guard so both the fast-path (canplay
+        // surfaced the player first) and the normal path (full decode) stop the
+        // local peaks-polling loop and the separate peaksUrl effect alike.
+        hasWavesurferRenderedRef.current = true;
         clearTimeout(audioReadyTimer);
 
         if (hasLoaded) {
@@ -684,6 +693,40 @@ export function WaveformReview({
           callbacksRef.current.onDurationChange(0);
           callbacksRef.current.onPlaybackChange(false);
         });
+
+        // When no peaks were found on the initial attempt, poll the pre-computed
+        // peaks URL every 15 s for up to 90 s.  This catches peaks that are being
+        // generated server-side by queueMissingPeakRepairs (an async background
+        // job) so the waveform canvas updates without a full page reload.  The
+        // reload is non-destructive — wavesurfer.load() with a peaks array skips
+        // decodeAudioData and leaves the media element (and any active playback)
+        // intact.  Polling stops as soon as the WaveSurfer "ready" event fires
+        // (hasWavesurferRenderedRef becomes true), either from this reload or from
+        // the ongoing decodeAudioData completing first.
+        if (!peaks && (audioSource?.peaksUrl || audioSource?.key)) {
+          const pollDeadlineMs = Date.now() + 90_000;
+          let reloadInitiated = false;
+
+          const scheduleNextPeaksPoll = () => {
+            if (isDisposed || hasWavesurferRenderedRef.current || reloadInitiated) return;
+            if (Date.now() >= pollDeadlineMs) return;
+
+            setTimeout(async () => {
+              if (isDisposed || hasWavesurferRenderedRef.current || reloadInitiated) return;
+
+              const latePeaks = await resolveWaveformPeaks(audioSource).catch(() => null);
+              if (latePeaks && !isDisposed && !hasWavesurferRenderedRef.current && wavesurfer && !reloadInitiated) {
+                reloadInitiated = true;
+                console.log("[WaveformReview] Late peaks resolved — reloading waveform non-destructively");
+                wavesurfer.load(playbackUrl, latePeaks).catch(() => { reloadInitiated = false; });
+              } else if (!latePeaks) {
+                scheduleNextPeaksPoll();
+              }
+            }, 15_000);
+          };
+
+          scheduleNextPeaksPoll();
+        }
       });
     });
 
@@ -705,10 +748,38 @@ export function WaveformReview({
     audioSource?.previewUrl,
     audioSource?.playbackUrl,
     audioSource?.url,
-    audioSource?.peaksUrl,
+    // audioSource?.peaksUrl is intentionally excluded: a late-arriving peaksUrl
+    // (injected by pollForPeaksUrls) must not destroy and recreate the WaveSurfer
+    // instance — that would interrupt playback and reset position.  Instead the
+    // separate useEffect below calls wavesurfer.load() non-destructively when peaks
+    // become available and WaveSurfer has not yet rendered the waveform.
     trackColor?.wave,
     trackColor?.progress,
   ]);
+
+  // ── Non-destructive late-peaks loader ────────────────────────────────────────
+  // Fires when peaksUrl is injected into audioSource after the initial WaveSurfer
+  // load has already started (e.g. pollForPeaksUrls resolves while decoding is in
+  // progress).  If WaveSurfer hasn't rendered yet we reload with the real peaks so
+  // decodeAudioData is cancelled and the waveform appears immediately.  If it has
+  // already rendered we do nothing — the user's playback is not disrupted.
+  useEffect(() => {
+    if (isMobileViewport()) return; // mobile engine manages its own peaks lifecycle
+    const peaksUrl = audioSource?.peaksUrl;
+    if (!peaksUrl) return;
+    const ws = wavesurferRef.current;
+    if (!ws || hasWavesurferRenderedRef.current) return;
+
+    const playUrl = getPlaybackUrl(audioSource);
+    if (!playUrl) return;
+
+    resolveWaveformPeaks(audioSource).then((peaks) => {
+      if (!peaks) return; // peaks not readable yet — local poll will retry
+      if (!wavesurferRef.current || hasWavesurferRenderedRef.current) return;
+      console.log("[WaveformReview] Non-destructive peaks reload via peaksUrl change");
+      wavesurferRef.current.load(playUrl, peaks).catch(() => {});
+    });
+  }, [audioSource?.peaksUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function seekToTime(time) {
     const wavesurfer = wavesurferRef.current;
