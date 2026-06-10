@@ -132,20 +132,10 @@ class WebRtcPlaybackBridge {
         }
         debugPrint('[KINGZ WebRTC] answer received (gen=$generation, sdpLen=${sdp.length})');
 
-        // LOG ENTIRE ANSWER SDP FOR DEBUGGING M-LINE ISSUES
-        debugPrint('[KINGZ WebRTC] === ANSWER SDP START ===');
-        final answerLines = sdp.split('\n');
-        int mLineCount = 0;
-        for (final line in answerLines) {
-          if (line.startsWith('m=')) {
-            mLineCount++;
-            debugPrint('[KINGZ WebRTC] ANSWER M-LINE #$mLineCount: $line');
-          } else if (line.startsWith('a=') || line.startsWith('v=') || line.startsWith('o=')) {
-            debugPrint('[KINGZ WebRTC] ANSWER: $line');
-          }
-        }
-        debugPrint('[KINGZ WebRTC] ANSWER: Total m= lines: $mLineCount');
-        debugPrint('[KINGZ WebRTC] === ANSWER SDP END ===');
+        // CRITICAL: PRINT ENTIRE RAW ANSWER SDP FROM JUCE FOR M-LINE DIAGNOSTIC
+        debugPrint('======== JUCE ANSWER SDP (BEFORE FIX) (${sdp.length} bytes) ========');
+        debugPrint(sdp);
+        debugPrint('======== END JUCE ANSWER SDP ========');
 
         // CRITICAL: Verify peer is still valid and in correct state
         final currentPeer = _peer;
@@ -160,18 +150,10 @@ class WebRtcPlaybackBridge {
         final fixedSdp = _fixAnswerSdpSetup(sdp);
         debugPrint('[KINGZ WebRTC] fixed SDP: ${fixedSdp.length} bytes');
 
-        // LOG FIXED SDP TO VERIFY M-LINES MATCH
-        debugPrint('[KINGZ WebRTC] === FIXED ANSWER SDP START ===');
-        final fixedLines = fixedSdp.split('\n');
-        int fixedMLineCount = 0;
-        for (final line in fixedLines) {
-          if (line.startsWith('m=')) {
-            fixedMLineCount++;
-            debugPrint('[KINGZ WebRTC] FIXED M-LINE #$fixedMLineCount: $line');
-          }
-        }
-        debugPrint('[KINGZ WebRTC] FIXED: Total m-lines: $fixedMLineCount');
-        debugPrint('[KINGZ WebRTC] === FIXED ANSWER SDP END ===');
+        // CRITICAL: PRINT ENTIRE FIXED ANSWER SDP BEFORE ATTEMPTING setRemoteDescription
+        debugPrint('======== JUCE ANSWER SDP (AFTER FIX) (${fixedSdp.length} bytes) ========');
+        debugPrint(fixedSdp);
+        debugPrint('======== END FIXED ANSWER SDP ========');
 
         // Wait for local description to be fully set
         debugPrint('[KINGZ WebRTC] waiting for local description to be ready...');
@@ -185,7 +167,7 @@ class WebRtcPlaybackBridge {
           throw StateError('ERROR: bridge deactivated while waiting to set remote description');
         }
 
-        debugPrint('[KINGZ WebRTC] calling setRemoteDescription with answer ($fixedMLineCount m-lines)...');
+        debugPrint('[KINGZ WebRTC] calling setRemoteDescription with fixed answer SDP...');
         await currentPeer.setRemoteDescription(
           RTCSessionDescription(fixedSdp, 'answer'),
         );
@@ -397,15 +379,10 @@ class WebRtcPlaybackBridge {
 
       debugPrint('[KINGZ WebRTC] offer created: ${offer.sdp!.length} bytes');
 
-      // LOG ENTIRE OFFER SDP FOR DEBUGGING M-LINE ISSUES
-      debugPrint('[KINGZ WebRTC] === OFFER SDP START ===');
-      final offerLines = offer.sdp!.split('\n');
-      for (final line in offerLines) {
-        if (line.startsWith('m=') || line.startsWith('a=') || line.startsWith('v=') || line.startsWith('o=')) {
-          debugPrint('[KINGZ WebRTC] OFFER: $line');
-        }
-      }
-      debugPrint('[KINGZ WebRTC] === OFFER SDP END ===');
+      // CRITICAL: PRINT ENTIRE OFFER SDP FOR M-LINE DIAGNOSTIC
+      debugPrint('======== FLUTTER OFFER SDP (${offer.sdp!.length} bytes) ========');
+      debugPrint(offer.sdp!);
+      debugPrint('======== END OFFER SDP ========');
 
       debugPrint('[KINGZ WebRTC] setting local description with offer');
       await peer.setLocalDescription(offer);
