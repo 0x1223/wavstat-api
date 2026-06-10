@@ -86,11 +86,30 @@ export async function deleteSessionFromApi(sessionId) {
   }
 
   const response = await fetch(apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}`), {
-    method: "DELETE"
+    method: "DELETE",
+    headers: adminHeaders(),
   });
 
   if (!response.ok) {
     throw new Error("Session could not be deleted.");
+  }
+}
+
+// verifyEngineerPassword — POST /api/auth/verify-engineer
+//
+// Sends the candidate password to the server for comparison against the
+// ENGINEER_PASSWORD env var.  Returns true on success, false on failure or
+// network error.  Keeps the real password off the client bundle entirely.
+export async function verifyEngineerPassword(password) {
+  try {
+    const response = await fetch(apiUrl("/api/auth/verify-engineer"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    return response.ok;
+  } catch {
+    return false;
   }
 }
 

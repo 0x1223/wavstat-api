@@ -19,7 +19,8 @@ import {
   listSessionsFromApi,
   loadSessionFromApi,
   saveSessionToApi,
-  uploadSessionAudio
+  uploadSessionAudio,
+  verifyEngineerPassword,
 } from "./api/sessions.js";
 import { startKeepAlive, setMediaSessionMetadata, getSharedAudioContext } from "./lib/mobileAudioEngine.js";
 import {
@@ -46,8 +47,8 @@ const approvalStates = [
 ];
 const reviewerIdentities = ["Artist", "Engineer", "Manager", "Label"];
 const clientReviewerIdentities = ["Artist", "Manager", "Label"];
-// TODO: Real production admin auth, password handling, and 2FA must be backend-based later.
-const MIXREVIEW_ADMIN_DEV_PASSWORD = "kingzreview";
+// Engineer password validation is handled server-side via POST /api/auth/verify-engineer.
+// The real password lives in the ENGINEER_PASSWORD Railway env var — not in this bundle.
 const ADMIN_UNLOCK_SESSION_KEY = "mixreview.engineerUnlocked";
 const ACCESS_STORAGE_KEY = "mixreview.accessState";
 
@@ -1281,7 +1282,9 @@ export default function App({ onFirstRender } = {}) {
           const nextTrackId = createTrackId(title);
           const nextVersionId = "version-v1";
 
+          console.log("[track-upload] starting", { sessionId, projectId: targetAlbumId, trackId: nextTrackId, fileName: file.name });
           const uploadResult = await uploadSessionAudio(sessionId, nextVersionId, file, nextTrackId);
+          console.log("[track-upload] complete", { sessionId, projectId: targetAlbumId, trackId: nextTrackId, r2Key: uploadResult?.key });
           const nextAudioSource = normalizeAudioSource({
             playbackUrl: uploadResult.playbackUrl,
             audioUrl:    uploadResult.audioUrl,
@@ -1328,6 +1331,13 @@ export default function App({ onFirstRender } = {}) {
           const albumIdx = targetAlbumId
             ? prevAlbums.findIndex((a) => a.id === targetAlbumId)
             : 0;
+          if (targetAlbumId && albumIdx < 0) {
+            console.warn("[track-upload] target album not found — falling back to first album", {
+              targetAlbumId,
+              sessionId,
+              batchTrackIds: batchTracks.map((t) => t.id),
+            });
+          }
           const destIdx = albumIdx >= 0 ? albumIdx : 0;
           return prevAlbums.map((album, i) =>
             i === destIdx
@@ -1412,7 +1422,7 @@ export default function App({ onFirstRender } = {}) {
   // existing selectTrack / WaveSurfer / transport path is unaffected.
 
   const handleCreateAlbum = useCallback((title = "New Album", type = "album") => {
-    const albumId = `album-${Date.now()}`;
+    const albumId = `album-${crypto.randomUUID().slice(0, 8)}`;
     const newAlbum = {
       id: albumId,
       title: typeof title === "string" && title.trim() ? title.trim() : "New Album",
@@ -1629,6 +1639,7 @@ export default function App({ onFirstRender } = {}) {
     setIsSessionHydrating(false);
     revokeVersionUrls(versionsRef.current);
     const nextSessionId = createSessionId();
+    console.log("[session-create] new session created", { sessionId: nextSessionId });
     hydrationGuardRef.current = null;
     setSessionId(nextSessionId);
     setProjectTitle(emptyProjectName);
@@ -1779,7 +1790,9 @@ export default function App({ onFirstRender } = {}) {
     }
 
     if (isAdminLoginName(name)) {
-      if (password !== MIXREVIEW_ADMIN_DEV_PASSWORD) {
+      // Password is verified server-side — the real value never touches this bundle.
+      const passwordOk = await verifyEngineerPassword(password);
+      if (!passwordOk) {
         setLoginError("Incorrect engineer password.");
         return;
       }
@@ -1802,10 +1815,12 @@ export default function App({ onFirstRender } = {}) {
         return;
       }
 
+      // Only accept the explicit reviewer token or the share ID.
+      // The raw session ID is NOT a valid credential — it appears in URLs and
+      // could be seen by anyone who ever received a share link.
       const validToken =
         password === storedSession.reviewerToken ||
-        password === storedSession.shareId ||
-        password === storedSession.id;
+        password === storedSession.shareId;
       if (!validToken) {
         setLoginError("Invalid review password or link token.");
         return;
@@ -3906,9 +3921,11 @@ function syncActiveTrack(tracks, activeTrackId, versions, activeVersionId) {
       ? {
           ...track,
           activeVersionId,
-          title:
-            versions.find((version) => version.audioSource)?.audioSource?.title ||
-            track.title,
+          // Always preserve track.title — do NOT derive from audioSource.title here.
+          // audioSource.title is the original filename and never reflects a user rename.
+          // Overwriting track.title from audioSource in this hot path would silently
+          // revert every user-set track name on every snapshot / autosave cycle.
+          title: track.title,
           versions,
           updatedAt: new Date().toISOString()
         }
@@ -4131,7 +4148,9 @@ function isMobileViewport() {
 }
 
 function createSessionId() {
-  return `session-${Date.now()}`;
+  // crypto.randomUUID() is available in all modern browsers (Chrome 92+, Firefox 95+,
+  // Safari 15.4+) and avoids the millisecond-precision collision risk of Date.now().
+  return `session-${crypto.randomUUID()}`;
 }
 
 function createTrackId(title = "track") {

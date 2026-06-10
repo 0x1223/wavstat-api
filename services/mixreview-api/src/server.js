@@ -126,13 +126,17 @@ sessionRouter.post("/repair-index", requireAdminAuth, repairSessionIndex);
 sessionRouter.post("/", createSession);
 sessionRouter.get("/:sessionId", getSession);
 sessionRouter.put("/:sessionId", requireAdminAuth, saveSession);
-sessionRouter.delete("/:sessionId", deleteSession);
+sessionRouter.delete("/:sessionId", requireAdminAuth, deleteSession);
 sessionRouter.post("/:sessionId/audio", upload.single("audio"), handleAudioUpload);
 sessionRouter.post("/:sessionId/confirm-audio", requireAdminAuth, confirmAudioUpload);
 sessionRouter.delete("/:sessionId/albums/:albumId", requireAdminAuth, deleteAlbum);
 sessionRouter.delete("/:sessionId/tracks/:trackId", requireAdminAuth, deleteTrack);
 
 app.use("/api/sessions", sessionRouter);
+// Engineer-password verification — no admin key required (this IS the login step).
+// Compares against ENGINEER_PASSWORD env var. In development the check is skipped
+// so local dev continues to work without env vars.
+app.post("/api/auth/verify-engineer", verifyEngineerAuth);
 app.post("/api/audio/upload", upload.single("audio"), handleAudioUpload);
 app.post("/api/get-presigned-url", requireAdminAuth, getPresignedUploadUrl);
 app.delete("/api/tracks/:id", requireAdminAuth, deleteTrack);
@@ -961,6 +965,7 @@ async function createSession(req, res) {
 
   await writeSessionDocument(session.id, session);
   await upsertSessionIndex(session);
+  console.log("[session-create] new session created", { sessionId: session.id, projectName: session.projectName });
   res.status(201).json({ session });
 }
 
@@ -1137,6 +1142,38 @@ function requireAdminAuth(req, res, next) {
   }
 
   next();
+}
+
+/**
+ * verifyEngineerAuth — POST /api/auth/verify-engineer
+ *
+ * Checks the submitted password against the ENGINEER_PASSWORD env var.
+ * Returns 200 { ok: true } on success, 401 on mismatch, 503 when the env var
+ * is not configured in production.  In development (no env var set) the check
+ * is bypassed so local dev is not blocked.
+ *
+ * This keeps the real password entirely off the client bundle — the frontend
+ * only ever sends a candidate string and receives a pass/fail response.
+ */
+function verifyEngineerAuth(req, res) {
+  const engineerPassword = getEnvValue("ENGINEER_PASSWORD");
+
+  if (!engineerPassword) {
+    if (isProduction) {
+      console.error("[MixReview] verifyEngineerAuth: ENGINEER_PASSWORD is not set in production.");
+      return res.status(503).json({ error: "Engineer auth is not configured on the server." });
+    }
+    // Dev: allow through without any check so local development is not blocked.
+    console.warn("[MixReview] verifyEngineerAuth: ENGINEER_PASSWORD not set — skipping check in development.");
+    return res.json({ ok: true });
+  }
+
+  const { password } = req.body || {};
+  if (!password || password !== engineerPassword) {
+    return res.status(401).json({ error: "Incorrect engineer password." });
+  }
+
+  return res.json({ ok: true });
 }
 
 /**
@@ -1960,9 +1997,15 @@ function normalizeAlbums(rawAlbums, tracks, defaultTitle, createdAt) {
     if (trackIdSet.size === 0) {
       return [];
     }
+    // Use "New Project" as the fallback title — matches the client-side
+    // buildInitialAlbums default so legacy sessions hydrate with the same
+    // name whether they load from cache (client path) or from a fresh GET
+    // (server-normalised path).  The caller passes projectName as
+    // defaultTitle but we deliberately ignore it here: album titles should
+    // never be silently derived from the session title.
     return [{
       id: "album-default",
-      title: defaultTitle || "Main Album",
+      title: "New Project",
       type: "album",
       trackIds: [...trackIdSet],
       createdAt: createdAt || new Date().toISOString()
@@ -1982,6 +2025,10 @@ function normalizeAlbums(rawAlbums, tracks, defaultTitle, createdAt) {
   const assignedSet = new Set(cleaned.flatMap((a) => a.trackIds));
   const unassigned = [...trackIdSet].filter((id) => !assignedSet.has(id));
   if (unassigned.length > 0 && cleaned.length > 0) {
+    console.warn("[MixReview] normalizeAlbums: reassigning unallocated tracks to first album", {
+      unassigned,
+      targetAlbum: cleaned[0]?.id,
+    });
     cleaned = [
       { ...cleaned[0], trackIds: [...cleaned[0].trackIds, ...unassigned] },
       ...cleaned.slice(1)
