@@ -931,19 +931,30 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
     {
         if (auto lockedClient = weakClient.lock())
         {
-            // CRITICAL DEBUGGING: Log answer SDP to diagnose m-line mismatch (minimal logging)
+            // CRITICAL DEBUGGING: Log answer SDP to diagnose m-line mismatch
             const auto answerSdp = std::string (description);
             const auto answerStr = juce::String (answerSdp);
-
-            // Quick scan for m-line count to verify offer/answer match
+            const auto answerLines = juce::StringArray::fromLines (answerStr);
             int mLineCount = 0;
-            const auto lines = juce::StringArray::fromLines (answerStr);
-            for (const auto& line : lines)
+            juce::String mLineTypes;
+            for (const auto& line : answerLines)
             {
                 if (line.startsWith ("m="))
+                {
                     mLineCount++;
+                    const auto tokens = juce::StringArray::fromTokens (line, " ", "");
+                    if (tokens.size() > 0)
+                        mLineTypes += (mLineCount > 1 ? "," : "") + tokens[0].substring (2);
+                }
             }
-            DBG ("[KINGZ] JUCE Answer: m-line count=" + juce::String (mLineCount));
+            DBG ("[KINGZ] === JUCE ANSWER SDP ===");
+            DBG ("[KINGZ] M-line count: " + juce::String (mLineCount) + ", types: " + mLineTypes);
+            for (const auto& line : answerLines)
+            {
+                if (line.startsWith ("m=") || line.startsWith ("a=setup"))
+                    DBG ("[KINGZ] ANSWER: " + line);
+            }
+            DBG ("[KINGZ] === END ANSWER SDP ===");
 
             auto* response = new juce::DynamicObject();
             response->setProperty ("type", lockedClient->externalSignaling ? "webrtc-answer" : "webrtc.answer");
@@ -990,6 +1001,29 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
 
     try
     {
+        // CRITICAL DEBUGGING: Log incoming offer SDP to diagnose m-line mismatch
+        const auto offerLines = juce::StringArray::fromLines (sdp);
+        int offerMLineCount = 0;
+        juce::String offerMLineTypes;
+        for (const auto& line : offerLines)
+        {
+            if (line.startsWith ("m="))
+            {
+                offerMLineCount++;
+                const auto tokens = juce::StringArray::fromTokens (line, " ", "");
+                if (tokens.size() > 0)
+                    offerMLineTypes += (offerMLineCount > 1 ? "," : "") + tokens[0].substring (2);
+            }
+        }
+        DBG ("[KINGZ] === RECEIVED OFFER SDP ===");
+        DBG ("[KINGZ] M-line count: " + juce::String (offerMLineCount) + ", types: " + offerMLineTypes);
+        for (const auto& line : offerLines)
+        {
+            if (line.startsWith ("m=") || line.startsWith ("a=setup"))
+                DBG ("[KINGZ] OFFER: " + line);
+        }
+        DBG ("[KINGZ] === END OFFER SDP ===");
+
         peer->setRemoteDescription (rtc::Description (sdp.toStdString(), "offer"));
 
         // CRITICAL: Create data channel AFTER setRemoteDescription so answer m-lines
