@@ -54,7 +54,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     text: _defaultServerHost(),
   );
   final TextEditingController _portController = TextEditingController(
-    text: '8081',  // Plugin WebRTC signaling server port
+    text: '8082',  // Plugin port (handles both HTTP and WebRTC)
   );
   final AudioPlayer _audioPlayer = AudioPlayer();
   final LanAudioClient _lanAudioClient = LanAudioClient();

@@ -23,7 +23,7 @@ void KingzListenAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 {
     juce::ignoreUnused (sampleRate, samplesPerBlock);
     fifoWorker.reset();
-    networkTransmitter.start (8081);  // CRITICAL FIX: Start WebRTC signaling server on plugin's default port 8081
+    networkTransmitter.start (8082);  // Plugin runs on port 8082 (shared with HTTP/iOS app)
 }
 
 void KingzListenAudioProcessor::releaseResources()
