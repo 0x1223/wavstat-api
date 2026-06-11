@@ -854,6 +854,9 @@ export const TrackList = memo(function TrackList({
   const [desktopSelectedAlbumId, setDesktopSelectedAlbumId] = useState(null);
   const [desktopDropdownOpen,    setDesktopDropdownOpen]    = useState(false);
   const desktopSelectorRef = useRef(null);
+  // Set to true before any explicit user-driven album change (create or dropdown pick)
+  // so the auto-switch effect doesn't immediately override the selection.
+  const userInitiatedSelectionRef = useRef(false);
 
   // ── Derived data ─────────────────────────────────────────────────────────────
   const visibleTracks = useMemo(() => tracks, [tracks]);
@@ -959,6 +962,13 @@ export const TrackList = memo(function TrackList({
   useEffect(() => {
     if (!hasProjectSelector) {
       if (desktopSelectedAlbumId !== null) setDesktopSelectedAlbumId(null);
+      return;
+    }
+
+    // User explicitly picked or created an album — honour that choice and don't
+    // override it with the track-ownership auto-switch.
+    if (userInitiatedSelectionRef.current) {
+      userInitiatedSelectionRef.current = false;
       return;
     }
 
@@ -1095,7 +1105,10 @@ export const TrackList = memo(function TrackList({
 
   const handleCreateProject = useCallback((title, type) => {
     const albumId = onCreateAlbum?.(title, type);
-    if (albumId) setDesktopSelectedAlbumId(albumId);
+    if (albumId) {
+      userInitiatedSelectionRef.current = true;
+      setDesktopSelectedAlbumId(albumId);
+    }
     setShowTypePicker(false);
     setDesktopDropdownOpen(false);
   }, [onCreateAlbum]);
@@ -1235,6 +1248,7 @@ export const TrackList = memo(function TrackList({
                         aria-selected={isActive}
                         className={`desktop-project-option${isActive ? " active" : ""}`}
                         onClick={() => {
+                          userInitiatedSelectionRef.current = true;
                           setDesktopSelectedAlbumId(album.id);
                           if (firstTrackId) onTrackSelect(firstTrackId);
                           setDesktopDropdownOpen(false);
