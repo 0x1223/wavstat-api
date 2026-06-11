@@ -95,6 +95,7 @@ private:
                                const juce::String& sdp,
                                int offerGeneration);
     void closePeerConnection (ClientConnection& client);
+    void processWebRtcQueue();  // Process queued WebRTC tasks (non-blocking)
     void adaptPacketSize();
     static bool isClientReadyForPcm (const ClientConnection& client) noexcept;
 
@@ -131,4 +132,13 @@ private:
     std::atomic<int> connectedClients { 0 };
     juce::int64 lastPacketAdaptationMs = 0;
     int port = 8082;
+
+    // CRITICAL: WebRTC task queue to prevent blocking HTTP server
+    struct WebRtcSignalingTask {
+        std::shared_ptr<ClientConnection> client;
+        juce::String sdp;
+        int offerGeneration = 0;
+    };
+    std::vector<WebRtcSignalingTask> webRtcQueue;
+    juce::CriticalSection webRtcQueueLock;
 };

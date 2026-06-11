@@ -469,16 +469,43 @@ void NetworkTransmitter::run()
     else if (port <= 0)
         DBG ("NetworkTransmitter::run using external WebSocket signaling only");
 
+    // CRITICAL: HTTP server loop - must stay responsive regardless of WebRTC state
     while (! threadShouldExit() && shouldListen.load (std::memory_order_acquire))
     {
-        acceptPendingClient();
-        pumpClients();
-        streamReadyPcmChunks();
-        wait (2);
+        acceptPendingClient();      // Accept new HTTP/WebSocket connections
+        pumpClients();              // Process HTTP/WebSocket messages
+        processWebRtcQueue();        // Handle queued WebRTC operations (non-blocking)
+        streamReadyPcmChunks();      // Stream audio
+        wait (2);                   // Small sleep to prevent busy-wait
     }
 
     closeSocket (listener);
     closeAllClients();
+}
+
+void NetworkTransmitter::processWebRtcQueue()
+{
+    // CRITICAL: Process ONE WebRTC task per loop iteration to keep HTTP server responsive
+    WebRtcSignalingTask task {};
+    bool hasTask = false;
+
+    {
+        const juce::ScopedLock lock (webRtcQueueLock);
+        if (! webRtcQueue.empty())
+        {
+            task = webRtcQueue.front();
+            webRtcQueue.erase (webRtcQueue.begin());
+            hasTask = true;
+        }
+    }
+
+    if (! hasTask)
+        return;
+
+    // Process the task (may take time, but only one per loop iteration)
+    std::cout << "[KINGZ] Processing WebRTC offer (queued task)" << std::endl;
+    createPeerConnection (task.client, task.sdp, task.offerGeneration);
+    std::cout << "[KINGZ] WebRTC offer processed" << std::endl;
 }
 
 NetworkTransmitter::NativeSocket NetworkTransmitter::createListenerSocket (int portToBind)
@@ -867,7 +894,12 @@ void NetworkTransmitter::handleWebRtcOffer (const std::shared_ptr<ClientConnecti
         return;
     }
 
-    createPeerConnection (client, sdp, offerGeneration);
+    // CRITICAL: Queue WebRTC operation to prevent blocking HTTP server
+    {
+        const juce::ScopedLock lock (webRtcQueueLock);
+        webRtcQueue.push_back ({ client, sdp, offerGeneration });
+    }
+    std::cout << "[KINGZ] WebRTC offer queued (will process async)" << std::endl;
 }
 
 void NetworkTransmitter::handleRemoteIceCandidate (const std::shared_ptr<ClientConnection>& client,
