@@ -23,7 +23,7 @@ void KingzListenAudioProcessor::prepareToPlay (double sampleRate, int samplesPer
 {
     juce::ignoreUnused (sampleRate, samplesPerBlock);
     fifoWorker.reset();
-    networkTransmitter.start (0);
+    networkTransmitter.start (8082);  // CRITICAL FIX: Start HTTP server on port 8082
 }
 
 void KingzListenAudioProcessor::releaseResources()

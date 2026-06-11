@@ -286,7 +286,13 @@ bool NetworkTransmitter::start (int portToUse)
     chunkSizeTransitionPending.store (false, std::memory_order_release);
     lastPacketAdaptationMs = 0;
     shouldListen.store (true, std::memory_order_release);
+
+    // CRITICAL DEBUGGING
+    std::cout << "[KINGZ] NetworkTransmitter::start() - portToUse=" << portToUse << std::endl;
+
     startThread();
+
+    std::cout << "[KINGZ] NetworkTransmitter::start() - thread started" << std::endl;
     return true;
 }
 
@@ -451,7 +457,13 @@ void NetworkTransmitter::run()
         return;
    #endif
 
+    // CRITICAL DEBUGGING
+    std::cout << "[KINGZ] NetworkTransmitter::run() STARTED - port=" << port << std::endl;
+
     listener = port > 0 ? createListenerSocket (port) : invalidSocket;
+
+    std::cout << "[KINGZ] NetworkTransmitter::run() - createListenerSocket returned: " << (listener != invalidSocket ? "SUCCESS" : "FAILED") << std::endl;
+
     if (port > 0 && listener == invalidSocket)
         DBG ("NetworkTransmitter::run continuing without local signaling listener");
     else if (port <= 0)
