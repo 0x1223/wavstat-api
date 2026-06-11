@@ -134,7 +134,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     FocusScope.of(context).unfocus();
     final serverIp = _serverIpController.text.trim();
     final port = _portController.text.trim().isEmpty
-        ? '8081'  // Plugin WebRTC signaling server port
+        ? '8082'  // Plugin single-port (HTTP + WebRTC)
         : _portController.text.trim();
 
     if (serverIp.isEmpty) {
@@ -175,7 +175,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     return Uri(
       scheme: 'ws',
       host: normalized,
-      port: int.tryParse(port) ?? 8081,  // Plugin WebRTC signaling server port
+      port: int.tryParse(port) ?? 8082,
     );
   }
 
@@ -379,7 +379,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
   /// Web / desktop: generate and display a QR code from the current IP field.
   Future<void> _showQrCode() async {
     final host = _serverIpController.text.trim();
-    final port = int.tryParse(_portController.text.trim()) ?? 8081;  // Plugin WebRTC signaling server port
+    final port = int.tryParse(_portController.text.trim()) ?? 8082;
     if (host.isEmpty) {
       _setError('Enter server IP before generating QR');
       return;

@@ -225,6 +225,370 @@ juce::String withKingzListenSourceId (const juce::String& json)
     wrapper->setProperty ("payload", json);
     return juce::JSON::toString (juce::var (wrapper), true);
 }
+
+juce::String getWebUiCss()
+{
+    return R"CSS(*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--gold:#c9a227;--gold-dim:rgba(201,162,39,0.25);--gold-border:rgba(201,162,39,0.35);--bg:#0a0a0a;--card:#111;--text:#fff;--muted:#888;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark}
+body{background:var(--bg);color:var(--text);min-height:100vh;padding:20px 16px 32px;max-width:420px;margin:0 auto}
+.page-label{font-size:11px;font-weight:700;letter-spacing:.12em;color:var(--gold);text-transform:uppercase;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--gold-border);border-radius:16px;padding:18px;margin-bottom:14px}
+.card-label{font-size:10px;font-weight:700;letter-spacing:.14em;color:var(--gold);text-transform:uppercase;margin-bottom:12px}
+.row{display:flex;gap:10px;align-items:stretch}
+.field{flex:1}
+.field label{display:block;font-size:11px;color:var(--muted);margin-bottom:6px}
+.field input{width:100%;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:12px;color:#fff;font:inherit;font-size:15px;outline:none;-webkit-appearance:none}
+.field input:focus{border-color:var(--gold)}
+.field.port{flex:0 0 90px}
+.btn-row{display:flex;gap:10px;margin-top:12px}
+.btn{flex:1;border:none;border-radius:10px;padding:14px;font:inherit;font-size:15px;font-weight:700;cursor:pointer;transition:opacity .15s}
+.btn:active{opacity:.75}
+.btn-primary{background:var(--gold);color:#000}
+.btn-secondary{background:#1e1e1e;color:#fff;border:1px solid #333}
+.btn:disabled{opacity:.4;cursor:default}
+.session-name{font-size:26px;font-weight:800;margin:4px 0 2px}
+.session-sub{font-size:13px;color:var(--muted);margin-bottom:14px}
+.stats{display:flex;gap:8px}
+.stat{flex:1;background:#1a1a1a;border-radius:10px;padding:10px 8px;text-align:center}
+.stat-label{font-size:10px;color:var(--muted);margin-bottom:4px}
+.stat-value{font-size:13px;font-weight:700;color:var(--gold)}
+.mode-row{display:flex;gap:8px}
+.mode-btn{flex:1;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;padding:12px 6px;font:inherit;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;transition:all .15s;-webkit-appearance:none}
+.mode-btn.active{background:var(--gold-dim);border-color:var(--gold);color:var(--gold)}
+.monitor-center{text-align:center;padding:8px 0 16px}
+.monitor-btn{width:110px;height:110px;border-radius:50%;background:linear-gradient(145deg,#d4a820,#a07c10);border:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;box-shadow:0 0 30px rgba(201,162,39,0.3);transition:box-shadow .2s,transform .1s;-webkit-appearance:none}
+.monitor-btn:active{transform:scale(.96)}
+.monitor-btn.inactive{background:linear-gradient(145deg,#2a2a2a,#1a1a1a);box-shadow:none}
+.monitor-btn svg{width:44px;height:44px}
+.ctrl-row{display:flex;gap:10px;margin-top:14px}
+.vol-row{display:flex;align-items:center;gap:10px;margin-top:14px}
+.vol-icon{font-size:18px;color:var(--muted)}
+.vol-slider{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:2px;background:#2a2a2a;outline:none}
+.vol-slider::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:var(--gold);cursor:pointer}
+.status-bar{background:#111;border:1px solid var(--gold-border);border-radius:12px;padding:14px 16px;display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.status-dot{width:9px;height:9px;border-radius:50%;background:#333;flex-shrink:0;transition:background .3s}
+.status-dot.live{background:var(--gold);box-shadow:0 0 6px var(--gold)}
+.status-text{font-size:14px;font-weight:600}
+.footer-note{text-align:center;font-size:12px;color:#444;margin-top:4px})CSS";
+}
+
+juce::String getWebUiJs()
+{
+    return R"JS(var host = window.location.hostname || "";
+var port = window.location.port || "8082";
+document.getElementById("ip-input").value   = host;
+document.getElementById("port-input").value = port;
+
+var socket        = null;
+var peerConn      = null;
+var dataChannel   = null;
+var audioCtx      = null;
+var gainNode      = null;
+var nextPlayTime  = 0;
+var muted         = false;
+var stopped       = false;
+var connected     = false;
+var durationSecs  = 0;
+var durationTimer = null;
+var signalId      = "";
+var bufferAhead   = 0.05;
+var pendingCandidates = [];
+
+function tryParse(s){ try{ return JSON.parse(s); }catch(_){ return null; } }
+
+function setStatus(txt, live){
+  document.getElementById("status-text").textContent = txt;
+  document.getElementById("status-dot").className = "status-dot" + (live ? " live" : "");
+}
+
+function showCards(show){
+  ["session-card","mode-card","monitor-card"].forEach(function(id){
+    document.getElementById(id).style.display = show ? "block" : "none";
+  });
+}
+
+function startDuration(){
+  durationSecs = 0;
+  if(durationTimer) clearInterval(durationTimer);
+  durationTimer = setInterval(function(){
+    durationSecs++;
+    var m = Math.floor(durationSecs/60), s = durationSecs%60;
+    document.getElementById("stat-duration").textContent =
+      m + ":" + (s < 10 ? "0" : "") + s;
+  }, 1000);
+}
+function stopDuration(){
+  if(durationTimer){ clearInterval(durationTimer); durationTimer = null; }
+  document.getElementById("stat-duration").textContent = "0:00";
+}
+
+function ensureAudio(){
+  if(!audioCtx){
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = parseFloat(document.getElementById("vol-slider").value) / 100;
+    gainNode.connect(audioCtx.destination);
+  }
+  if(audioCtx.state === "suspended") audioCtx.resume();
+}
+
+function playPcm(arrayBuffer){
+  if(!audioCtx || muted || stopped) return;
+  var samples = new Int16Array(arrayBuffer);
+  var frames  = samples.length / 2;
+  if(frames < 1) return;
+  var buf = audioCtx.createBuffer(2, frames, 48000);
+  var L = buf.getChannelData(0), R = buf.getChannelData(1);
+  for(var i = 0; i < frames; i++){
+    L[i] = samples[i*2]   / 32768.0;
+    R[i] = samples[i*2+1] / 32768.0;
+  }
+  var src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(gainNode);
+  var now = audioCtx.currentTime;
+  if(nextPlayTime < now + 0.005) nextPlayTime = now + bufferAhead;
+  src.start(nextPlayTime);
+  nextPlayTime += buf.duration;
+  document.getElementById("stat-latency").textContent =
+    Math.round(bufferAhead * 1000) + " ms";
+}
+
+function sendSignal(payload){
+  if(!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify(Object.assign({ source_id:"kingz-web", signal_id:signalId }, payload)));
+}
+
+function flushCandidates(){
+  if(!peerConn || !peerConn.remoteDescription) return;
+  var cs = pendingCandidates.splice(0);
+  cs.forEach(function(c){ peerConn.addIceCandidate(c).catch(function(){}); });
+}
+
+function onSignal(msg){
+  if(!msg || (msg.signal_id && msg.signal_id !== signalId)) return;
+  if(msg.type === "webrtc-answer"){
+    if(!peerConn) return;
+    peerConn.setRemoteDescription({ type: msg.descriptionType || "answer", sdp: msg.sdp })
+      .then(flushCandidates).catch(function(e){ console.error("SDP answer",e); });
+    return;
+  }
+  if(msg.type === "webrtc-candidate"){
+    var cp = (msg.candidate && msg.candidate.candidate)
+      ? msg.candidate
+      : { candidate: msg.candidate, sdpMid: msg.sdpMid, sdpMLineIndex: msg.sdpMLineIndex };
+    if(!cp.candidate) return;
+    var c = new RTCIceCandidate(cp);
+    if(!peerConn || !peerConn.remoteDescription){ pendingCandidates.push(c); return; }
+    peerConn.addIceCandidate(c).catch(function(){});
+  }
+}
+
+function startWebRtc(){
+  if(peerConn){ try{ peerConn.close(); }catch(_){} }
+  pendingCandidates = [];
+  signalId = "kw-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+  peerConn = new RTCPeerConnection({ iceServers:[{ urls:"stun:stun.l.google.com:19302" }] });
+
+  peerConn.onicecandidate = function(e){
+    if(e.candidate) sendSignal({ type:"webrtc-candidate", candidate:e.candidate.toJSON() });
+  };
+  peerConn.onconnectionstatechange = function(){
+    var s = peerConn.connectionState;
+    if(s === "connected"){
+      setStatus("Live — receiving audio", true);
+      ensureAudio();
+      showCards(true);
+      startDuration();
+      document.getElementById("monitor-btn").classList.remove("inactive");
+    } else if(s === "failed" || s === "disconnected"){
+      setStatus("WebRTC " + s, false);
+    }
+  };
+
+  var dc = peerConn.createDataChannel("kingz-pcm", { ordered:false, maxRetransmits:0 });
+  dc.binaryType = "arraybuffer";
+  dc.onopen  = function(){ ensureAudio(); };
+  dc.onmessage = function(e){ playPcm(e.data); };
+  dc.onclose = function(){ setStatus("Data channel closed", false); };
+  dataChannel = dc;
+
+  peerConn.createOffer()
+    .then(function(offer){ return peerConn.setLocalDescription(offer).then(function(){ return offer; }); })
+    .then(function(offer){
+      sendSignal({ type:"webrtc-offer", sdp:offer.sdp, descriptionType:offer.type, offerGeneration:Date.now() });
+    })
+    .catch(function(e){ setStatus("Offer failed", false); console.error(e); });
+}
+
+function openSocket(h, p){
+  if(socket){ try{ socket.close(); }catch(_){} }
+  setStatus("Connecting…", false);
+  socket = new WebSocket("ws://" + h + ":" + p + "/");
+  socket.onopen = function(){
+    setStatus("Connected — starting audio…", true);
+    startWebRtc();
+  };
+  socket.onmessage = function(e){
+    var msg = tryParse(e.data);
+    if(!msg) return;
+    if(msg.type === "telemetry.report"){
+      var lat = Number(msg.latencyMs || 0);
+      if(lat > 0) document.getElementById("stat-latency").textContent = lat.toFixed(0) + " ms";
+    }
+    onSignal(msg);
+  };
+  socket.onclose = function(){
+    setStatus("Disconnected", false);
+    connected = false;
+    document.getElementById("connect-btn").disabled = false;
+    document.getElementById("disconnect-btn").disabled = true;
+    showCards(false);
+    stopDuration();
+  };
+  socket.onerror = function(){ setStatus("Connection error", false); };
+}
+
+document.getElementById("connect-btn").addEventListener("click", function(){
+  var h = document.getElementById("ip-input").value.trim();
+  var p = document.getElementById("port-input").value.trim() || "8082";
+  if(!h){ setStatus("Enter a server IP", false); return; }
+  ensureAudio();
+  connected = true;
+  stopped   = false;
+  document.getElementById("connect-btn").disabled = true;
+  document.getElementById("disconnect-btn").disabled = false;
+  openSocket(h, p);
+});
+
+document.getElementById("disconnect-btn").addEventListener("click", function(){
+  connected = false;
+  if(socket){ try{ socket.close(); }catch(_){} socket = null; }
+  if(peerConn){ try{ peerConn.close(); }catch(_){} peerConn = null; }
+  if(audioCtx){ try{ audioCtx.close(); }catch(_){} audioCtx = null; gainNode = null; }
+  stopDuration();
+  showCards(false);
+  setStatus("Disconnected", false);
+  document.getElementById("connect-btn").disabled = false;
+  document.getElementById("disconnect-btn").disabled = true;
+  document.getElementById("monitor-btn").classList.add("inactive");
+});
+
+document.getElementById("stop-btn").addEventListener("click", function(){
+  stopped = !stopped;
+  this.innerHTML = stopped ? "&#9654; Resume" : "&#9644; Stop";
+  nextPlayTime = 0;
+});
+
+document.getElementById("mute-btn").addEventListener("click", function(){
+  muted = !muted;
+  if(gainNode) gainNode.gain.value = muted ? 0 : parseFloat(document.getElementById("vol-slider").value)/100;
+  this.textContent = muted ? "Unmute" : "Mute";
+  this.style.color = muted ? "var(--gold)" : "";
+});
+
+document.getElementById("vol-slider").addEventListener("input", function(){
+  if(gainNode && !muted) gainNode.gain.value = parseFloat(this.value) / 100;
+});
+
+document.getElementById("monitor-btn").classList.add("inactive");
+
+var modes = { "mode-low": 0.02, "mode-bal": 0.05, "mode-safe": 0.12 };
+Object.keys(modes).forEach(function(id){
+  document.getElementById(id).addEventListener("click", function(){
+    document.querySelectorAll(".mode-btn").forEach(function(b){ b.classList.remove("active"); });
+    this.classList.add("active");
+    bufferAhead  = modes[id];
+    nextPlayTime = 0;
+  });
+});)JS";
+}
+
+juce::String getWebUiHtml()
+{
+    return R"HTML(<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Kingz Listen</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="page-label">LAN Audio Receiver</div>
+
+  <div class="card">
+    <div class="card-label">Connection</div>
+    <div class="row">
+      <div class="field">
+        <label>Server IP</label>
+        <input id="ip-input" type="text" inputmode="decimal" placeholder="192.168.x.x">
+      </div>
+      <div class="field port">
+        <label>Port</label>
+        <input id="port-input" type="text" inputmode="numeric" placeholder="8082">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="connect-btn">Connect</button>
+      <button class="btn btn-secondary" id="disconnect-btn" disabled>Disconnect</button>
+    </div>
+  </div>
+
+  <div class="card" id="session-card" style="display:none">
+    <div class="card-label">Now Listening</div>
+    <div class="session-name">Studio Session</div>
+    <div class="session-sub">Engineer: KINGZ Studio</div>
+    <div class="stats">
+      <div class="stat"><div class="stat-label">Quality</div><div class="stat-value" id="stat-quality">48kHz / 16-bit</div></div>
+      <div class="stat"><div class="stat-label">Duration</div><div class="stat-value" id="stat-duration">0:00</div></div>
+      <div class="stat"><div class="stat-label">Latency</div><div class="stat-value" id="stat-latency">-- ms</div></div>
+    </div>
+  </div>
+
+  <div class="card" id="mode-card" style="display:none">
+    <div class="card-label">Monitoring Mode</div>
+    <div class="mode-row">
+      <button class="mode-btn" id="mode-low">Low Latency</button>
+      <button class="mode-btn active" id="mode-bal">Balanced</button>
+      <button class="mode-btn" id="mode-safe">Safe Buffer</button>
+    </div>
+  </div>
+
+  <div class="card" id="monitor-card" style="display:none">
+    <div class="card-label">Monitor</div>
+    <div class="monitor-center">
+      <button class="monitor-btn" id="monitor-btn">
+        <svg viewBox="0 0 44 44" fill="none">
+          <rect x="6"  y="14" width="4" height="16" rx="2" fill="#000" opacity=".9"/>
+          <rect x="13" y="9"  width="4" height="26" rx="2" fill="#000" opacity=".9"/>
+          <rect x="20" y="12" width="4" height="20" rx="2" fill="#000" opacity=".9"/>
+          <rect x="27" y="7"  width="4" height="30" rx="2" fill="#000" opacity=".9"/>
+          <rect x="34" y="14" width="4" height="16" rx="2" fill="#000" opacity=".9"/>
+        </svg>
+      </button>
+    </div>
+    <div class="ctrl-row">
+      <button class="btn btn-secondary" id="stop-btn">&#9644; Stop</button>
+      <button class="btn btn-secondary" id="mute-btn">Mute</button>
+    </div>
+    <div class="vol-row">
+      <span class="vol-icon">&#128266;</span>
+      <input class="vol-slider" type="range" id="vol-slider" min="0" max="100" value="100">
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-dot" id="status-dot"></div>
+    <div class="status-text" id="status-text">Enter IP and tap Connect</div>
+  </div>
+  <div class="footer-note">Fields pre-filled from this page&#39;s URL. Tap Connect &amp; Listen.</div>
+
+  <script src="/app.js"></script>
+</body>
+</html>)HTML";
+}
+
 } // namespace
 
 struct NetworkTransmitter::ClientConnection final
@@ -711,6 +1075,28 @@ void NetworkTransmitter::handleHttpRequest (ClientConnection& client)
         return;
     }
 
+    if (request.startsWithIgnoreCase ("GET / ")
+        || request.startsWithIgnoreCase ("GET /index.html "))
+    {
+        sendHttpResponse (client, "text/html; charset=utf-8", getWebUiHtml());
+        client.closeRequested.store (true, std::memory_order_release);
+        return;
+    }
+
+    if (request.startsWithIgnoreCase ("GET /style.css "))
+    {
+        sendHttpResponse (client, "text/css; charset=utf-8", getWebUiCss());
+        client.closeRequested.store (true, std::memory_order_release);
+        return;
+    }
+
+    if (request.startsWithIgnoreCase ("GET /app.js "))
+    {
+        sendHttpResponse (client, "application/javascript; charset=utf-8", getWebUiJs());
+        client.closeRequested.store (true, std::memory_order_release);
+        return;
+    }
+
     sendHttpResponse (client, "text/plain", "Kingz Listen native transmitter");
     client.closeRequested.store (true, std::memory_order_release);
 }
@@ -1031,55 +1417,102 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
                   << sdp.toStdString()
                   << "\n[KINGZ_SDP_OFFER_END]\n" << std::flush;
 
-        // CRITICAL FIX: Create data channel BEFORE setRemoteDescription so that answer m-lines
-        // are generated in the same order as the offer's m-lines. The client creates its
-        // kingz-pcm data channel before creating the offer, so the offer already includes
-        // m=application (data channel). We must create ours BEFORE setting remote description
-        // to ensure the answer matches the offer's m-line order.
-        rtc::DataChannelInit pcmChannelConfig;
-        pcmChannelConfig.reliability.unordered = true;
-        pcmChannelConfig.reliability.maxPacketLifeTime = std::chrono::milliseconds { pcmMaxPacketLifetimeMs };
-        pcmChannelConfig.protocol = "audio/L16;rate=48000;channels=2;ptime=5-20;processing=off;adaptive=true";
-
-        auto dataChannel = peer->createDataChannel ("kingz-pcm", pcmChannelConfig);
-        dataChannel->setBufferedAmountLowThreshold (pcmChunkBytes);
-        dataChannel->onOpen ([this, weakClient]
+        // Flutter (the OFFERER) pre-creates "kingz-pcm" before generating its offer, so the
+        // offer SDP already contains m=application. As the ANSWERER, we must receive that
+        // channel via onDataChannel — NOT by calling createDataChannel ourselves.
+        //
+        // Why NOT createDataChannel here:
+        //   The answerer's createDataChannel assigns EVEN SCTP stream IDs (0, 2, 4…).
+        //   The offerer's channel uses ODD SCTP stream IDs (1, 3, 5…).
+        //   They are completely separate streams — the plugin would be sending PCM on stream 0
+        //   while Flutter's localDc listens on stream 1. No data would ever arrive.
+        //
+        // Why NOT call setLocalDescription() after setRemoteDescription():
+        //   With disableAutoNegotiation=false, libdatachannel automatically generates and sends
+        //   the answer when setRemoteDescription(offer) is called. An explicit setLocalDescription()
+        //   afterward starts a NEW re-negotiation offer, fires onLocalDescription a second time,
+        //   and the plugin sends a second "webrtc.answer" whose SDP is actually an offer — which
+        //   corrupts the Flutter peer's session state.
+        peer->onDataChannel ([this, weakClient] (std::shared_ptr<rtc::DataChannel> channel)
         {
-            if (auto lockedClient = weakClient.lock())
+            const auto label = channel->label();
+            std::cout << "[KINGZ WEBRTC] onDataChannel: label=" << label
+                      << " id=" << channel->id().value_or (-1)
+                      << " isOpen=" << channel->isOpen() << "\n" << std::flush;
+
+            if (label != "kingz-pcm")
             {
-                const auto currentChunkMs = targetChunkMs.load (std::memory_order_acquire);
-                auto* response = new juce::DynamicObject();
-                response->setProperty ("type", "webrtc.data-channel-open");
-                response->setProperty ("label", "kingz-pcm");
-                response->setProperty ("format", "pcm_s16le");
-                response->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
-                response->setProperty ("channels", AudioFifoWorker::inputChannels);
-                response->setProperty ("chunkMs", currentChunkMs);
-                response->setProperty ("framesPerChunk", AudioFifoWorker::framesForChunkMs (currentChunkMs));
-                response->setProperty ("bytesPerChunk", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs)));
-                response->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
-                response->setProperty ("ordered", false);
-                response->setProperty ("maxRetransmits", juce::var());
-                response->setProperty ("maxPacketLifeTimeMs", pcmMaxPacketLifetimeMs);
-                response->setProperty ("dropWhenBufferedBytesExceed",
-                                      static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs) * 2));
-                response->setProperty ("adaptiveChunkSizing", true);
-                response->setProperty ("minChunkMs", AudioFifoWorker::minChunkDurationMs);
-                response->setProperty ("maxChunkMs", AudioFifoWorker::maxChunkDurationMs);
-                response->setProperty ("udpOnly", true);
-                response->setProperty ("jitterBuffer", "bypassed-data-channel");
-                response->setProperty ("signalProcessing", "disabled-raw-pcm");
-                response->setProperty ("webrtcMtuBytes", lanOptimisedWebRtcMtuBytes);
-                sendJson (lockedClient, jsonString (juce::var (response)));
+                std::cout << "[KINGZ WEBRTC] onDataChannel: unexpected label=" << label << " — ignoring\n" << std::flush;
+                return;
             }
+
+            const auto lockedClient = weakClient.lock();
+            if (lockedClient == nullptr)
+                return;
+
+            channel->setBufferedAmountLowThreshold (pcmChunkBytes);
+            lockedClient->pcmChannel = channel;
+
+            // Build and send the webrtc.data-channel-open notification over the WebSocket.
+            // Extracted as a named lambda so it can be called either immediately (if the channel
+            // is already open when onDataChannel fires, which libdatachannel guarantees) or
+            // deferred to onOpen as a safety net.
+            auto notifyOpen = [this, weakClient]
+            {
+                if (auto lc = weakClient.lock())
+                {
+                    std::cout << "[KINGZ WEBRTC] kingz-pcm OPEN — sending webrtc.data-channel-open\n" << std::flush;
+                    const auto currentChunkMs = targetChunkMs.load (std::memory_order_acquire);
+                    auto* response = new juce::DynamicObject();
+                    response->setProperty ("type", "webrtc.data-channel-open");
+                    response->setProperty ("label", "kingz-pcm");
+                    response->setProperty ("format", "pcm_s16le");
+                    response->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
+                    response->setProperty ("channels", AudioFifoWorker::inputChannels);
+                    response->setProperty ("chunkMs", currentChunkMs);
+                    response->setProperty ("framesPerChunk", AudioFifoWorker::framesForChunkMs (currentChunkMs));
+                    response->setProperty ("bytesPerChunk", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs)));
+                    response->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
+                    response->setProperty ("ordered", false);
+                    response->setProperty ("maxRetransmits", juce::var());
+                    response->setProperty ("maxPacketLifeTimeMs", pcmMaxPacketLifetimeMs);
+                    response->setProperty ("dropWhenBufferedBytesExceed",
+                                          static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs) * 2));
+                    response->setProperty ("adaptiveChunkSizing", true);
+                    response->setProperty ("minChunkMs", AudioFifoWorker::minChunkDurationMs);
+                    response->setProperty ("maxChunkMs", AudioFifoWorker::maxChunkDurationMs);
+                    response->setProperty ("udpOnly", true);
+                    response->setProperty ("jitterBuffer", "bypassed-data-channel");
+                    response->setProperty ("signalProcessing", "disabled-raw-pcm");
+                    response->setProperty ("webrtcMtuBytes", lanOptimisedWebRtcMtuBytes);
+                    sendJson (lc, jsonString (juce::var (response)));
+                }
+            };
+
+            // libdatachannel documents that onDataChannel fires after DATA_CHANNEL_ACK is sent,
+            // meaning the channel is already open. Call notifyOpen immediately; register onOpen
+            // as a fallback in case the state transition hasn't completed yet.
+            if (channel->isOpen())
+                notifyOpen();
+            else
+                channel->onOpen (notifyOpen);
+
+            channel->onClosed ([weakClient]
+            {
+                std::cout << "[KINGZ WEBRTC] kingz-pcm channel CLOSED\n" << std::flush;
+                if (auto lc = weakClient.lock())
+                    lc->pcmChannel.reset();
+            });
+
+            channel->onError ([] (const std::string& err)
+            {
+                std::cout << "[KINGZ WEBRTC] kingz-pcm channel ERROR: " << err << "\n" << std::flush;
+            });
         });
 
-        client->pcmChannel = dataChannel;
-
-        // Now set remote description AFTER data channel is created, so answer will have
-        // m-lines in the same order as the offer (data-channel-only: m=application only)
+        // Process the offer. disableAutoNegotiation=false means libdatachannel auto-generates
+        // the answer, fires onLocalDescription, and sends it — no setLocalDescription() needed.
         peer->setRemoteDescription (rtc::Description (sdp.toStdString(), "offer"));
-        peer->setLocalDescription();
     }
     catch (const std::exception& error)
     {

@@ -150,7 +150,7 @@ void KingzListenAudioProcessor::handleUiAction (const juce::var& object)
             const auto port = static_cast<int> (dynamicObject->getProperty ("port"));
             DBG ("KingzListenAudioProcessor::handleUiAction connectTelemetry host="
                  << host << " port=" << port);
-            startTelemetryConnection (host, port > 0 ? port : 8081);
+            startTelemetryConnection (host, port > 0 ? port : 8082);
         }
         else if (action == "regenerateLocalIpToken")
             monitoringRequested.store (monitoringRequested.load (std::memory_order_relaxed),

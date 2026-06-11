@@ -47,6 +47,7 @@ class WebRtcPlaybackBridge {
   bool _remoteDescriptionSet = false;
   bool _processingSignal = false;  // NEW: guard against concurrent signal processing
   int _offerGeneration = 0;
+  int _pcmPacketCount = 0;
   Timer? _disconnectTimer;
   final List<RTCIceCandidate> _pendingCandidates = [];
   final List<Map<String, dynamic>> _queuedSignalMessages = [];  // NEW: queue for early-arriving signaling
@@ -244,6 +245,7 @@ class WebRtcPlaybackBridge {
     _playbackStartedSignaled = false;
     _remoteDescriptionSet = false;
     _processingSignal = false;  // Reset signal processing flag
+    _pcmPacketCount = 0;
     _pendingCandidates.clear();
     _queuedSignalMessages.clear();
     _disconnectTimer?.cancel();
@@ -296,13 +298,15 @@ class WebRtcPlaybackBridge {
     final generation = _offerGeneration;
 
     // Create data channel BEFORE creating offer so the offer contains m=application.
-    // Without this, offerToReceiveAudio would be the only m-line and libdatachannel
-    // (the plugin) would drop the audio m-line from its answer, causing a count mismatch.
+    // CRITICAL: The offerer's locally-created channel never fires onDataChannel on the
+    // offerer side — that callback is for answerer-initiated channels only. We must
+    // capture the returned channel and attach PCM handlers immediately.
     try {
       debugPrint('[KINGZ WebRTC] creating kingz-pcm data channel (pre-negotiation)...');
       final dataChannelInit = RTCDataChannelInit()..ordered = false;
-      await peer.createDataChannel('kingz-pcm', dataChannelInit);
-      debugPrint('[KINGZ WebRTC] kingz-pcm data channel created (pre-negotiation)');
+      final localDc = await peer.createDataChannel('kingz-pcm', dataChannelInit);
+      _attachPcmDataChannel(localDc, generation);
+      debugPrint('[KINGZ WebRTC] kingz-pcm data channel created and handlers attached');
     } catch (error) {
       debugPrint('[KINGZ WebRTC] WARNING: failed to pre-create data channel: $error');
     }
@@ -328,6 +332,13 @@ class WebRtcPlaybackBridge {
         return;
       }
       debugPrint('[KINGZ WebRTC] connection state: $state');
+
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        _updateTelemetry(
+          outputActive: _pcmPlaybackBridge.telemetry.outputActive,
+          stateOverride: 'native-webrtc-connected',
+        );
+      }
 
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
@@ -401,15 +412,29 @@ class WebRtcPlaybackBridge {
   /// Attach PCM message and state handlers to plugin's data channel.
   void _attachPcmDataChannel(RTCDataChannel channel, int generation) {
     _pcmDataChannel = channel;
-    debugPrint('[KINGZ WebRTC] attaching handlers to kingz-pcm channel');
+    debugPrint('[KINGZ WebRTC] _attachPcmDataChannel: gen=$generation label=${channel.label} state=${channel.state}');
 
     channel.onMessage = (RTCDataChannelMessage message) {
-      if (generation != _offerGeneration || !_active) {
+      final currentGen = _offerGeneration;
+      final isActive = _active;
+
+      if (generation != currentGen || !isActive) {
+        debugPrint('[KINGZ PCM] DROPPED: gen=$generation currentGen=$currentGen active=$isActive');
         return;
       }
 
+      // Log isBinary flag before accessing .binary to detect text-vs-binary mismatch.
+      final isBinary = message.isBinary;
       final data = message.binary;
+      _pcmPacketCount++;
+
+      if (_pcmPacketCount <= 10) {
+        debugPrint('[KINGZ PCM] packet #$_pcmPacketCount: isBinary=$isBinary bytes=${data.length}');
+      }
+
       if (data.isEmpty) {
+        // If isBinary=true but bytes=0 it means flutter_webrtc decoded it as text.
+        debugPrint('[KINGZ PCM] EMPTY packet #$_pcmPacketCount: isBinary=$isBinary text="${isBinary ? '(binary flag set — zero bytes)' : message.text.length > 40 ? message.text.substring(0, 40) : message.text}"');
         return;
       }
 
@@ -418,11 +443,13 @@ class WebRtcPlaybackBridge {
 
     channel.onDataChannelState = (RTCDataChannelState state) {
       if (generation != _offerGeneration) {
+        debugPrint('[KINGZ PCM] state change ignored (stale gen=$generation current=$_offerGeneration): $state');
         return;
       }
-      debugPrint('[KINGZ WebRTC] data channel state: $state');
+      debugPrint('[KINGZ PCM] state → $state (gen=$generation)');
 
       if (state == RTCDataChannelState.RTCDataChannelOpen) {
+        debugPrint('[KINGZ PCM] OPEN — plugin should begin sending PCM now');
         _updateTelemetry(
           outputActive: true,
           stateOverride: 'native-webrtc-pcm-channel-open',

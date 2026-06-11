@@ -45,17 +45,17 @@ juce::String getPlaceholderHtml()
     :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0c0e12; color: white; }
     main { width: min(320px, calc(100vw - 48px)); text-align: center; }
-    h1 { margin: 0 0 12px; font-size: 28px; letter-spacing: 0; }
+    h1 { margin: 0 0 12px; font-size: 28px; }
     p { margin: 0 0 24px; color: #aab2c0; line-height: 1.45; }
     dl { margin: 0 0 24px; display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; text-align: left; }
     dt { color: #6f7a89; }
-    dd { margin: 0; color: #ffffff; font-variant-numeric: tabular-nums; }
-    input { width: 100%; box-sizing: border-box; border: 1px solid #2a303b; border-radius: 8px; padding: 8px 10px; background: #151922; color: #ffffff; font: inherit; font-variant-numeric: tabular-nums; }
-    button { width: 100%; border: 0; border-radius: 8px; padding: 14px 16px; background: #ffffff; color: #0c0e12; font-weight: 700; }
+    dd { margin: 0; color: #fff; font-variant-numeric: tabular-nums; }
+    input { width: 100%; box-sizing: border-box; border: 1px solid #2a303b; border-radius: 8px; padding: 8px 10px; background: #151922; color: #fff; font: inherit; font-variant-numeric: tabular-nums; }
+    button { width: 100%; border: 0; border-radius: 8px; padding: 14px 16px; background: #fff; color: #0c0e12; font-weight: 700; margin-bottom: 8px; cursor: pointer; }
     .meter { margin: -8px 0 20px; text-align: left; }
     .meter-label { display: flex; justify-content: space-between; margin-bottom: 8px; color: #aab2c0; font-size: 12px; }
     .bar { height: 8px; overflow: hidden; border-radius: 8px; background: #202633; }
-    .bar span { display: block; width: 100%; height: 100%; transform-origin: left center; transform: scaleX(1); background: #52d273; transition: transform 120ms linear, background 120ms linear; }
+    .bar span { display: block; width: 100%; height: 100%; transform-origin: left; transform: scaleX(1); background: #52d273; transition: transform 120ms linear, background 120ms linear; }
     .latency-good { color: #52d273; }
     .latency-warn { color: #f1c84b; }
     .latency-bad { color: #ff6b6b; }
@@ -65,349 +65,275 @@ juce::String getPlaceholderHtml()
 <body>
   <main>
     <h1>Kingz Listen</h1>
-    <p id="mount-status">LAN monitoring bridge ready. The full telemetry interface will mount here.</p>
+    <p id="mount-status">LAN monitoring bridge ready.</p>
     <dl>
       <dt>Studio IP</dt><dd><input id="studio-ip" inputmode="decimal"></dd>
-      <dt>Port</dt><dd><input id="studio-port" inputmode="numeric"></dd>
-      <dt>Telemetry</dt><dd id="telemetry-status">Waiting</dd>
+      <dt>Port</dt><dd><input id="studio-port" inputmode="numeric" value="8082"></dd>
+      <dt>Status</dt><dd id="telemetry-status">Waiting</dd>
       <dt>Latency</dt><dd id="latency-value" class="latency-good">-- ms</dd>
     </dl>
-    <div class="meter" aria-label="Buffer health">
+    <div class="meter">
       <div class="meter-label"><span>Buffer Health</span><span id="buffer-health-label">100%</span></div>
       <div class="bar"><span id="buffer-health-bar"></span></div>
     </div>
-    <button id="connect">Connect Telemetry</button>
+    <button id="connect">Connect</button>
     <button id="toggle">Toggle Monitoring</button>
     <pre id="telemetry-preview"></pre>
   </main>
   <script>
-    const studioIpInput = document.getElementById("studio-ip");
-    const studioPortInput = document.getElementById("studio-port");
-	    let connectionFieldsEdited = false;
-	    let nativePromiseId = 1;
-	    const nativePromises = new Map();
-	    let telemetrySocket = null;
-	    let peerConnection = null;
-	    let pcmDataChannel = null;
-	    let pendingRemoteCandidates = [];
-	    let signalId = "kingz-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    // ── global state ──────────────────────────────────────────────────────────
+    var studioIpInput   = document.getElementById("studio-ip");
+    var studioPortInput = document.getElementById("studio-port");
+    var connectionFieldsEdited = false;
+    var nativePromiseId = 1;
+    var nativePromises  = {};
+    var telemetrySocket = null;
+    var peerConnection  = null;
+    var pcmDataChannel  = null;
+    var pendingRemoteCandidates = [];
+    var signalId = "kingz-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
 
-    function markConnectionFieldsEdited() {
-      connectionFieldsEdited = true;
+    studioIpInput.addEventListener("input",   function() { connectionFieldsEdited = true; });
+    studioPortInput.addEventListener("input", function() { connectionFieldsEdited = true; });
+
+    // When loaded over HTTP (mobile Safari), auto-populate host+port from URL
+    if (window.location.protocol === "http:" && window.location.hostname) {
+      studioIpInput.value   = window.location.hostname;
+      studioPortInput.value = window.location.port || "8082";
     }
 
-    studioIpInput.addEventListener("focus", markConnectionFieldsEdited);
-    studioIpInput.addEventListener("input", markConnectionFieldsEdited);
-    studioPortInput.addEventListener("focus", markConnectionFieldsEdited);
-    studioPortInput.addEventListener("input", markConnectionFieldsEdited);
+    // ── helpers ───────────────────────────────────────────────────────────────
+    function tryParseJson(s, fallback) {
+      try { return JSON.parse(s); } catch (_) { return fallback; }
+    }
 
+    function latencyClass(ms) {
+      return ms <= 12 ? "latency-good" : ms <= 30 ? "latency-warn" : "latency-bad";
+    }
+
+    // ── JUCE connection-state handler (Logic Pro only) ────────────────────────
     function applyConnectionState(payload) {
       if (!payload) return;
       window.__KINGZ_LISTEN_CONNECTION__ = payload;
-
       if (!connectionFieldsEdited) {
-        studioIpInput.value = payload.localIp || studioIpInput.value || "127.0.0.1";
-        studioPortInput.value = String(payload.port || studioPortInput.value || 8081);
+        studioIpInput.value   = payload.localIp || studioIpInput.value || "127.0.0.1";
+        studioPortInput.value = String(payload.port || studioPortInput.value || "8082");
       }
     }
 
-	    function applyTelemetry(payload) {
-      let parsed = payload;
-      if (typeof payload === "string") {
-        try { parsed = JSON.parse(payload); } catch (_) { parsed = { raw: payload }; }
-	    }
-
-	    function sendTelemetrySignal(payload) {
-	      if (!telemetrySocket || telemetrySocket.readyState !== WebSocket.OPEN) {
-	        console.warn("Telemetry WebSocket is not open", payload);
-	        return;
-	      }
-
-	      telemetrySocket.send(JSON.stringify({
-	        source_id: "kingz-listen-web",
-	        signal_id: signalId,
-	        ...payload
-	      }));
-	    }
-
-	    function bindPcmDataChannel(channel) {
-	      if (!channel || channel.label !== "kingz-pcm") return;
-
-	      pcmDataChannel = channel;
-	      pcmDataChannel.binaryType = "arraybuffer";
-	      pcmDataChannel.onopen = () => {
-	        document.getElementById("telemetry-status").textContent = "PCM DataChannel live";
-	      };
-	      pcmDataChannel.onclose = () => {
-	        document.getElementById("telemetry-status").textContent = "PCM DataChannel closed";
-	      };
-	      pcmDataChannel.onmessage = (event) => {
-	        const byteLength = event.data instanceof ArrayBuffer
-	          ? event.data.byteLength
-	          : (event.data && event.data.size) || 0;
-	        window.__KINGZ_LISTEN_LAST_PCM_PACKET__ = {
-	          byteLength,
-	          receivedAt: Date.now()
-	        };
-	      };
-	    }
-
-	    async function flushPendingRemoteCandidates() {
-	      if (!peerConnection || !peerConnection.remoteDescription) return;
-
-	      const candidates = pendingRemoteCandidates;
-	      pendingRemoteCandidates = [];
-	      for (const candidate of candidates) {
-	        try { await peerConnection.addIceCandidate(candidate); }
-	        catch (error) { console.warn("Remote ICE candidate rejected", error); }
-	      }
-	    }
-
-	    async function handleTelemetrySignal(message) {
-	      if (!message || message.signal_id && message.signal_id !== signalId) return;
-
-	      if (message.type === "webrtc-answer") {
-	        if (!peerConnection) return;
-	        await peerConnection.setRemoteDescription({
-	          type: message.descriptionType || "answer",
-	          sdp: message.sdp
-	        });
-	        await flushPendingRemoteCandidates();
-	        return;
-	      }
-
-	      if (message.type === "webrtc-candidate") {
-	        const candidatePayload = message.candidate && message.candidate.candidate
-	          ? message.candidate
-	          : {
-	              candidate: message.candidate,
-	              sdpMid: message.sdpMid,
-	              sdpMLineIndex: message.sdpMLineIndex
-	            };
-	        if (!candidatePayload.candidate) return;
-
-	        const candidate = new RTCIceCandidate(candidatePayload);
-	        if (!peerConnection || !peerConnection.remoteDescription) {
-	          pendingRemoteCandidates.push(candidate);
-	          return;
-	        }
-	        await peerConnection.addIceCandidate(candidate);
-	      }
-	    }
-
-	    async function startWebRtcReceiver(host, port) {
-	      if (peerConnection) {
-	        try { peerConnection.close(); } catch (_) {}
-	      }
-
-	      pendingRemoteCandidates = [];
-	      signalId = "kingz-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
-	      peerConnection = new RTCPeerConnection({
-	        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-	      });
-
-	      peerConnection.onicecandidate = (event) => {
-	        if (!event.candidate) return;
-	        sendTelemetrySignal({
-	          type: "webrtc-candidate",
-	          candidate: event.candidate.toJSON()
-	        });
-	      };
-	      peerConnection.ondatachannel = (event) => bindPcmDataChannel(event.channel);
-	      peerConnection.onconnectionstatechange = () => {
-	        document.getElementById("telemetry-status").textContent =
-	          "WebRTC " + peerConnection.connectionState;
-	      };
-
-	      bindPcmDataChannel(peerConnection.createDataChannel("kingz-pcm", {
-	        ordered: false,
-	        maxRetransmits: 0
-	      }));
-
-	      const offer = await peerConnection.createOffer();
-	      await peerConnection.setLocalDescription(offer);
-
-	      sendTelemetrySignal({
-	        type: "webrtc-offer",
-	        sdp: offer.sdp,
-	        descriptionType: offer.type,
-	        offerGeneration: Date.now()
-	      });
-	    }
-
-	    function openTelemetrySocket(host, port) {
-	      const url = "ws://" + host + ":" + port + "/";
-	      if (telemetrySocket && telemetrySocket.readyState === WebSocket.OPEN) {
-	        startWebRtcReceiver(host, port).catch(console.error);
-	        return;
-	      }
-
-	      if (telemetrySocket) {
-	        try { telemetrySocket.close(); } catch (_) {}
-	      }
-
-	      telemetrySocket = new WebSocket(url);
-	      telemetrySocket.onopen = () => {
-	        sendTelemetrySignal({ type: "receiver.hello" });
-	        startWebRtcReceiver(host, port).catch((error) => {
-	          document.getElementById("telemetry-status").textContent = "WebRTC offer failed";
-	          console.error(error);
-	        });
-	      };
-	      telemetrySocket.onmessage = (event) => {
-	        let message = null;
-	        try { message = JSON.parse(event.data); } catch (_) { return; }
-	        handleTelemetrySignal(message).catch(console.error);
-	        applyTelemetry(message);
-	      };
-	      telemetrySocket.onclose = () => {
-	        document.getElementById("telemetry-status").textContent = "Telemetry socket closed";
-	      };
-	      telemetrySocket.onerror = (error) => {
-	        document.getElementById("telemetry-status").textContent = "Telemetry socket error";
-	        console.error(error);
-	      };
-	    }
-
+    // ── telemetry display ─────────────────────────────────────────────────────
+    function applyTelemetry(payload) {
+      var parsed = (typeof payload === "string") ? tryParseJson(payload, { raw: payload }) : payload;
       window.__KINGZ_LISTEN_TELEMETRY__ = parsed;
       document.getElementById("mount-status").textContent = "Telemetry interface mounted.";
       document.getElementById("telemetry-status").textContent = "Live";
-
-      const preview = document.getElementById("telemetry-preview");
+      var preview = document.getElementById("telemetry-preview");
       preview.style.display = "block";
       preview.textContent = JSON.stringify(parsed, null, 2);
     }
 
-    function latencyClass(latencyMs) {
-      if (latencyMs <= 12) return "latency-good";
-      if (latencyMs <= 30) return "latency-warn";
-      return "latency-bad";
-    }
-
     function applyTelemetryReport(payload) {
-      let report = payload;
-      if (typeof payload === "string") {
-        try { report = JSON.parse(payload); } catch (_) { return; }
-      }
+      var report = (typeof payload === "string") ? tryParseJson(payload, null) : payload;
       if (!report) return;
-
-      const health = Math.max(0, Math.min(1, Number(report.bufferHealth ?? 1)));
-      const latency = Number(report.latencyMs ?? 0);
-      const latencyNode = document.getElementById("latency-value");
-      const bar = document.getElementById("buffer-health-bar");
-      const healthLabel = document.getElementById("buffer-health-label");
-      const clientCount = Number(report.activeClientCount ?? 0);
-
+      var health      = Math.max(0, Math.min(1, Number(report.bufferHealth != null ? report.bufferHealth : 1)));
+      var latency     = Number(report.latencyMs || 0);
+      var clientCount = Number(report.activeClientCount || 0);
       document.getElementById("telemetry-status").textContent = report.isConnected
         ? "Live (" + clientCount + " client" + (clientCount === 1 ? "" : "s") + ")"
         : "Waiting";
-
+      var latencyNode = document.getElementById("latency-value");
       latencyNode.textContent = latency > 0 ? latency.toFixed(1) + " ms" : "-- ms";
-      latencyNode.className = latencyClass(latency);
-      bar.style.transform = "scaleX(" + health.toFixed(3) + ")";
-      bar.style.background = health >= 0.75 ? "#52d273" : (health >= 0.4 ? "#f1c84b" : "#ff6b6b");
-      healthLabel.textContent = Math.round(health * 100) + "%";
+      latencyNode.className   = latencyClass(latency);
+      var bar = document.getElementById("buffer-health-bar");
+      bar.style.transform  = "scaleX(" + health.toFixed(3) + ")";
+      bar.style.background = health >= 0.75 ? "#52d273" : health >= 0.4 ? "#f1c84b" : "#ff6b6b";
+      document.getElementById("buffer-health-label").textContent = Math.round(health * 100) + "%";
       window.__KINGZ_LISTEN_TELEMETRY_REPORT__ = report;
     }
 
-    function hasNativeBridge() {
-      const juce = window.__JUCE__;
-      const backend = juce && juce.backend;
-      const functions = juce && juce.initialisationData && juce.initialisationData.__juce__functions;
-      return !!(backend && backend.emitEvent && Array.isArray(functions) && functions.includes("juceLink"));
+    // ── WebRTC signaling ──────────────────────────────────────────────────────
+    function sendTelemetrySignal(payload) {
+      if (!telemetrySocket || telemetrySocket.readyState !== WebSocket.OPEN) return;
+      var msg = Object.assign({ source_id: "kingz-listen-web", signal_id: signalId }, payload);
+      telemetrySocket.send(JSON.stringify(msg));
     }
 
-    function waitForNativeBridge(timeoutMs = 2000) {
+    function bindPcmDataChannel(channel) {
+      if (!channel || channel.label !== "kingz-pcm") return;
+      pcmDataChannel = channel;
+      pcmDataChannel.binaryType = "arraybuffer";
+      pcmDataChannel.onopen  = function() { document.getElementById("telemetry-status").textContent = "PCM DataChannel live"; };
+      pcmDataChannel.onclose = function() { document.getElementById("telemetry-status").textContent = "PCM DataChannel closed"; };
+      pcmDataChannel.onmessage = function(e) {
+        window.__KINGZ_LISTEN_LAST_PCM_PACKET__ = { byteLength: e.data.byteLength || 0, receivedAt: Date.now() };
+      };
+    }
+
+    function flushPendingRemoteCandidates() {
+      if (!peerConnection || !peerConnection.remoteDescription) return Promise.resolve();
+      var candidates = pendingRemoteCandidates.slice();
+      pendingRemoteCandidates = [];
+      return Promise.all(candidates.map(function(c) {
+        return peerConnection.addIceCandidate(c).catch(function(e) { console.warn("ICE", e); });
+      }));
+    }
+
+    function handleTelemetrySignal(message) {
+      if (!message) return Promise.resolve();
+      if (message.signal_id && message.signal_id !== signalId) return Promise.resolve();
+
+      if (message.type === "webrtc-answer") {
+        if (!peerConnection) return Promise.resolve();
+        return peerConnection
+          .setRemoteDescription({ type: message.descriptionType || "answer", sdp: message.sdp })
+          .then(flushPendingRemoteCandidates);
+      }
+
+      if (message.type === "webrtc-candidate") {
+        var cp = (message.candidate && message.candidate.candidate)
+          ? message.candidate
+          : { candidate: message.candidate, sdpMid: message.sdpMid, sdpMLineIndex: message.sdpMLineIndex };
+        if (!cp.candidate) return Promise.resolve();
+        var candidate = new RTCIceCandidate(cp);
+        if (!peerConnection || !peerConnection.remoteDescription) {
+          pendingRemoteCandidates.push(candidate);
+          return Promise.resolve();
+        }
+        return peerConnection.addIceCandidate(candidate).catch(function(e) { console.warn("ICE add", e); });
+      }
+
+      return Promise.resolve();
+    }
+
+    function startWebRtcReceiver(host, port) {
+      if (peerConnection) { try { peerConnection.close(); } catch (_) {} }
+      pendingRemoteCandidates = [];
+      signalId = "kingz-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+      peerConnection = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      peerConnection.onicecandidate = function(e) {
+        if (e.candidate) sendTelemetrySignal({ type: "webrtc-candidate", candidate: e.candidate.toJSON() });
+      };
+      peerConnection.ondatachannel = function(e) { bindPcmDataChannel(e.channel); };
+      peerConnection.onconnectionstatechange = function() {
+        document.getElementById("telemetry-status").textContent = "WebRTC " + peerConnection.connectionState;
+      };
+      bindPcmDataChannel(peerConnection.createDataChannel("kingz-pcm", { ordered: false, maxRetransmits: 0 }));
+      return peerConnection.createOffer()
+        .then(function(offer) {
+          return peerConnection.setLocalDescription(offer).then(function() { return offer; });
+        })
+        .then(function(offer) {
+          sendTelemetrySignal({ type: "webrtc-offer", sdp: offer.sdp, descriptionType: offer.type, offerGeneration: Date.now() });
+        });
+    }
+
+    function openTelemetrySocket(host, port) {
+      var url = "ws://" + host + ":" + port + "/";
+      if (telemetrySocket && telemetrySocket.readyState === WebSocket.OPEN) {
+        startWebRtcReceiver(host, port).catch(console.error);
+        return;
+      }
+      if (telemetrySocket) { try { telemetrySocket.close(); } catch (_) {} }
+      document.getElementById("telemetry-status").textContent = "Connecting…";
+      telemetrySocket = new WebSocket(url);
+      telemetrySocket.onopen = function() {
+        sendTelemetrySignal({ type: "receiver.hello" });
+        startWebRtcReceiver(host, port).catch(function(e) {
+          document.getElementById("telemetry-status").textContent = "WebRTC offer failed";
+          console.error(e);
+        });
+      };
+      telemetrySocket.onmessage = function(e) {
+        var msg = tryParseJson(e.data, null);
+        if (!msg) return;
+        handleTelemetrySignal(msg).catch(console.error);
+        if (msg.type === "telemetry.report") { applyTelemetryReport(msg); }
+        else { applyTelemetry(msg); }
+      };
+      telemetrySocket.onclose = function() {
+        document.getElementById("telemetry-status").textContent = "Disconnected";
+      };
+      telemetrySocket.onerror = function() {
+        document.getElementById("telemetry-status").textContent = "Connection error";
+      };
+    }
+
+    // ── JUCE native bridge (Logic Pro only, gracefully absent elsewhere) ──────
+    function hasNativeBridge() {
+      var j = window.__JUCE__;
+      return !!(j && j.backend && j.backend.emitEvent
+        && j.initialisationData && Array.isArray(j.initialisationData.__juce__functions)
+        && j.initialisationData.__juce__functions.indexOf("juceLink") !== -1);
+    }
+
+    function waitForNativeBridge(timeoutMs) {
       if (hasNativeBridge()) return Promise.resolve();
-
-      const started = Date.now();
-      return new Promise((resolve, reject) => {
-        const poll = () => {
-          if (hasNativeBridge()) {
-            resolve();
-            return;
-          }
-
-          if (Date.now() - started >= timeoutMs) {
-            reject(new Error("JUCE native bridge unavailable"));
-            return;
-          }
-
-          window.setTimeout(poll, 50);
-        };
-
-        poll();
+      var start = Date.now();
+      return new Promise(function(resolve, reject) {
+        (function poll() {
+          if (hasNativeBridge()) return resolve();
+          if (Date.now() - start >= (timeoutMs || 2000)) return reject(new Error("JUCE bridge unavailable"));
+          setTimeout(poll, 50);
+        })();
       });
     }
 
     function invokeNativeFunction(name, payload) {
-      return new Promise((resolve, reject) => {
-        const backend = window.__JUCE__ && window.__JUCE__.backend;
-        if (!backend || !backend.emitEvent) {
-          reject(new Error("JUCE backend unavailable"));
-          return;
-        }
-
-        const resultId = nativePromiseId++;
-        nativePromises.set(resultId, { resolve, reject });
-        backend.emitEvent("__juce__invoke", {
-          name,
-          params: [payload],
-          resultId
-        });
-
-        window.setTimeout(() => {
-          if (nativePromises.has(resultId)) {
-            nativePromises.delete(resultId);
-            reject(new Error("JUCE native bridge timed out"));
-          }
+      return new Promise(function(resolve, reject) {
+        var backend = window.__JUCE__ && window.__JUCE__.backend;
+        if (!backend || !backend.emitEvent) { reject(new Error("JUCE backend unavailable")); return; }
+        var resultId = nativePromiseId++;
+        nativePromises[resultId] = { resolve: resolve, reject: reject };
+        backend.emitEvent("__juce__invoke", { name: name, params: [payload], resultId: resultId });
+        setTimeout(function() {
+          if (nativePromises[resultId]) { delete nativePromises[resultId]; reject(new Error("JUCE timed out")); }
         }, 3000);
       });
     }
 
-    async function sendToNative(payload) {
-      await waitForNativeBridge();
-      return await invokeNativeFunction("juceLink", payload);
+    function sendToNative(payload) {
+      return waitForNativeBridge().then(function() { return invokeNativeFunction("juceLink", payload); });
     }
 
     function registerBackendListeners() {
-      if (!window.__JUCE__ || !window.__JUCE__.backend) {
-        window.setTimeout(registerBackendListeners, 50);
-        return;
-      }
-
-      window.__JUCE__.backend.addEventListener("kingzConnectionState", applyConnectionState);
-      window.__JUCE__.backend.addEventListener("kingzTelemetry", applyTelemetry);
-      window.__JUCE__.backend.addEventListener("kingzConnectionAttempt", (payload) => {
-        document.getElementById("telemetry-status").textContent = "Opening " + (payload && payload.url ? payload.url : "socket");
+      if (!window.__JUCE__ || !window.__JUCE__.backend) { setTimeout(registerBackendListeners, 50); return; }
+      var b = window.__JUCE__.backend;
+      b.addEventListener("kingzConnectionState", applyConnectionState);
+      b.addEventListener("kingzTelemetry",       applyTelemetry);
+      b.addEventListener("kingzTelemetryReport", applyTelemetryReport);
+      b.addEventListener("kingzConnectionAttempt", function(p) {
+        document.getElementById("telemetry-status").textContent = "Opening " + (p && p.url ? p.url : "socket");
       });
-      window.__JUCE__.backend.addEventListener("kingzTelemetryReport", applyTelemetryReport);
-      window.__JUCE__.backend.addEventListener("__juce__complete", ({ promiseId, result }) => {
-        const completion = nativePromises.get(promiseId);
-        if (!completion) return;
-
-        nativePromises.delete(promiseId);
-        completion.resolve(result);
+      b.addEventListener("__juce__complete", function(p) {
+        var c = nativePromises[p.promiseId];
+        if (!c) return;
+        delete nativePromises[p.promiseId];
+        c.resolve(p.result);
       });
     }
 
+    // ── init ──────────────────────────────────────────────────────────────────
     registerBackendListeners();
 
-    document.getElementById("toggle").addEventListener("click", () => {
-      sendToNative({ action: "toggleMonitoringMode", source: "placeholder-ui" })
-        .catch((error) => console.error(error));
+    // Auto-connect when opened in a browser (not inside Logic's WebView)
+    if (window.location.protocol === "http:" && window.location.hostname) {
+      var _h = window.location.hostname;
+      var _p = window.location.port || "8082";
+      setTimeout(function() { openTelemetrySocket(_h, _p); }, 400);
+    }
+
+    // ── button handlers ───────────────────────────────────────────────────────
+    document.getElementById("toggle").addEventListener("click", function() {
+      sendToNative({ action: "toggleMonitoringMode", source: "web-ui" }).catch(console.error);
     });
 
-	    document.getElementById("connect").addEventListener("click", () => {
-	      const host = studioIpInput.value.trim();
-	      const port = Number.parseInt(studioPortInput.value, 10) || 8081;
-	      document.getElementById("telemetry-status").textContent = "Connecting";
-	      sendToNative({ action: "connectTelemetry", source: "placeholder-ui", host, port })
-	        .then(() => openTelemetrySocket(host || "127.0.0.1", port))
-	        .catch((error) => {
-	          document.getElementById("telemetry-status").textContent = "Bridge unavailable";
-	          console.error(error);
-        });
+    document.getElementById("connect").addEventListener("click", function() {
+      var host = studioIpInput.value.trim();
+      var port = parseInt(studioPortInput.value, 10) || 8082;
+      document.getElementById("telemetry-status").textContent = "Connecting…";
+      sendToNative({ action: "connectTelemetry", source: "web-ui", host: host, port: port })
+        .then(function() { openTelemetrySocket(host || "127.0.0.1", port); })
+        .catch(function() { openTelemetrySocket(host || "127.0.0.1", port); });
     });
   </script>
 </body>
@@ -541,7 +467,7 @@ void KingzListenAudioProcessorEditor::handleUiCall (
             const auto cleanHost = host.isNotEmpty() ? host : juce::String { "127.0.0.1" };
             DBG ("KingzListenAudioProcessorEditor::handleUiCall connectTelemetry host="
                  << host << " port=" << port);
-            emitConnectionAttemptToWebView ("ws://" + cleanHost + ":" + juce::String (port > 0 ? port : 8081));
+            emitConnectionAttemptToWebView ("ws://" + cleanHost + ":" + juce::String (port > 0 ? port : 8082));
         }
     }
 
@@ -560,7 +486,7 @@ void KingzListenAudioProcessorEditor::emitConnectionStateToWebView()
 {
     auto state = std::make_unique<juce::DynamicObject>();
     state->setProperty ("localIp", processorRef.getLocalLanIpAddress());
-    state->setProperty ("port", 8081);
+    state->setProperty ("port", 8082);
     state->setProperty ("transport", "webrtc-datachannel-pcm");
     state->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
     state->setProperty ("channels", AudioFifoWorker::inputChannels);

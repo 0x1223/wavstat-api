@@ -35,13 +35,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(libdatachannel)
 
+juce_set_aax_sdk_path("/Users/kingzbreadentertainment/Downloads/aax-sdk-2-8-0")
+
 juce_add_plugin(KingzListenPlugin
     COMPANY_NAME "Kingzbreadent"
     PLUGIN_NAME "Kingz Listen"
     PLUGIN_MANUFACTURER_CODE KbEn
     PLUGIN_CODE KzLi
     BUNDLE_ID "com.kingzbreadent.kingzlisten"
-    FORMATS VST3 AU
+    FORMATS VST3 AU AAX
     PRODUCT_NAME "Kingz Listen"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
@@ -78,6 +80,7 @@ if(APPLE)
 
     kingz_configure_macos_plugin_bundle(KingzListenPlugin_AU "component")
     kingz_configure_macos_plugin_bundle(KingzListenPlugin_VST3 "vst3")
+    kingz_configure_macos_plugin_bundle(KingzListenPlugin_AAX "aaxplugin")
 endif()
 
 target_sources(KingzListenPlugin

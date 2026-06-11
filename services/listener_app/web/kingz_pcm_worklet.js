@@ -1,17 +1,24 @@
 class KingzPcmRenderer extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.channelCount = 2;
-    this.capacityFrames = sampleRate * 4;
-    this.buffer = new Float32Array(this.capacityFrames * this.channelCount);
-    this.readFrame = 0;
-    this.writeFrame = 0;
-    this.bufferedFrames = 0;
-    this.underruns = 0;
-    this.droppedFrames = 0;
-    this.lastUnderrunReportFrame = -sampleRate;
-    this.lastStatusFrame = 0;
-    this.active = true;
+    try {
+      this.channelCount = 2;
+      this.capacityFrames = sampleRate * 4;
+      this.buffer = new Float32Array(this.capacityFrames * this.channelCount);
+      this.readFrame = 0;
+      this.writeFrame = 0;
+      this.bufferedFrames = 0;
+      this.underruns = 0;
+      this.droppedFrames = 0;
+      this.lastUnderrunReportFrame = -sampleRate;
+      this.lastStatusFrame = 0;
+      this.active = true;
+      this.port.postMessage({ type: "ready", sampleRate: sampleRate, capacityFrames: this.capacityFrames });
+    } catch (e) {
+      this.active = false;
+      try { this.port.postMessage({ type: "error", phase: "constructor", message: String(e) }); } catch (_) {}
+      throw e;
+    }
 
     this.port.onmessage = (event) => {
       const message = event.data;
@@ -64,42 +71,57 @@ class KingzPcmRenderer extends AudioWorkletProcessor {
   }
 
   _pushPcmBytes(message) {
-    const bytes =
-      message.bytes instanceof Uint8Array
-        ? message.bytes
-        : new Uint8Array(message.bytes);
-    const inputChannels = Math.max(1, Math.min(2, message.channels || 2));
-    const frameCount = Math.max(
-      0,
-      message.frameCount || Math.floor(bytes.byteLength / (inputChannels * 2)),
-    );
-    if (!bytes || frameCount <= 0) return;
+    try {
+      const rawBytes = message.bytes;
+      const bytes =
+        rawBytes instanceof Uint8Array
+          ? rawBytes
+          : rawBytes instanceof ArrayBuffer
+            ? new Uint8Array(rawBytes)
+            : new Uint8Array(rawBytes);
+      const inputChannels = Math.max(1, Math.min(2, message.channels || 2));
+      const frameCount = Math.max(
+        0,
+        message.frameCount || Math.floor(bytes.byteLength / (inputChannels * 2)),
+      );
+      if (!bytes || frameCount <= 0) return;
 
-    const overflowFrames = Math.max(
-      0,
-      this.bufferedFrames + frameCount - this.capacityFrames,
-    );
-    if (overflowFrames > 0) {
-      this.readFrame = (this.readFrame + overflowFrames) % this.capacityFrames;
-      this.bufferedFrames -= overflowFrames;
-      this.droppedFrames += overflowFrames;
-    }
+      const overflowFrames = Math.max(
+        0,
+        this.bufferedFrames + frameCount - this.capacityFrames,
+      );
+      if (overflowFrames > 0) {
+        this.readFrame = (this.readFrame + overflowFrames) % this.capacityFrames;
+        this.bufferedFrames -= overflowFrames;
+        this.droppedFrames += overflowFrames;
+      }
 
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    for (let frame = 0; frame < frameCount; frame += 1) {
-      const inputIndex = frame * inputChannels;
-      const left = view.getInt16(inputIndex * 2, true) / 32768;
-      const right =
-        inputChannels > 1 ? view.getInt16((inputIndex + 1) * 2, true) / 32768 : left;
-      const writeIndex = this.writeFrame * this.channelCount;
-      this.buffer[writeIndex] = Math.max(-1, Math.min(1, left));
-      this.buffer[writeIndex + 1] = Math.max(-1, Math.min(1, right));
-      this.writeFrame = (this.writeFrame + 1) % this.capacityFrames;
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      for (let frame = 0; frame < frameCount; frame += 1) {
+        const inputIndex = frame * inputChannels;
+        const left = view.getInt16(inputIndex * 2, true) / 32768;
+        const right =
+          inputChannels > 1 ? view.getInt16((inputIndex + 1) * 2, true) / 32768 : left;
+        const writeIndex = this.writeFrame * this.channelCount;
+        this.buffer[writeIndex] = Math.max(-1, Math.min(1, left));
+        this.buffer[writeIndex + 1] = Math.max(-1, Math.min(1, right));
+        this.writeFrame = (this.writeFrame + 1) % this.capacityFrames;
+      }
+      this.bufferedFrames = Math.min(
+        this.capacityFrames,
+        this.bufferedFrames + frameCount,
+      );
+    } catch (e) {
+      this.port.postMessage({
+        type: "error",
+        phase: "pushPcmBytes",
+        message: String(e),
+        bytesType: message.bytes == null ? "null" : Object.prototype.toString.call(message.bytes),
+        byteLength: message.bytes && message.bytes.byteLength,
+        channels: message.channels,
+        frameCount: message.frameCount,
+      });
     }
-    this.bufferedFrames = Math.min(
-      this.capacityFrames,
-      this.bufferedFrames + frameCount,
-    );
   }
 
   process(_inputs, outputs) {

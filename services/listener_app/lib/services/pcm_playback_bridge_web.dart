@@ -511,7 +511,8 @@ class PcmPlaybackBridge {
             : ((frames / sampleRate) * 1000).round();
         _scheduledLeadMs = max(0, ((_scheduledAt - now) * 1000).round());
         return _updateTelemetry(outputActive: true);
-      } catch (_) {
+      } catch (e) {
+        web.console.log('KINGZ WORKLET: enqueueBytes postMessage error: $e'.toJS);
         _workletUnavailable = true;
         _stopWorkletRenderer();
       }
@@ -936,13 +937,22 @@ class PcmPlaybackBridge {
 
     try {
       if (!_workletModuleLoaded) {
+        web.console.log('KINGZ WORKLET: loading kingz_pcm_worklet.js (sampleRate=${context.sampleRate})'.toJS);
         await context.audioWorklet.addModule('kingz_pcm_worklet.js').toDart;
         _workletModuleLoaded = true;
+        web.console.log('KINGZ WORKLET: module loaded OK'.toJS);
       }
       final node = web.AudioWorkletNode(context, 'kingz-pcm-renderer');
+      // Forward worklet messages (status, underrun, error) to console for visibility.
+      node.port.onmessage = ((web.MessageEvent event) {
+        final data = event.data;
+        web.console.log('KINGZ WORKLET MSG: ${data.dartify()}'.toJS);
+      }).toJS;
       node.connect(_outputDestination(context));
       _workletNode = node;
-    } catch (_) {
+      web.console.log('KINGZ WORKLET: AudioWorkletNode created and connected'.toJS);
+    } catch (e) {
+      web.console.log('KINGZ WORKLET ERROR: $e'.toJS);
       _workletUnavailable = true;
     }
   }
