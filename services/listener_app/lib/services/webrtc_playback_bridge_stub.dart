@@ -266,6 +266,8 @@ class WebRtcPlaybackBridge {
   }
 
   /// Create RTCPeerConnection with STUN server and event handlers.
+  /// CRITICAL: Create data channel BEFORE creating offer to match plugin m-line order.
+  /// Plugin expects: m=application (data channel), then m=audio (audio transceiver)
   Future<void> _createPeer() async {
     debugPrint('[KINGZ WebRTC] closing previous peer if any...');
     _closePeer();
@@ -286,18 +288,6 @@ class WebRtcPlaybackBridge {
       _peer = await createPeerConnection(config);
       final generation = ++_offerGeneration;
       debugPrint('[KINGZ WebRTC] peer connection created (generation=$generation)');
-
-      // AUDIT: Check for unexpected transceivers that could cause m-line mismatch
-      final peer = _peer!;
-      try {
-        final transceivers = await peer.getTransceivers();
-        debugPrint('[KINGZ WebRTC] transceivers after creation: ${transceivers.length}');
-        for (int i = 0; i < transceivers.length; i++) {
-          debugPrint('[KINGZ WebRTC]   transceiver #$i (audio)');
-        }
-      } catch (e) {
-        debugPrint('[KINGZ WebRTC] WARNING: could not audit transceivers: $e');
-      }
     } catch (error, stackTrace) {
       debugPrint('[KINGZ WebRTC] ERROR creating peer connection: $error\n$stackTrace');
       rethrow;
@@ -305,8 +295,11 @@ class WebRtcPlaybackBridge {
     final peer = _peer!;
     final generation = _offerGeneration;
 
-    // Note: NOT creating data channel before offer. Plugin will create its channel
-    // and send it via onDataChannel. This avoids state machine issues with flutter_webrtc.
+    // CRITICAL FIX: Do NOT create data channel or add transceivers before offer.
+    // The plugin will create the data channel, and flutter_webrtc will add audio
+    // transceiver implicitly during offer creation. This ensures m-line order matches
+    // what the plugin expects: data channel (m=application), then audio (m=audio).
+    debugPrint('[KINGZ WebRTC] peer ready - will create offer without explicit transceivers');
 
     peer.onIceCandidate = (RTCIceCandidate candidate) {
       if (generation != _offerGeneration || !_active) {
@@ -362,15 +355,14 @@ class WebRtcPlaybackBridge {
     }
 
     try {
-      // CRITICAL: Explicit audio-only constraints to match JUCE's expected offer format
-      // This ensures the offer has ONLY audio m= line, no video or data channel m= lines
-      final constraints = <String, dynamic>{
-        'offerToReceiveAudio': true,
-        'offerToReceiveVideo': false,
-        'iceRestart': false,
-      };
+      // CRITICAL FIX: Use NO constraints to allow default m-line generation.
+      // The plugin expects both data channel (m=application) and audio (m=audio) m-lines.
+      // Explicit audio-only constraints prevent data channel m-line from being generated,
+      // causing m-line order mismatch with plugin answer.
+      // Empty constraints allow flutter_webrtc to generate default offer structure.
+      final constraints = <String, dynamic>{};
 
-      debugPrint('[KINGZ WebRTC] calling peer.createOffer() with constraints: $constraints');
+      debugPrint('[KINGZ WebRTC] calling peer.createOffer() with NO constraints (default m-lines)');
       final offer = await peer.createOffer(constraints);
 
       if (offer.sdp == null || offer.sdp!.isEmpty) {
