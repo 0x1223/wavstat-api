@@ -295,12 +295,6 @@ class WebRtcPlaybackBridge {
     final peer = _peer!;
     final generation = _offerGeneration;
 
-    // CRITICAL FIX: Do NOT create data channel or add transceivers before offer.
-    // The plugin will create the data channel, and flutter_webrtc will add audio
-    // transceiver implicitly during offer creation. This ensures m-line order matches
-    // what the plugin expects: data channel (m=application), then audio (m=audio).
-    debugPrint('[KINGZ WebRTC] peer ready - will create offer without explicit transceivers');
-
     peer.onIceCandidate = (RTCIceCandidate candidate) {
       if (generation != _offerGeneration || !_active) {
         return;
@@ -355,14 +349,14 @@ class WebRtcPlaybackBridge {
     }
 
     try {
-      // CRITICAL FIX: Use NO constraints to allow default m-line generation.
-      // The plugin expects both data channel (m=application) and audio (m=audio) m-lines.
-      // Explicit audio-only constraints prevent data channel m-line from being generated,
-      // causing m-line order mismatch with plugin answer.
-      // Empty constraints allow flutter_webrtc to generate default offer structure.
-      final constraints = <String, dynamic>{};
+      // CRITICAL FIX: Request AUDIO but omit VIDEO block to allow data channel m-line.
+      // The plugin expects BOTH m-lines: m=application (data channel) and m=audio (audio).
+      // Do NOT use offerToReceiveVideo: false as it may prevent data channel m-line generation.
+      final constraints = <String, dynamic>{
+        'offerToReceiveAudio': true,
+      };
 
-      debugPrint('[KINGZ WebRTC] calling peer.createOffer() with NO constraints (default m-lines)');
+      debugPrint('[KINGZ WebRTC] calling peer.createOffer() with audio-only request (allows data channel)');
       final offer = await peer.createOffer(constraints);
 
       if (offer.sdp == null || offer.sdp!.isEmpty) {
