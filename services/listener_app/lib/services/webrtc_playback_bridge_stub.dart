@@ -295,6 +295,20 @@ class WebRtcPlaybackBridge {
     final peer = _peer!;
     final generation = _offerGeneration;
 
+    // CRITICAL: Create data channel BEFORE creating offer so m-lines match plugin expectations
+    // The plugin will also create/expect a kingz-pcm data channel, and m-line order MUST match
+    // between offer and answer for WebRTC to accept the answer.
+    try {
+      debugPrint('[KINGZ WebRTC] creating kingz-pcm data channel (pre-negotiation)...');
+      final dataChannelConfig = <String, dynamic>{
+        'ordered': false,
+      };
+      await peer.createDataChannel('kingz-pcm', dataChannelConfig);
+      debugPrint('[KINGZ WebRTC] kingz-pcm data channel created (pre-negotiation)');
+    } catch (error) {
+      debugPrint('[KINGZ WebRTC] WARNING: failed to pre-create data channel: $error (plugin may create it)');
+    }
+
     peer.onIceCandidate = (RTCIceCandidate candidate) {
       if (generation != _offerGeneration || !_active) {
         return;
@@ -341,7 +355,6 @@ class WebRtcPlaybackBridge {
   }
 
   /// Create WebRTC offer and send to plugin.
-  /// CRITICAL: Use explicit constraints for audio-only stream to ensure m-line compatibility.
   Future<void> _createOffer() async {
     final peer = _peer;
     if (peer == null) {
@@ -349,14 +362,14 @@ class WebRtcPlaybackBridge {
     }
 
     try {
-      // CRITICAL FIX: Request AUDIO but omit VIDEO block to allow data channel m-line.
-      // The plugin expects BOTH m-lines: m=application (data channel) and m=audio (audio).
-      // Do NOT use offerToReceiveVideo: false as it may prevent data channel m-line generation.
-      final constraints = <String, dynamic>{
-        'offerToReceiveAudio': true,
-      };
+      // Data-channel-only offer: NO audio m-line.
+      // The plugin (libdatachannel) has no audio transceiver and will drop any m=audio
+      // section from the answer, causing a count/order mismatch on setRemoteDescription.
+      // With an empty constraints map the offer contains ONLY m=application (from the
+      // kingz-pcm data channel created in _createPeer), so offer and answer always match.
+      final constraints = <String, dynamic>{};
 
-      debugPrint('[KINGZ WebRTC] calling peer.createOffer() with audio-only request (allows data channel)');
+      debugPrint('[KINGZ WebRTC] calling peer.createOffer() (data-channel-only, no audio m-line)');
       final offer = await peer.createOffer(constraints);
 
       if (offer.sdp == null || offer.sdp!.isEmpty) {

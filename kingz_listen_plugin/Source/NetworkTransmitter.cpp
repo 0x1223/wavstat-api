@@ -975,30 +975,11 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
     {
         if (auto lockedClient = weakClient.lock())
         {
-            // CRITICAL DEBUGGING: Log answer SDP to diagnose m-line mismatch
             const auto answerSdp = std::string (description);
-            const auto answerStr = juce::String (answerSdp);
-            const auto answerLines = juce::StringArray::fromLines (answerStr);
-            int mLineCount = 0;
-            juce::String mLineTypes;
-            for (const auto& line : answerLines)
-            {
-                if (line.startsWith ("m="))
-                {
-                    mLineCount++;
-                    const auto tokens = juce::StringArray::fromTokens (line, " ", "");
-                    if (tokens.size() > 0)
-                        mLineTypes += (mLineCount > 1 ? "," : "") + tokens[0].substring (2);
-                }
-            }
-            DBG ("[KINGZ] === JUCE ANSWER SDP ===");
-            DBG ("[KINGZ] M-line count: " + juce::String (mLineCount) + ", types: " + mLineTypes);
-            for (const auto& line : answerLines)
-            {
-                if (line.startsWith ("m=") || line.startsWith ("a=setup"))
-                    DBG ("[KINGZ] ANSWER: " + line);
-            }
-            DBG ("[KINGZ] === END ANSWER SDP ===");
+            // Full answer SDP dump — critical for diagnosing m-line mismatches
+            std::cout << "[KINGZ_SDP_ANSWER_BEGIN offerGen=" << offerGeneration << "]\n"
+                      << answerSdp
+                      << "[KINGZ_SDP_ANSWER_END]\n" << std::flush;
 
             auto* response = new juce::DynamicObject();
             response->setProperty ("type", lockedClient->externalSignaling ? "webrtc-answer" : "webrtc.answer");
@@ -1045,35 +1026,16 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
 
     try
     {
-        // CRITICAL DEBUGGING: Log incoming offer SDP to diagnose m-line mismatch
-        const auto offerLines = juce::StringArray::fromLines (sdp);
-        int offerMLineCount = 0;
-        juce::String offerMLineTypes;
-        for (const auto& line : offerLines)
-        {
-            if (line.startsWith ("m="))
-            {
-                offerMLineCount++;
-                const auto tokens = juce::StringArray::fromTokens (line, " ", "");
-                if (tokens.size() > 0)
-                    offerMLineTypes += (offerMLineCount > 1 ? "," : "") + tokens[0].substring (2);
-            }
-        }
-        DBG ("[KINGZ] === RECEIVED OFFER SDP ===");
-        DBG ("[KINGZ] M-line count: " + juce::String (offerMLineCount) + ", types: " + offerMLineTypes);
-        for (const auto& line : offerLines)
-        {
-            if (line.startsWith ("m=") || line.startsWith ("a=setup"))
-                DBG ("[KINGZ] OFFER: " + line);
-        }
-        DBG ("[KINGZ] === END OFFER SDP ===");
+        // Full offer SDP dump — critical for diagnosing m-line mismatches
+        std::cout << "[KINGZ_SDP_OFFER_BEGIN offerGen=" << offerGeneration << "]\n"
+                  << sdp.toStdString()
+                  << "\n[KINGZ_SDP_OFFER_END]\n" << std::flush;
 
-        peer->setRemoteDescription (rtc::Description (sdp.toStdString(), "offer"));
-
-        // CRITICAL: Create data channel AFTER setRemoteDescription so answer m-lines
-        // match the offer's m-line order. If the offer is audio-only (Flutter native),
-        // the answer must also be audio-only. Only create data channel if both sides
-        // support it via the negotiation.
+        // CRITICAL FIX: Create data channel BEFORE setRemoteDescription so that answer m-lines
+        // are generated in the same order as the offer's m-lines. The client creates its
+        // kingz-pcm data channel before creating the offer, so the offer already includes
+        // m=application (data channel). We must create ours BEFORE setting remote description
+        // to ensure the answer matches the offer's m-line order.
         rtc::DataChannelInit pcmChannelConfig;
         pcmChannelConfig.reliability.unordered = true;
         pcmChannelConfig.reliability.maxPacketLifeTime = std::chrono::milliseconds { pcmMaxPacketLifetimeMs };
@@ -1114,6 +1076,9 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
 
         client->pcmChannel = dataChannel;
 
+        // Now set remote description AFTER data channel is created, so answer will have
+        // m-lines in the same order as the offer (data-channel-only: m=application only)
+        peer->setRemoteDescription (rtc::Description (sdp.toStdString(), "offer"));
         peer->setLocalDescription();
     }
     catch (const std::exception& error)
