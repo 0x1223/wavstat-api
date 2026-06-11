@@ -295,18 +295,16 @@ class WebRtcPlaybackBridge {
     final peer = _peer!;
     final generation = _offerGeneration;
 
-    // CRITICAL: Create data channel BEFORE creating offer so m-lines match plugin expectations
-    // The plugin will also create/expect a kingz-pcm data channel, and m-line order MUST match
-    // between offer and answer for WebRTC to accept the answer.
+    // Create data channel BEFORE creating offer so the offer contains m=application.
+    // Without this, offerToReceiveAudio would be the only m-line and libdatachannel
+    // (the plugin) would drop the audio m-line from its answer, causing a count mismatch.
     try {
       debugPrint('[KINGZ WebRTC] creating kingz-pcm data channel (pre-negotiation)...');
-      final dataChannelConfig = <String, dynamic>{
-        'ordered': false,
-      };
-      await peer.createDataChannel('kingz-pcm', dataChannelConfig);
+      final dataChannelInit = RTCDataChannelInit()..ordered = false;
+      await peer.createDataChannel('kingz-pcm', dataChannelInit);
       debugPrint('[KINGZ WebRTC] kingz-pcm data channel created (pre-negotiation)');
     } catch (error) {
-      debugPrint('[KINGZ WebRTC] WARNING: failed to pre-create data channel: $error (plugin may create it)');
+      debugPrint('[KINGZ WebRTC] WARNING: failed to pre-create data channel: $error');
     }
 
     peer.onIceCandidate = (RTCIceCandidate candidate) {
