@@ -54,7 +54,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     text: _defaultServerHost(),
   );
   final TextEditingController _portController = TextEditingController(
-    text: '8080',
+    text: '8081',  // Plugin WebRTC signaling server port
   );
   final AudioPlayer _audioPlayer = AudioPlayer();
   final LanAudioClient _lanAudioClient = LanAudioClient();
@@ -71,7 +71,6 @@ class _ListenerScreenState extends State<ListenerScreen> {
   RealtimeStreamMetrics _realtimeMetrics = const RealtimeStreamMetrics();
   ListenerPlaybackState _playbackState = const ListenerPlaybackState();
   TransportConfig _transportConfig = const TransportConfig();
-  Uri? _streamUrl;
   String _durationLabel = '--:--';
 
   bool get _isConnected =>
@@ -135,7 +134,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     FocusScope.of(context).unfocus();
     final serverIp = _serverIpController.text.trim();
     final port = _portController.text.trim().isEmpty
-        ? '8080'
+        ? '8081'  // Plugin WebRTC signaling server port
         : _portController.text.trim();
 
     if (serverIp.isEmpty) {
@@ -176,7 +175,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     return Uri(
       scheme: 'ws',
       host: normalized,
-      port: int.tryParse(port) ?? 8080,
+      port: int.tryParse(port) ?? 8081,  // Plugin WebRTC signaling server port
     );
   }
 
@@ -194,20 +193,17 @@ class _ListenerScreenState extends State<ListenerScreen> {
   }
 
   Future<void> _play() async {
+    debugPrint('[KINGZ] _play: ENTRY isConnected=$_isConnected');
     if (_playRequestInFlight ||
         _status == ListenerStatus.playing ||
         _status == ListenerStatus.buffering) {
+      debugPrint('[KINGZ] _play: EXIT (already playing or request in flight)');
       return;
     }
 
     if (!_isConnected) {
+      debugPrint('[KINGZ] _play: EXIT (not connected)');
       _setError('Connect to LAN server first');
-      return;
-    }
-
-    final streamUrl = _streamUrl;
-    if (streamUrl == null) {
-      _setError('Waiting for stream URL');
       return;
     }
 
@@ -220,34 +216,27 @@ class _ListenerScreenState extends State<ListenerScreen> {
       );
     });
 
-    debugPrint('[KINGZ] _play: streamUrl=$streamUrl kIsWeb=$kIsWeb mode=${_transportConfig.mode}');
+    debugPrint('[KINGZ] _play: mode=${_transportConfig.mode}');
     final operation = ++_playbackOperation;
     try {
       final pcmPlaybackActive = await _lanAudioClient.startListening(
         _transportConfig.mode,
-        enablePcmPlayback: kIsWeb,
+        enablePcmPlayback: true,
       );
-      debugPrint('[KINGZ] _play: startListening done pcmPlaybackActive=$pcmPlaybackActive');
+      debugPrint('[KINGZ] _play: startListening returned pcmPlaybackActive=$pcmPlaybackActive');
+      debugPrint('[KINGZ] _play: status is now $_status');
+      debugPrint('[KINGZ] _play: current _telemetry.bufferStatus=${_telemetry.bufferStatus}');
       if (operation != _playbackOperation) {
+        debugPrint('[KINGZ] _play: EXIT (operation changed)');
         return;
       }
-      if (kIsWeb && pcmPlaybackActive) {
-        debugPrint('[KINGZ] _play: returning early (web+pcm active)');
+      if (pcmPlaybackActive) {
+        debugPrint('[KINGZ] _play: STUB - pcmPlaybackActive=true, returning from _play (status remains BUFFERING)');
+        debugPrint('[KINGZ] _play: NOTE: Status will only change if streamStatus event is emitted by lanAudioClient');
         return;
       }
-      await _audioPlayer.stop();
-      if (operation != _playbackOperation) {
-        return;
-      }
-      debugPrint('[KINGZ] _play: calling setUrl($streamUrl)');
-      await _audioPlayer.setUrl(streamUrl.toString());
-      debugPrint('[KINGZ] _play: setUrl done, calling play()');
-      if (operation != _playbackOperation) {
-        return;
-      }
-      await _audioPlayer.setVolume(_muted ? 0 : _volume);
-      await _audioPlayer.play();
-      debugPrint('[KINGZ] _play: play() done');
+      debugPrint('[KINGZ] _play: ERROR - pcmPlaybackActive=false');
+      _setError('Audio transport unavailable');
     } catch (e, st) {
       debugPrint('[KINGZ] _play error: $e\n$st');
       _setError('Unable to play stream');
@@ -322,10 +311,6 @@ class _ListenerScreenState extends State<ListenerScreen> {
         _transportConfig = event.transportConfig!;
       }
 
-      if (event.streamUrl != null) {
-        _streamUrl = event.streamUrl;
-      }
-
       if (event.durationLabel != null) {
         _durationLabel = event.durationLabel!;
       }
@@ -394,7 +379,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
   /// Web / desktop: generate and display a QR code from the current IP field.
   Future<void> _showQrCode() async {
     final host = _serverIpController.text.trim();
-    final port = int.tryParse(_portController.text.trim()) ?? 8080;
+    final port = int.tryParse(_portController.text.trim()) ?? 8081;  // Plugin WebRTC signaling server port
     if (host.isEmpty) {
       _setError('Enter server IP before generating QR');
       return;

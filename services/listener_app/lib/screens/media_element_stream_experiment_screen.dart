@@ -105,7 +105,7 @@ class _MediaElementStreamExperimentScreenState
     final serverHost = query['serverHost']?.trim().isNotEmpty == true
         ? query['serverHost']!.trim()
         : Uri.base.host;
-    final serverPort = int.tryParse(query['serverPort'] ?? '') ?? 8080;
+    final serverPort = int.tryParse(query['serverPort'] ?? '') ?? 8081;  // Plugin WebRTC signaling server port
 
     return Uri(
       scheme: 'http',

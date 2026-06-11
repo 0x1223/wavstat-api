@@ -26,7 +26,7 @@ class NetworkTransmitter final : private juce::Thread
 {
 public:
     explicit NetworkTransmitter (AudioFifoWorker& fifoToRead);
-    ~NetworkTransmitter() override;
+    ~NetworkTransmitter() override;;
 
     bool start (int portToUse = 8082);
     void stop();

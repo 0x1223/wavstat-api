@@ -9,6 +9,8 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Kingz Listen connects to your DAW on the local network to stream low-latency audio.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Kingz Listen uses the camera to scan QR codes for quick connection setup.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
