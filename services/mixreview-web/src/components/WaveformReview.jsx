@@ -167,6 +167,7 @@ export function WaveformReview({
   useEffect(() => {
     const stage = waveformStageRef.current;
     if (!stage) return;
+    if (isMobileViewport()) return;
 
     function getPinchDist(touches) {
       return Math.hypot(
