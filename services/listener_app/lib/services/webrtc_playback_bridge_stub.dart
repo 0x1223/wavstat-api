@@ -42,20 +42,44 @@ class WebRtcPlaybackBridge {
 
   final PcmPlaybackBridge _pcmPlaybackBridge = PcmPlaybackBridge();
   bool _active = false;
-  bool _peerReady = false;  // NEW: tracks if peer connection is created and ready
+  bool _peerReady =
+      false; // NEW: tracks if peer connection is created and ready
   bool _playbackStartedSignaled = false;
   bool _remoteDescriptionSet = false;
-  bool _processingSignal = false;  // NEW: guard against concurrent signal processing
+  bool _processingSignal =
+      false; // NEW: guard against concurrent signal processing
+  int _streamSampleRate = 48000;
   int _offerGeneration = 0;
   int _pcmPacketCount = 0;
   Timer? _disconnectTimer;
+  Timer? _legacyOfferFallbackTimer;
+  String? _lastOfferSdp;
+  String _lastOfferType = 'offer';
+  bool _legacySignalingFallbackActive = false;
   final List<RTCIceCandidate> _pendingCandidates = [];
-  final List<Map<String, dynamic>> _queuedSignalMessages = [];  // NEW: queue for early-arriving signaling
+  final List<Map<String, dynamic>> _queuedSignalMessages =
+      []; // NEW: queue for early-arriving signaling
 
   PcmPlaybackTelemetry get telemetry => _telemetry;
 
   void configureTransport(TransportConfig config) {
     _pcmPlaybackBridge.configureTransport(config);
+  }
+
+  Future<PcmPlaybackTelemetry> resetToLiveEdge({
+    String reason = 'live-edge',
+  }) async {
+    _playbackStartedSignaled = false;
+    _pcmPacketCount = 0;
+    return _pcmPlaybackBridge.resetToLiveEdge(reason: reason);
+  }
+
+  Future<void> updateStreamFormat(Map<String, dynamic> message) async {
+    final sampleRate = message['sampleRate'];
+    if (sampleRate is num && sampleRate > 0) {
+      _streamSampleRate = sampleRate.round();
+      await _pcmPlaybackBridge.configureStreamSampleRate(_streamSampleRate);
+    }
   }
 
   /// Start WebRTC signaling: create peer, offer, and begin ICE.
@@ -70,17 +94,21 @@ class WebRtcPlaybackBridge {
 
     try {
       await _pcmPlaybackBridge.start();
+      await resetToLiveEdge(reason: 'webrtc-start');
       debugPrint('[KINGZ WebRTC] creating peer connection...');
       await _createPeer();
-      _peerReady = true;  // CRITICAL: mark peer as ready BEFORE processing queued messages
-      debugPrint('[KINGZ WebRTC] peer connection ready, queued messages: ${_queuedSignalMessages.length}');
+      _peerReady =
+          true; // CRITICAL: mark peer as ready BEFORE processing queued messages
+      debugPrint(
+          '[KINGZ WebRTC] peer connection ready, queued messages: ${_queuedSignalMessages.length}');
 
       // Flush any signaling messages that arrived while peer was initializing
       final queuedCopy = List<Map<String, dynamic>>.from(_queuedSignalMessages);
       _queuedSignalMessages.clear();
 
       for (final message in queuedCopy) {
-        debugPrint('[KINGZ WebRTC] processing queued signal (${message['type']})');
+        debugPrint(
+            '[KINGZ WebRTC] processing queued signal (${message['type']})');
         await handleSignal(message);
       }
 
@@ -102,14 +130,16 @@ class WebRtcPlaybackBridge {
 
     // CRITICAL FIX: Queue messages if peer isn't ready yet
     if (!_peerReady) {
-      debugPrint('[KINGZ WebRTC] queueing signal (peer not ready): type=$type gen=$generation');
+      debugPrint(
+          '[KINGZ WebRTC] queueing signal (peer not ready): type=$type gen=$generation');
       _queuedSignalMessages.add(message);
       return;
     }
 
     // NEW: Prevent concurrent signal processing which can corrupt peer state
     if (_processingSignal) {
-      debugPrint('[KINGZ WebRTC] WARNING: signal processing already in progress, queueing: type=$type');
+      debugPrint(
+          '[KINGZ WebRTC] WARNING: signal processing already in progress, queueing: type=$type');
       _queuedSignalMessages.add(message);
       return;
     }
@@ -119,32 +149,41 @@ class WebRtcPlaybackBridge {
     try {
       final peer = _peer;
       if (peer == null) {
-        debugPrint('[KINGZ WebRTC] ERROR: handleSignal called with peerReady=true but peer is null!');
+        debugPrint(
+            '[KINGZ WebRTC] ERROR: handleSignal called with peerReady=true but peer is null!');
         return;
       }
-      if (type == 'webrtc.answer') {
+      if (type == 'webrtc.answer' || type == 'webrtc-answer') {
         if (!_matchesOfferGeneration(generation)) {
-          debugPrint('[KINGZ WebRTC] stale answer (gen=$generation, expected=$_offerGeneration), ignoring');
+          debugPrint(
+              '[KINGZ WebRTC] stale answer (gen=$generation, expected=$_offerGeneration), ignoring');
           return;
         }
+        _legacyOfferFallbackTimer?.cancel();
+        _legacyOfferFallbackTimer = null;
+        _legacySignalingFallbackActive = type == 'webrtc-answer';
         final sdp = message['sdp'];
         if (sdp is! String || sdp.isEmpty) {
           throw StateError('ERROR: webrtc.answer missing SDP payload');
         }
-        debugPrint('[KINGZ WebRTC] answer received (gen=$generation, sdpLen=${sdp.length})');
+        debugPrint(
+            '[KINGZ WebRTC] answer received (gen=$generation, sdpLen=${sdp.length})');
 
         // CRITICAL: PRINT ENTIRE RAW ANSWER SDP FROM JUCE FOR M-LINE DIAGNOSTIC
-        debugPrint('======== JUCE ANSWER SDP (BEFORE FIX) (${sdp.length} bytes) ========');
+        debugPrint(
+            '======== JUCE ANSWER SDP (BEFORE FIX) (${sdp.length} bytes) ========');
         debugPrint(sdp);
         debugPrint('======== END JUCE ANSWER SDP ========');
 
         // CRITICAL: Verify peer is still valid and in correct state
         final currentPeer = _peer;
         if (currentPeer == null) {
-          throw StateError('ERROR: peer was disposed before setRemoteDescription');
+          throw StateError(
+              'ERROR: peer was disposed before setRemoteDescription');
         }
         if (!_active) {
-          throw StateError('ERROR: WebRTC bridge is not active, ignoring answer');
+          throw StateError(
+              'ERROR: WebRTC bridge is not active, ignoring answer');
         }
 
         // Fix DTLS setup attribute for answerer role (flutter_webrtc strict validation)
@@ -152,23 +191,28 @@ class WebRtcPlaybackBridge {
         debugPrint('[KINGZ WebRTC] fixed SDP: ${fixedSdp.length} bytes');
 
         // CRITICAL: PRINT ENTIRE FIXED ANSWER SDP BEFORE ATTEMPTING setRemoteDescription
-        debugPrint('======== JUCE ANSWER SDP (AFTER FIX) (${fixedSdp.length} bytes) ========');
+        debugPrint(
+            '======== JUCE ANSWER SDP (AFTER FIX) (${fixedSdp.length} bytes) ========');
         debugPrint(fixedSdp);
         debugPrint('======== END FIXED ANSWER SDP ========');
 
         // Wait for local description to be fully set
-        debugPrint('[KINGZ WebRTC] waiting for local description to be ready...');
+        debugPrint(
+            '[KINGZ WebRTC] waiting for local description to be ready...');
         await Future.delayed(const Duration(milliseconds: 100));
 
         // Verify peer is STILL valid (not disposed during delay)
         if (_peer == null) {
-          throw StateError('ERROR: peer was disposed while waiting to set remote description');
+          throw StateError(
+              'ERROR: peer was disposed while waiting to set remote description');
         }
         if (!_active) {
-          throw StateError('ERROR: bridge deactivated while waiting to set remote description');
+          throw StateError(
+              'ERROR: bridge deactivated while waiting to set remote description');
         }
 
-        debugPrint('[KINGZ WebRTC] calling setRemoteDescription with fixed answer SDP...');
+        debugPrint(
+            '[KINGZ WebRTC] calling setRemoteDescription with fixed answer SDP...');
         await currentPeer.setRemoteDescription(
           RTCSessionDescription(fixedSdp, 'answer'),
         );
@@ -180,7 +224,8 @@ class WebRtcPlaybackBridge {
         final candidatesToFlush = List.of(_pendingCandidates);
         _pendingCandidates.clear();
 
-        debugPrint('[KINGZ WebRTC] flushing ${candidatesToFlush.length} pending ICE candidates');
+        debugPrint(
+            '[KINGZ WebRTC] flushing ${candidatesToFlush.length} pending ICE candidates');
         for (final candidate in candidatesToFlush) {
           try {
             await peer.addCandidate(candidate);
@@ -191,14 +236,16 @@ class WebRtcPlaybackBridge {
         return;
       }
 
-      if (type == 'webrtc.ice-candidate') {
+      if (type == 'webrtc.ice-candidate' || type == 'webrtc-candidate') {
         if (!_matchesOfferGeneration(generation)) {
-          debugPrint('[KINGZ WebRTC] stale ICE candidate (gen=$generation), ignoring');
+          debugPrint(
+              '[KINGZ WebRTC] stale ICE candidate (gen=$generation), ignoring');
           return;
         }
         final candidate = message['candidate'];
         if (candidate is! Map<String, dynamic>) {
-          debugPrint('[KINGZ WebRTC] ERROR: ice-candidate missing candidate data');
+          debugPrint(
+              '[KINGZ WebRTC] ERROR: ice-candidate missing candidate data');
           return;
         }
 
@@ -210,12 +257,14 @@ class WebRtcPlaybackBridge {
 
         // If remote description not set yet, buffer the candidate
         if (!_remoteDescriptionSet) {
-          debugPrint('[KINGZ WebRTC] buffering ICE candidate (remote description not set, buffered=${_pendingCandidates.length})');
+          debugPrint(
+              '[KINGZ WebRTC] buffering ICE candidate (remote description not set, buffered=${_pendingCandidates.length})');
           _pendingCandidates.add(iceCandidate);
           return;
         }
 
-        debugPrint('[KINGZ WebRTC] adding ICE candidate (buffered=${_pendingCandidates.length})');
+        debugPrint(
+            '[KINGZ WebRTC] adding ICE candidate (buffered=${_pendingCandidates.length})');
         await peer.addCandidate(iceCandidate);
         return;
       }
@@ -234,7 +283,24 @@ class WebRtcPlaybackBridge {
       await stop();
       onFallback?.call('signal-failed');
     } finally {
-      _processingSignal = false;  // CRITICAL: always reset to allow next message
+      _processingSignal = false; // CRITICAL: always reset to allow next message
+
+      if (_active && _peerReady && _queuedSignalMessages.isNotEmpty) {
+        final queuedCopy =
+            List<Map<String, dynamic>>.from(_queuedSignalMessages);
+        _queuedSignalMessages.clear();
+
+        unawaited(Future<void>(() async {
+          for (final queuedMessage in queuedCopy) {
+            if (!_active || !_peerReady) {
+              return;
+            }
+            debugPrint(
+                '[KINGZ WebRTC] draining queued signal (${queuedMessage['type']})');
+            await handleSignal(queuedMessage);
+          }
+        }));
+      }
     }
   }
 
@@ -244,16 +310,22 @@ class WebRtcPlaybackBridge {
     _peerReady = false;
     _playbackStartedSignaled = false;
     _remoteDescriptionSet = false;
-    _processingSignal = false;  // Reset signal processing flag
+    _processingSignal = false; // Reset signal processing flag
     _pcmPacketCount = 0;
     _pendingCandidates.clear();
     _queuedSignalMessages.clear();
     _disconnectTimer?.cancel();
     _disconnectTimer = null;
+    _legacyOfferFallbackTimer?.cancel();
+    _legacyOfferFallbackTimer = null;
+    _lastOfferSdp = null;
+    _lastOfferType = 'offer';
+    _legacySignalingFallbackActive = false;
     _closePeer();
     _sendSignal = null;
     await _pcmPlaybackBridge.stop();
-    _updateTelemetry(outputActive: false, stateOverride: 'native-webrtc-stopped');
+    _updateTelemetry(
+        outputActive: false, stateOverride: 'native-webrtc-stopped');
   }
 
   /// Resume playback (manual user interaction).
@@ -286,12 +358,15 @@ class WebRtcPlaybackBridge {
     };
 
     try {
-      debugPrint('[KINGZ WebRTC] calling createPeerConnection() with config: $config');
+      debugPrint(
+          '[KINGZ WebRTC] calling createPeerConnection() with config: $config');
       _peer = await createPeerConnection(config);
       final generation = ++_offerGeneration;
-      debugPrint('[KINGZ WebRTC] peer connection created (generation=$generation)');
+      debugPrint(
+          '[KINGZ WebRTC] peer connection created (generation=$generation)');
     } catch (error, stackTrace) {
-      debugPrint('[KINGZ WebRTC] ERROR creating peer connection: $error\n$stackTrace');
+      debugPrint(
+          '[KINGZ WebRTC] ERROR creating peer connection: $error\n$stackTrace');
       rethrow;
     }
     final peer = _peer!;
@@ -302,13 +377,24 @@ class WebRtcPlaybackBridge {
     // offerer side — that callback is for answerer-initiated channels only. We must
     // capture the returned channel and attach PCM handlers immediately.
     try {
-      debugPrint('[KINGZ WebRTC] creating kingz-pcm data channel (pre-negotiation)...');
-      final dataChannelInit = RTCDataChannelInit()..ordered = false;
-      final localDc = await peer.createDataChannel('kingz-pcm', dataChannelInit);
+      debugPrint(
+          '[KINGZ WebRTC] creating kingz-pcm data channel (pre-negotiation)...');
+      final dataChannelInit = RTCDataChannelInit()
+        ..ordered = false
+        ..binaryType = 'binary'
+        ..protocol = 'audio/L16;rate=48000;channels=2'
+        // flutter_webrtc 0.9.x always serializes an id, and iOS then treats it
+        // as an explicit SCTP stream id. The plugin answer uses DTLS active,
+        // making this Flutter offerer the passive side, which must use odd ids.
+        ..id = 1;
+      final localDc =
+          await peer.createDataChannel('kingz-pcm', dataChannelInit);
       _attachPcmDataChannel(localDc, generation);
-      debugPrint('[KINGZ WebRTC] kingz-pcm data channel created and handlers attached');
+      debugPrint(
+          '[KINGZ WebRTC] kingz-pcm data channel created and handlers attached');
     } catch (error) {
-      debugPrint('[KINGZ WebRTC] WARNING: failed to pre-create data channel: $error');
+      debugPrint(
+          '[KINGZ WebRTC] WARNING: failed to pre-create data channel: $error');
     }
 
     peer.onIceCandidate = (RTCIceCandidate candidate) {
@@ -316,15 +402,23 @@ class WebRtcPlaybackBridge {
         return;
       }
       debugPrint('[KINGZ WebRTC] local ICE candidate');
+      final candidatePayload = {
+        'candidate': candidate.candidate ?? '',
+        'sdpMid': candidate.sdpMid,
+        'sdpMLineIndex': candidate.sdpMLineIndex ?? 0,
+      };
       _sendSignal?.call({
         'type': 'webrtc.ice-candidate',
         'offerGeneration': generation,
-        'candidate': {
-          'candidate': candidate.candidate ?? '',
-          'sdpMid': candidate.sdpMid,
-          'sdpMLineIndex': candidate.sdpMLineIndex ?? 0,
-        },
+        'candidate': candidatePayload,
       });
+      if (_legacySignalingFallbackActive) {
+        _sendSignal?.call({
+          'type': 'webrtc-candidate',
+          'offerGeneration': generation,
+          'candidate': candidatePayload,
+        });
+      }
     };
 
     peer.onConnectionState = (RTCPeerConnectionState state) {
@@ -342,18 +436,42 @@ class WebRtcPlaybackBridge {
 
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
           state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        _updateTelemetry(outputActive: false, stateOverride: 'native-webrtc-$state');
+        _updateTelemetry(
+            outputActive: false, stateOverride: 'native-webrtc-$state');
         _scheduleDisconnectRecovery(generation);
       }
 
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
-        _updateTelemetry(outputActive: false, stateOverride: 'native-webrtc-closed');
+        _updateTelemetry(
+            outputActive: false, stateOverride: 'native-webrtc-closed');
       }
+    };
+
+    peer.onIceConnectionState = (RTCIceConnectionState state) {
+      if (generation != _offerGeneration || !_active) {
+        return;
+      }
+      debugPrint('[KINGZ WebRTC] ICE connection state: $state');
+    };
+
+    peer.onIceGatheringState = (RTCIceGatheringState state) {
+      if (generation != _offerGeneration || !_active) {
+        return;
+      }
+      debugPrint('[KINGZ WebRTC] ICE gathering state: $state');
+    };
+
+    peer.onSignalingState = (RTCSignalingState state) {
+      if (generation != _offerGeneration || !_active) {
+        return;
+      }
+      debugPrint('[KINGZ WebRTC] signaling state: $state');
     };
 
     peer.onDataChannel = (RTCDataChannel channel) {
       if (generation != _offerGeneration || !_active) {
-        debugPrint('[KINGZ WebRTC] ignoring data channel (generation mismatch or inactive)');
+        debugPrint(
+            '[KINGZ WebRTC] ignoring data channel (generation mismatch or inactive)');
         return;
       }
       debugPrint('[KINGZ WebRTC] data channel received: ${channel.label}');
@@ -378,7 +496,8 @@ class WebRtcPlaybackBridge {
       // kingz-pcm data channel created in _createPeer), so offer and answer always match.
       final constraints = <String, dynamic>{};
 
-      debugPrint('[KINGZ WebRTC] calling peer.createOffer() (data-channel-only, no audio m-line)');
+      debugPrint(
+          '[KINGZ WebRTC] calling peer.createOffer() (data-channel-only, no audio m-line)');
       final offer = await peer.createOffer(constraints);
 
       if (offer.sdp == null || offer.sdp!.isEmpty) {
@@ -388,7 +507,8 @@ class WebRtcPlaybackBridge {
       debugPrint('[KINGZ WebRTC] offer created: ${offer.sdp!.length} bytes');
 
       // CRITICAL: PRINT ENTIRE OFFER SDP FOR M-LINE DIAGNOSTIC
-      debugPrint('======== FLUTTER OFFER SDP (${offer.sdp!.length} bytes) ========');
+      debugPrint(
+          '======== FLUTTER OFFER SDP (${offer.sdp!.length} bytes) ========');
       debugPrint(offer.sdp!);
       debugPrint('======== END OFFER SDP ========');
 
@@ -396,30 +516,70 @@ class WebRtcPlaybackBridge {
       await peer.setLocalDescription(offer);
 
       final generation = _offerGeneration;
-      debugPrint('[KINGZ WebRTC] offer created successfully (generation=$generation sdpLen=${offer.sdp!.length})');
+      debugPrint(
+          '[KINGZ WebRTC] offer created successfully (generation=$generation sdpLen=${offer.sdp!.length})');
 
       _sendSignal?.call({
         'type': 'webrtc.offer',
         'sdp': offer.sdp ?? '',
         'offerGeneration': generation,
       });
+      _armLegacyOfferFallback(
+        generation: generation,
+        sdp: offer.sdp ?? '',
+        descriptionType: offer.type ?? 'offer',
+      );
     } catch (error, stackTrace) {
-      debugPrint('[KINGZ WebRTC] peer_connection_offer_failed: $error\n$stackTrace');
+      debugPrint(
+          '[KINGZ WebRTC] peer_connection_offer_failed: $error\n$stackTrace');
       rethrow;
     }
+  }
+
+  void _armLegacyOfferFallback({
+    required int generation,
+    required String sdp,
+    required String descriptionType,
+  }) {
+    _legacyOfferFallbackTimer?.cancel();
+    _lastOfferSdp = sdp;
+    _lastOfferType = descriptionType;
+    _legacySignalingFallbackActive = false;
+
+    _legacyOfferFallbackTimer = Timer(const Duration(milliseconds: 900), () {
+      if (!_active ||
+          generation != _offerGeneration ||
+          _remoteDescriptionSet ||
+          _sendSignal == null ||
+          _lastOfferSdp == null) {
+        return;
+      }
+
+      _legacySignalingFallbackActive = true;
+      debugPrint(
+          '[KINGZ WebRTC] no dotted answer yet; sending legacy offer fallback (gen=$generation)');
+      _sendSignal?.call({
+        'type': 'webrtc-offer',
+        'sdp': _lastOfferSdp ?? '',
+        'descriptionType': _lastOfferType,
+        'offerGeneration': generation,
+      });
+    });
   }
 
   /// Attach PCM message and state handlers to plugin's data channel.
   void _attachPcmDataChannel(RTCDataChannel channel, int generation) {
     _pcmDataChannel = channel;
-    debugPrint('[KINGZ WebRTC] _attachPcmDataChannel: gen=$generation label=${channel.label} state=${channel.state}');
+    debugPrint(
+        '[KINGZ WebRTC] _attachPcmDataChannel: gen=$generation label=${channel.label} state=${channel.state}');
 
     channel.onMessage = (RTCDataChannelMessage message) {
       final currentGen = _offerGeneration;
       final isActive = _active;
 
       if (generation != currentGen || !isActive) {
-        debugPrint('[KINGZ PCM] DROPPED: gen=$generation currentGen=$currentGen active=$isActive');
+        debugPrint(
+            '[KINGZ PCM] DROPPED: gen=$generation currentGen=$currentGen active=$isActive');
         return;
       }
 
@@ -429,12 +589,14 @@ class WebRtcPlaybackBridge {
       _pcmPacketCount++;
 
       if (_pcmPacketCount <= 10) {
-        debugPrint('[KINGZ PCM] packet #$_pcmPacketCount: isBinary=$isBinary bytes=${data.length}');
+        debugPrint(
+            '[KINGZ PCM] packet #$_pcmPacketCount: isBinary=$isBinary bytes=${data.length}');
       }
 
       if (data.isEmpty) {
         // If isBinary=true but bytes=0 it means flutter_webrtc decoded it as text.
-        debugPrint('[KINGZ PCM] EMPTY packet #$_pcmPacketCount: isBinary=$isBinary text="${isBinary ? '(binary flag set — zero bytes)' : message.text.length > 40 ? message.text.substring(0, 40) : message.text}"');
+        debugPrint(
+            '[KINGZ PCM] EMPTY packet #$_pcmPacketCount: isBinary=$isBinary text="${isBinary ? '(binary flag set — zero bytes)' : message.text.length > 40 ? message.text.substring(0, 40) : message.text}"');
         return;
       }
 
@@ -443,7 +605,8 @@ class WebRtcPlaybackBridge {
 
     channel.onDataChannelState = (RTCDataChannelState state) {
       if (generation != _offerGeneration) {
-        debugPrint('[KINGZ PCM] state change ignored (stale gen=$generation current=$_offerGeneration): $state');
+        debugPrint(
+            '[KINGZ PCM] state change ignored (stale gen=$generation current=$_offerGeneration): $state');
         return;
       }
       debugPrint('[KINGZ PCM] state → $state (gen=$generation)');
@@ -451,7 +614,7 @@ class WebRtcPlaybackBridge {
       if (state == RTCDataChannelState.RTCDataChannelOpen) {
         debugPrint('[KINGZ PCM] OPEN — plugin should begin sending PCM now');
         _updateTelemetry(
-          outputActive: true,
+          outputActive: false,
           stateOverride: 'native-webrtc-pcm-channel-open',
         );
       } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
@@ -465,13 +628,21 @@ class WebRtcPlaybackBridge {
 
   /// Process incoming PCM data and trigger playback started on first packet.
   void _handlePcmDataChannelMessage(typed.Uint8List bytes) {
-    final telemetry = _pcmPlaybackBridge.enqueueBytes(
-      bytes,
-      channels: 2,
-      sampleRate: 48000,
-      bitDepth: 16,
-      chunkDurationMs: 20,
-    );
+    PcmPlaybackTelemetry telemetry;
+    try {
+      telemetry = _pcmPlaybackBridge.enqueueBytes(
+        bytes,
+        channels: 2,
+        sampleRate: _streamSampleRate,
+        bitDepth: 16,
+        chunkDurationMs: ((bytes.lengthInBytes / 4) * 1000 / _streamSampleRate)
+            .round()
+            .clamp(1, 100),
+      );
+    } catch (e, st) {
+      debugPrint('[KINGZ PCM] enqueueBytes error (packet dropped): $e\n$st');
+      return;
+    }
     onTelemetry?.call(telemetry);
 
     if (!_playbackStartedSignaled && telemetry.outputActive) {

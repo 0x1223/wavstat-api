@@ -32,6 +32,11 @@ class LanAudioEvent {
     this.streamStatus,
     this.streamUrl,
     this.durationLabel,
+    this.dawTransportPlaying,
+    this.dawTransportChanged,
+    this.dawPositionSeconds,
+    this.dawPpqPosition,
+    this.dawBpm,
     this.errorMessage,
   });
 
@@ -43,6 +48,11 @@ class LanAudioEvent {
   final String? streamStatus;
   final Uri? streamUrl;
   final String? durationLabel;
+  final bool? dawTransportPlaying;
+  final bool? dawTransportChanged;
+  final double? dawPositionSeconds;
+  final double? dawPpqPosition;
+  final double? dawBpm;
   final String? errorMessage;
 }
 
@@ -63,6 +73,7 @@ class LanAudioClient {
   bool _isDisposed = false;
   int _reconnectAttempts = 0;
   int _reconnectCount = 0;
+  int _lastTransportSyncSequence = 0;
   StreamTelemetry _latestTelemetry = const StreamTelemetry();
   final RealtimeStreamListener _realtimeStreamListener =
       RealtimeStreamListener();
@@ -84,7 +95,8 @@ class LanAudioClient {
     _webRtcPlaybackBridge
         .configureTransport(_audioEngineService.transportConfig);
     _pcmPlaybackBridge.configureTransport(_audioEngineService.transportConfig);
-    debugPrint('[KINGZ] LanAudioClient: bridge=${_pcmPlaybackBridge.telemetry.audioContextState} kIsWeb=$kIsWeb');
+    debugPrint(
+        '[KINGZ] LanAudioClient: bridge=${_pcmPlaybackBridge.telemetry.audioContextState} kIsWeb=$kIsWeb');
   }
 
   Stream<LanAudioEvent> get events => _events.stream;
@@ -113,6 +125,7 @@ class LanAudioClient {
     _webRtcActive = false;
     _pcmFallbackActive = false;
     _pcmFallbackAllowed = false;
+    _resetTransportSync();
     await _webRtcPlaybackBridge.stop();
     await _pcmPlaybackBridge.stop();
     _latestTelemetry = const StreamTelemetry();
@@ -145,8 +158,10 @@ class LanAudioClient {
     MonitoringMode mode, {
     bool enablePcmPlayback = false,
   }) async {
-    debugPrint('[KINGZ] startListening: ENTRY mode=$mode enablePcmPlayback=$enablePcmPlayback kIsWeb=$kIsWeb channel=${_channel != null}');
+    debugPrint(
+        '[KINGZ] startListening: ENTRY mode=$mode enablePcmPlayback=$enablePcmPlayback kIsWeb=$kIsWeb channel=${_channel != null}');
     _wasListening = true;
+    _resetTransportSync();
     _pcmFallbackAllowed = enablePcmPlayback;
     _pcmFallbackActive = false;
     final state = _audioEngineService.selectMode(mode);
@@ -154,23 +169,25 @@ class LanAudioClient {
     _pcmPlaybackBridge.configureTransport(state.transportConfig);
     _realtimeStreamListener.startSession();
     await _pcmPlaybackBridge.stop();
+    await _webRtcPlaybackBridge.resetToLiveEdge(reason: 'listen-start');
     var playbackTelemetry = _webRtcPlaybackBridge.telemetry;
     if (enablePcmPlayback) {
       try {
-        _webRtcActive = await _webRtcPlaybackBridge.start(
-          sendSignal: _send,
-          onFallback: (reason) {
-            unawaited(_startPcmFallback(reason));
-          },
-        );
         _webRtcPlaybackBridge.onPlaybackStarted = () {
-          debugPrint('[KINGZ] startListening: WebRTC playback started (first PCM packet)');
+          debugPrint(
+              '[KINGZ] startListening: WebRTC playback started (first PCM packet)');
           _events.add(
             const LanAudioEvent(
               streamStatus: 'playing',
             ),
           );
         };
+        _webRtcActive = await _webRtcPlaybackBridge.start(
+          sendSignal: _send,
+          onFallback: (reason) {
+            unawaited(_startPcmFallback(reason));
+          },
+        );
       } catch (_) {
         _webRtcActive = false;
       }
@@ -192,15 +209,34 @@ class LanAudioClient {
     );
     final result = _webRtcActive || playbackTelemetry.outputActive;
     debugPrint('[KINGZ] startListening: _webRtcActive=$_webRtcActive');
-    debugPrint('[KINGZ] startListening: playbackTelemetry.outputActive=${playbackTelemetry.outputActive}');
-    debugPrint('[KINGZ] startListening: playbackTelemetry.audioContextState=${playbackTelemetry.audioContextState}');
+    debugPrint(
+        '[KINGZ] startListening: playbackTelemetry.outputActive=${playbackTelemetry.outputActive}');
+    debugPrint(
+        '[KINGZ] startListening: playbackTelemetry.audioContextState=${playbackTelemetry.audioContextState}');
     debugPrint('[KINGZ] startListening: EXIT returning $result');
     return result;
+  }
+
+  Future<void> resetPlaybackToLiveEdge({String reason = 'live-edge'}) async {
+    if (!_wasListening || _manualDisconnect || _isDisposed) {
+      return;
+    }
+
+    final playbackTelemetry = _pcmFallbackActive
+        ? await _pcmPlaybackBridge.resetToLiveEdge(reason: reason)
+        : await _webRtcPlaybackBridge.resetToLiveEdge(reason: reason);
+    _events.add(
+      LanAudioEvent(
+        realtimeMetrics:
+            _realtimeStreamListener.withPlaybackTelemetry(playbackTelemetry),
+      ),
+    );
   }
 
   Future<void> stopListening() async {
     _wasListening = false;
     _pcmIdleTimer?.cancel();
+    _resetTransportSync();
     _webRtcActive = false;
     _pcmFallbackActive = false;
     _pcmFallbackAllowed = false;
@@ -298,9 +334,11 @@ class LanAudioClient {
       } else if (_pendingStartMode != null) {
         final mode = _pendingStartMode;
         _pendingStartMode = null;
-        debugPrint('[KINGZ] _open: PENDING mode - will initiate WebRTC with mode=$mode');
+        debugPrint(
+            '[KINGZ] _open: PENDING mode - will initiate WebRTC with mode=$mode');
       } else {
-        debugPrint('[KINGZ] _open: INITIAL connection - WebRTC signaling will begin on startListening()');
+        debugPrint(
+            '[KINGZ] _open: INITIAL connection - WebRTC signaling will begin on startListening()');
       }
     } catch (_) {
       _events.add(
@@ -317,7 +355,8 @@ class LanAudioClient {
 
   void _handleMessage(dynamic rawMessage) {
     if (rawMessage is! String) {
-      debugPrint('[KINGZ] _handleMessage: received non-string (${rawMessage.runtimeType})');
+      debugPrint(
+          '[KINGZ] _handleMessage: received non-string (${rawMessage.runtimeType})');
       return;
     }
 
@@ -329,17 +368,28 @@ class LanAudioClient {
       _events.add(
         LanAudioEvent(
           connectionState: LanAudioConnectionState.error,
-          errorMessage: 'Malformed server message: ${e.toString().split('\n').first}',
+          errorMessage:
+              'Malformed server message: ${e.toString().split('\n').first}',
         ),
       );
       return;
     }
 
     final type = message['type'] as String?;
-    debugPrint('[KINGZ] _handleMessage: RECEIVED type=$type');
+    if (type != 'transport.sync' && type != 'transport.state') {
+      debugPrint('[KINGZ] _handleMessage: RECEIVED type=$type');
+    }
+
+    if (type == 'transport.sync' || type == 'transport.state') {
+      _handleTransportMessage(message,
+          isStateMessage: type == 'transport.state');
+      return;
+    }
 
     if (type == 'webrtc.answer' ||
+        type == 'webrtc-answer' ||
         type == 'webrtc.ice-candidate' ||
+        type == 'webrtc-candidate' ||
         type == 'webrtc.connected' ||
         type == 'webrtc.ping' ||
         type == 'webrtc.error') {
@@ -372,7 +422,8 @@ class LanAudioClient {
         final playbackMetrics =
             _realtimeStreamListener.withPlaybackTelemetry(playbackTelemetry);
         _armPcmIdleTimer();
-        final engineState = _audioEngineService.applyEngine(_readEngine(message));
+        final engineState =
+            _audioEngineService.applyEngine(_readEngine(message));
         final transportConfig = _bufferControllerService.updateFromChunk(
           engineState.transportConfig,
           receivedPackets: realtimeMetrics.receivedPackets,
@@ -393,7 +444,8 @@ class LanAudioClient {
           ),
         );
       } catch (e, st) {
-        debugPrint('[KINGZ] _handleMessage: PCM chunk processing failed: $e\n$st');
+        debugPrint(
+            '[KINGZ] _handleMessage: PCM chunk processing failed: $e\n$st');
         _events.add(
           LanAudioEvent(
             connectionState: LanAudioConnectionState.error,
@@ -404,8 +456,11 @@ class LanAudioClient {
       return;
     }
 
-    if (type == 'webrtc.data-channel-open') {
-      debugPrint('[KINGZ] _handleMessage: RECEIVED webrtc.data-channel-open - PCM channel ready');
+    if (type == 'webrtc.data-channel-open' ||
+        type == 'webrtc-data-channel-open') {
+      debugPrint(
+          '[KINGZ] _handleMessage: RECEIVED webrtc.data-channel-open - PCM channel ready');
+      unawaited(_webRtcPlaybackBridge.updateStreamFormat(message));
       final engineState = _audioEngineService.applyEngine(_readEngine(message));
       _events.add(
         LanAudioEvent(
@@ -420,7 +475,8 @@ class LanAudioClient {
     }
 
     if (type == 'webrtc.error') {
-      debugPrint('[KINGZ] _handleMessage: RECEIVED webrtc.error - ${message['message']}');
+      debugPrint(
+          '[KINGZ] _handleMessage: RECEIVED webrtc.error - ${message['message']}');
       _events.add(
         const LanAudioEvent(
           connectionState: LanAudioConnectionState.error,
@@ -432,8 +488,49 @@ class LanAudioClient {
     }
   }
 
+  void _handleTransportMessage(
+    Map<String, dynamic> message, {
+    required bool isStateMessage,
+  }) {
+    final sequence = _readInt(message['sequence']);
+    final hostPlaying = message['hostPlaying'] == true;
+    final targetLeadMs = _readInt(message['targetLeadMs']);
+    final hostTimeSeconds = _readDouble(message['hostTimeSeconds']);
+    final ppqPosition = _readDouble(message['ppqPosition']);
+    final bpm = _readDouble(message['bpm']);
+    final stateChanged = message['stateChanged'] == true;
+    final droppedSyncs =
+        !isStateMessage && _lastTransportSyncSequence > 0 && sequence > 0
+            ? (sequence - _lastTransportSyncSequence - 1).clamp(0, 9999)
+            : 0;
+
+    if (!isStateMessage) {
+      _lastTransportSyncSequence = sequence;
+    }
+
+    final leadLabel = targetLeadMs > 0 ? '$targetLeadMs ms target' : 'tracking';
+    final transportLabel = hostPlaying ? 'DAW playing' : 'DAW stopped';
+    _latestTelemetry = _latestTelemetry.copyWith(
+      networkStatus: !isStateMessage && droppedSyncs > 0
+          ? 'Sync catching up'
+          : '$transportLabel / $leadLabel',
+    );
+
+    _events.add(
+      LanAudioEvent(
+        telemetry: _latestTelemetry,
+        dawTransportPlaying: hostPlaying,
+        dawTransportChanged: stateChanged,
+        dawPositionSeconds: hostTimeSeconds,
+        dawPpqPosition: ppqPosition,
+        dawBpm: bpm,
+      ),
+    );
+  }
+
   void _handleConnectionLoss() {
-    debugPrint('[KINGZ] _handleConnectionLoss: manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed');
+    debugPrint(
+        '[KINGZ] _handleConnectionLoss: manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed');
     if (_manualDisconnect || _isDisposed) {
       return;
     }
@@ -441,6 +538,7 @@ class LanAudioClient {
     _clientPingTimer?.cancel();
     _pcmIdleTimer?.cancel();
     _webRtcActive = false;
+    _resetTransportSync();
     _channel = null;
     _subscription = null;
     _scheduleReconnect();
@@ -514,7 +612,10 @@ class LanAudioClient {
     _webRtcActive = false;
     _pcmFallbackActive = true;
     await _webRtcPlaybackBridge.stop();
-    final playbackTelemetry = await _pcmPlaybackBridge.start();
+    await _pcmPlaybackBridge.start();
+    final playbackTelemetry = await _pcmPlaybackBridge.resetToLiveEdge(
+      reason: 'pcm-fallback-$reason',
+    );
     _events.add(
       LanAudioEvent(
         realtimeMetrics:
@@ -527,6 +628,7 @@ class LanAudioClient {
 
   Future<void> _restartWebRtcAfterReconnect() async {
     try {
+      await _webRtcPlaybackBridge.resetToLiveEdge(reason: 'reconnect');
       _webRtcActive = await _webRtcPlaybackBridge.start(
         sendSignal: _send,
         onFallback: (reason) {
@@ -544,9 +646,11 @@ class LanAudioClient {
 
   void _send(Map<String, dynamic> payload) {
     final channel = _channel;
-    debugPrint('[KINGZ] _send: type=${payload['type']} channel=${channel != null} manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed');
+    debugPrint(
+        '[KINGZ] _send: type=${payload['type']} channel=${channel != null} manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed');
     if (channel == null || _manualDisconnect || _isDisposed) {
-      debugPrint('[KINGZ] _send: SKIP (channel=${channel != null} manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed)');
+      debugPrint(
+          '[KINGZ] _send: SKIP (channel=${channel != null} manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed)');
       return;
     }
 
@@ -558,7 +662,6 @@ class LanAudioClient {
       _handleConnectionLoss();
     }
   }
-
 
   void _armPcmIdleTimer() {
     _pcmIdleTimer?.cancel();
@@ -595,5 +698,35 @@ class LanAudioClient {
   Map<String, dynamic>? _readEngine(Map<String, dynamic> message) {
     final engine = message['engine'];
     return engine is Map<String, dynamic> ? engine : null;
+  }
+
+  int _readInt(dynamic value, {int fallback = 0}) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.round();
+    }
+    if (value is String) {
+      return int.tryParse(value) ?? fallback;
+    }
+    return fallback;
+  }
+
+  double _readDouble(dynamic value, {double fallback = 0}) {
+    if (value is int) {
+      return value.toDouble();
+    }
+    if (value is num) {
+      return value.toDouble();
+    }
+    if (value is String) {
+      return double.tryParse(value) ?? fallback;
+    }
+    return fallback;
+  }
+
+  void _resetTransportSync() {
+    _lastTransportSyncSequence = 0;
   }
 }

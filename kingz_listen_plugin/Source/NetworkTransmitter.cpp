@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cmath>
 #include <mutex>
 #include <string>
 
@@ -284,15 +285,28 @@ var peerConn      = null;
 var dataChannel   = null;
 var audioCtx      = null;
 var gainNode      = null;
+var mediaDest     = null;
+var mediaAudio    = null;
 var nextPlayTime  = 0;
 var muted         = false;
 var stopped       = false;
 var connected     = false;
+var wantConnected = false;
+var lastHost      = "";
+var lastPort      = "";
 var durationSecs  = 0;
 var durationTimer = null;
 var signalId      = "";
-var bufferAhead   = 0.05;
+var pcmSampleRate = 48000;
+var bufferAhead   = 0.06;
+var maxLead       = 0.16;
+var minLead       = 0.012;
+var underruns     = 0;
+var droppedChunks = 0;
+var scheduledSources = [];
 var pendingCandidates = [];
+var lastHiddenAt = 0;
+var restoreInFlight = false;
 
 function tryParse(s){ try{ return JSON.parse(s); }catch(_){ return null; } }
 
@@ -322,22 +336,109 @@ function stopDuration(){
   document.getElementById("stat-duration").textContent = "0:00";
 }
 
+function configureMediaSession(){
+  if(!("mediaSession" in navigator)) return;
+  try{
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title:"KINGZ LISTEN",
+      artist:"LAN Audio Receiver",
+      album:"Studio Session"
+    });
+    navigator.mediaSession.playbackState = stopped ? "paused" : "playing";
+    navigator.mediaSession.setActionHandler("play", function(){
+      stopped = false;
+      ensureAudio();
+      if(mediaAudio && mediaAudio.paused) mediaAudio.play().catch(function(){});
+      if(audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(function(){});
+      document.getElementById("stop-btn").innerHTML = "&#9644; Stop";
+    });
+    navigator.mediaSession.setActionHandler("pause", function(){
+      stopped = true;
+      stopScheduledSources();
+      if(mediaAudio) mediaAudio.pause();
+      navigator.mediaSession.playbackState = "paused";
+      document.getElementById("stop-btn").innerHTML = "&#9654; Resume";
+    });
+  }catch(_){}
+}
+
+function ensureMediaAudio(){
+  if(mediaAudio) return mediaAudio;
+  var audio = document.createElement("audio");
+  audio.autoplay = true;
+  audio.controls = false;
+  audio.muted = false;
+  audio.defaultMuted = false;
+  audio.volume = 1;
+  audio.setAttribute("playsinline", "");
+  audio.setAttribute("webkit-playsinline", "");
+  audio.setAttribute("data-kingz-listen-output", "true");
+  audio.setAttribute("style", "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-10000px;top:auto;");
+  audio.addEventListener("play", function(){
+    if("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
+  });
+  audio.addEventListener("pause", function(){
+    if("mediaSession" in navigator && stopped) navigator.mediaSession.playbackState = "paused";
+  });
+  document.body.appendChild(audio);
+  mediaAudio = audio;
+  return audio;
+}
+
 function ensureAudio(){
   if(!audioCtx){
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
     gainNode = audioCtx.createGain();
     gainNode.gain.value = parseFloat(document.getElementById("vol-slider").value) / 100;
-    gainNode.connect(audioCtx.destination);
+    configureMediaSession();
+    try{
+      mediaDest = audioCtx.createMediaStreamDestination();
+      gainNode.connect(mediaDest);
+      var audio = ensureMediaAudio();
+      audio.srcObject = mediaDest.stream;
+      audio.play().catch(function(e){ console.warn("media element play blocked", e); });
+    }catch(e){
+      console.warn("media element output unavailable; falling back to AudioContext destination", e);
+      mediaDest = null;
+      gainNode.connect(audioCtx.destination);
+    }
   }
-  if(audioCtx.state === "suspended") audioCtx.resume();
+  if(mediaAudio && mediaAudio.paused && !stopped) mediaAudio.play().catch(function(){});
+  if(audioCtx.state === "suspended") audioCtx.resume().catch(function(){});
+  if("mediaSession" in navigator) navigator.mediaSession.playbackState = stopped ? "paused" : "playing";
+}
+
+function stopScheduledSources(){
+  var sources = scheduledSources.splice(0);
+  sources.forEach(function(src){
+    try{ src.stop(0); }catch(_){}
+    try{ src.disconnect(); }catch(_){}
+  });
+}
+
+function formatSampleRate(rate){
+  return rate >= 1000 ? (rate / 1000).toFixed(rate % 1000 === 0 ? 0 : 1) + "kHz" : rate + "Hz";
+}
+
+function updateStreamFormat(msg){
+  var advertised = Number(msg && msg.sampleRate);
+  if(Number.isFinite(advertised) && advertised >= 8000 && advertised <= 384000){
+    var nextRate = Math.round(advertised);
+    if(nextRate !== pcmSampleRate){
+      pcmSampleRate = nextRate;
+      nextPlayTime = 0;
+      stopScheduledSources();
+    }
+  }
+  document.getElementById("stat-quality").textContent = formatSampleRate(pcmSampleRate) + " / 16-bit";
 }
 
 function playPcm(arrayBuffer){
-  if(!audioCtx || muted || stopped) return;
+  if(!audioCtx || stopped) return;
   var samples = new Int16Array(arrayBuffer);
   var frames  = samples.length / 2;
   if(frames < 1) return;
-  var buf = audioCtx.createBuffer(2, frames, 48000);
+  var buf = audioCtx.createBuffer(2, frames, pcmSampleRate);
   var L = buf.getChannelData(0), R = buf.getChannelData(1);
   for(var i = 0; i < frames; i++){
     L[i] = samples[i*2]   / 32768.0;
@@ -346,12 +447,28 @@ function playPcm(arrayBuffer){
   var src = audioCtx.createBufferSource();
   src.buffer = buf;
   src.connect(gainNode);
+  src.onended = function(){
+    var idx = scheduledSources.indexOf(src);
+    if(idx >= 0) scheduledSources.splice(idx, 1);
+  };
   var now = audioCtx.currentTime;
-  if(nextPlayTime < now + 0.005) nextPlayTime = now + bufferAhead;
+  var lead = nextPlayTime > 0 ? nextPlayTime - now : 0;
+  if(lead > maxLead){
+    droppedChunks++;
+    stopScheduledSources();
+    nextPlayTime = now + bufferAhead;
+    lead = bufferAhead;
+  } else if(nextPlayTime < now + minLead){
+    if(nextPlayTime > 0) underruns++;
+    nextPlayTime = now + bufferAhead;
+    lead = bufferAhead;
+  }
   src.start(nextPlayTime);
+  scheduledSources.push(src);
   nextPlayTime += buf.duration;
+  lead = Math.max(0, nextPlayTime - now);
   document.getElementById("stat-latency").textContent =
-    Math.round(bufferAhead * 1000) + " ms";
+    Math.round(Math.min(lead, maxLead) * 1000) + " ms";
 }
 
 function sendSignal(payload){
@@ -367,13 +484,13 @@ function flushCandidates(){
 
 function onSignal(msg){
   if(!msg || (msg.signal_id && msg.signal_id !== signalId)) return;
-  if(msg.type === "webrtc-answer"){
+  if(msg.type === "webrtc.answer" || msg.type === "webrtc-answer"){
     if(!peerConn) return;
     peerConn.setRemoteDescription({ type: msg.descriptionType || "answer", sdp: msg.sdp })
       .then(flushCandidates).catch(function(e){ console.error("SDP answer",e); });
     return;
   }
-  if(msg.type === "webrtc-candidate"){
+  if(msg.type === "webrtc.ice-candidate" || msg.type === "webrtc-candidate"){
     var cp = (msg.candidate && msg.candidate.candidate)
       ? msg.candidate
       : { candidate: msg.candidate, sdpMid: msg.sdpMid, sdpMLineIndex: msg.sdpMLineIndex };
@@ -391,12 +508,12 @@ function startWebRtc(){
   peerConn = new RTCPeerConnection({ iceServers:[{ urls:"stun:stun.l.google.com:19302" }] });
 
   peerConn.onicecandidate = function(e){
-    if(e.candidate) sendSignal({ type:"webrtc-candidate", candidate:e.candidate.toJSON() });
+    if(e.candidate) sendSignal({ type:"webrtc.ice-candidate", candidate:e.candidate.toJSON() });
   };
   peerConn.onconnectionstatechange = function(){
     var s = peerConn.connectionState;
     if(s === "connected"){
-      setStatus("Live — receiving audio", true);
+      setStatus("Live - receiving audio", true);
       ensureAudio();
       showCards(true);
       startDuration();
@@ -416,17 +533,22 @@ function startWebRtc(){
   peerConn.createOffer()
     .then(function(offer){ return peerConn.setLocalDescription(offer).then(function(){ return offer; }); })
     .then(function(offer){
-      sendSignal({ type:"webrtc-offer", sdp:offer.sdp, descriptionType:offer.type, offerGeneration:Date.now() });
+      sendSignal({ type:"webrtc.offer", sdp:offer.sdp, descriptionType:offer.type, offerGeneration:Date.now() });
     })
     .catch(function(e){ setStatus("Offer failed", false); console.error(e); });
 }
 
 function openSocket(h, p){
+  lastHost = h;
+  lastPort = p;
+  restoreInFlight = true;
   if(socket){ try{ socket.close(); }catch(_){} }
   setStatus("Connecting…", false);
   socket = new WebSocket("ws://" + h + ":" + p + "/");
   socket.onopen = function(){
-    setStatus("Connected — starting audio…", true);
+    restoreInFlight = false;
+    connected = true;
+    setStatus("Connected - starting audio...", true);
     startWebRtc();
   };
   socket.onmessage = function(e){
@@ -436,24 +558,66 @@ function openSocket(h, p){
       var lat = Number(msg.latencyMs || 0);
       if(lat > 0) document.getElementById("stat-latency").textContent = lat.toFixed(0) + " ms";
     }
+    if(msg.type === "webrtc.data-channel-open" || msg.type === "webrtc-data-channel-open"){
+      updateStreamFormat(msg);
+      return;
+    }
     onSignal(msg);
   };
   socket.onclose = function(){
-    setStatus("Disconnected", false);
+    restoreInFlight = false;
     connected = false;
-    document.getElementById("connect-btn").disabled = false;
-    document.getElementById("disconnect-btn").disabled = true;
-    showCards(false);
-    stopDuration();
+    if(wantConnected && !stopped){
+      setStatus(document.hidden ? "Paused - waiting for restore" : "Connection interrupted - restoring...", false);
+      document.getElementById("connect-btn").disabled = true;
+      document.getElementById("disconnect-btn").disabled = false;
+      if(!document.hidden) window.setTimeout(function(){ handleRestore("socket-close"); }, 250);
+    } else {
+      setStatus("Disconnected", false);
+      document.getElementById("connect-btn").disabled = false;
+      document.getElementById("disconnect-btn").disabled = true;
+      showCards(false);
+      stopDuration();
+    }
   };
   socket.onerror = function(){ setStatus("Connection error", false); };
 }
+
+function handleRestore(reason){
+  if(!wantConnected || stopped || restoreInFlight) return;
+  ensureAudio();
+  if(!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING){
+    if(lastHost){
+      setStatus("Restoring audio...", false);
+      openSocket(lastHost, lastPort || "8082");
+    }
+    return;
+  }
+  if(peerConn){
+    var s = peerConn.connectionState;
+    if((s === "failed" || s === "disconnected" || s === "closed") && socket && socket.readyState === WebSocket.OPEN){
+      setStatus("Restoring audio...", false);
+      startWebRtc();
+    }
+  }
+}
+
+document.addEventListener("visibilitychange", function(){
+  if(document.hidden){
+    lastHiddenAt = Date.now();
+    return;
+  }
+  handleRestore("visibility");
+});
+window.addEventListener("pageshow", function(){ handleRestore("pageshow"); });
+window.addEventListener("focus", function(){ handleRestore("focus"); });
 
 document.getElementById("connect-btn").addEventListener("click", function(){
   var h = document.getElementById("ip-input").value.trim();
   var p = document.getElementById("port-input").value.trim() || "8082";
   if(!h){ setStatus("Enter a server IP", false); return; }
   ensureAudio();
+  wantConnected = true;
   connected = true;
   stopped   = false;
   document.getElementById("connect-btn").disabled = true;
@@ -462,10 +626,18 @@ document.getElementById("connect-btn").addEventListener("click", function(){
 });
 
 document.getElementById("disconnect-btn").addEventListener("click", function(){
+  wantConnected = false;
+  restoreInFlight = false;
   connected = false;
+  stopped = true;
+  nextPlayTime = 0;
+  stopScheduledSources();
   if(socket){ try{ socket.close(); }catch(_){} socket = null; }
   if(peerConn){ try{ peerConn.close(); }catch(_){} peerConn = null; }
+  if(mediaAudio){ try{ mediaAudio.pause(); }catch(_){} try{ mediaAudio.remove(); }catch(_){} mediaAudio = null; }
   if(audioCtx){ try{ audioCtx.close(); }catch(_){} audioCtx = null; gainNode = null; }
+  mediaDest = null;
+  if("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
   stopDuration();
   showCards(false);
   setStatus("Disconnected", false);
@@ -478,6 +650,13 @@ document.getElementById("stop-btn").addEventListener("click", function(){
   stopped = !stopped;
   this.innerHTML = stopped ? "&#9654; Resume" : "&#9644; Stop";
   nextPlayTime = 0;
+  if(stopped){
+    stopScheduledSources();
+    if(mediaAudio) mediaAudio.pause();
+  } else {
+    ensureAudio();
+  }
+  if("mediaSession" in navigator) navigator.mediaSession.playbackState = stopped ? "paused" : "playing";
 });
 
 document.getElementById("mute-btn").addEventListener("click", function(){
@@ -493,13 +672,19 @@ document.getElementById("vol-slider").addEventListener("input", function(){
 
 document.getElementById("monitor-btn").classList.add("inactive");
 
-var modes = { "mode-low": 0.02, "mode-bal": 0.05, "mode-safe": 0.12 };
+var modes = {
+  "mode-low":  { target: 0.035, max: 0.10 },
+  "mode-bal":  { target: 0.06,  max: 0.16 },
+  "mode-safe": { target: 0.12,  max: 0.28 }
+};
 Object.keys(modes).forEach(function(id){
   document.getElementById(id).addEventListener("click", function(){
     document.querySelectorAll(".mode-btn").forEach(function(b){ b.classList.remove("active"); });
     this.classList.add("active");
-    bufferAhead  = modes[id];
+    bufferAhead  = modes[id].target;
+    maxLead      = modes[id].max;
     nextPlayTime = 0;
+    stopScheduledSources();
   });
 });)JS";
 }
@@ -649,6 +834,12 @@ bool NetworkTransmitter::start (int portToUse)
     targetChunkMs.store (AudioFifoWorker::chunkDurationMs, std::memory_order_release);
     chunkSizeTransitionPending.store (false, std::memory_order_release);
     lastPacketAdaptationMs = 0;
+    lastTransportSyncMs = 0;
+    lastTransportStateBroadcastMs = 0;
+    lastBroadcastHostPlaying = false;
+    streamTransmitSamplePosition.store (0, std::memory_order_release);
+    transportSyncSequence.store (0, std::memory_order_release);
+    transportStateSequence.store (0, std::memory_order_release);
     shouldListen.store (true, std::memory_order_release);
 
     // CRITICAL DEBUGGING
@@ -669,6 +860,12 @@ void NetworkTransmitter::stop()
     targetChunkMs.store (AudioFifoWorker::chunkDurationMs, std::memory_order_release);
     chunkSizeTransitionPending.store (false, std::memory_order_release);
     lastPacketAdaptationMs = 0;
+    lastTransportSyncMs = 0;
+    lastTransportStateBroadcastMs = 0;
+    lastBroadcastHostPlaying = false;
+    streamTransmitSamplePosition.store (0, std::memory_order_release);
+    transportSyncSequence.store (0, std::memory_order_release);
+    transportStateSequence.store (0, std::memory_order_release);
     signalThreadShouldExit();
     closeSocket (listener);
     stopThread (2000);
@@ -683,6 +880,30 @@ int NetworkTransmitter::getPort() const noexcept
 int NetworkTransmitter::getConnectedClientCount() const noexcept
 {
     return connectedClients.load (std::memory_order_acquire);
+}
+
+void NetworkTransmitter::setStreamSampleRate (double sampleRate) noexcept
+{
+    const auto rounded = static_cast<int> (sampleRate + 0.5);
+    streamSampleRate.store (juce::jlimit (8000, 384000, rounded > 0 ? rounded : AudioFifoWorker::targetSampleRate),
+                            std::memory_order_release);
+}
+
+void NetworkTransmitter::updateTransportSnapshot (bool isPlaying,
+                                                  juce::int64 hostSamplePosition,
+                                                  juce::int64 streamWritePosition,
+                                                  double bpm,
+                                                  double ppqPosition) noexcept
+{
+    hostTransportPlaying.store (isPlaying, std::memory_order_release);
+    hostTransportSamplePosition.store (juce::jmax (static_cast<juce::int64> (0), hostSamplePosition),
+                                       std::memory_order_release);
+    streamWriteSamplePosition.store (juce::jmax (static_cast<juce::int64> (0), streamWritePosition),
+                                     std::memory_order_release);
+    hostTempoBpmX100.store (juce::jlimit (0, 100000, static_cast<int> (std::lround (bpm * 100.0))),
+                            std::memory_order_release);
+    hostPpqPositionX1000.store (static_cast<juce::int64> (std::llround (ppqPosition * 1000.0)),
+                                std::memory_order_release);
 }
 
 void NetworkTransmitter::setExternalSignalingSender (std::function<void (const juce::String&)> sender)
@@ -839,6 +1060,7 @@ void NetworkTransmitter::run()
         acceptPendingClient();      // Accept new HTTP/WebSocket connections
         pumpClients();              // Process HTTP/WebSocket messages
         processWebRtcQueue();        // Handle queued WebRTC operations (non-blocking)
+        maybeBroadcastTransportState();
         streamReadyPcmChunks();      // Stream audio
         wait (2);                   // Small sleep to prevent busy-wait
     }
@@ -1045,11 +1267,13 @@ void NetworkTransmitter::handleHttpRequest (ClientConnection& client)
     if (request.startsWithIgnoreCase ("GET /metadata "))
     {
         const auto currentChunkMs = targetChunkMs.load (std::memory_order_acquire);
+        const auto currentSampleRate = streamSampleRate.load (std::memory_order_acquire);
         auto* realtime = new juce::DynamicObject();
         realtime->setProperty ("transport", "native-plugin-libdatachannel-pcm");
         realtime->setProperty ("chunkMs", currentChunkMs);
-        realtime->setProperty ("framesPerChunk", AudioFifoWorker::framesForChunkMs (currentChunkMs));
-        realtime->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
+        realtime->setProperty ("framesPerChunk", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs)
+                                                                    / (AudioFifoWorker::inputChannels * sizeof (std::int16_t))));
+        realtime->setProperty ("sampleRate", currentSampleRate);
         realtime->setProperty ("channels", AudioFifoWorker::inputChannels);
         realtime->setProperty ("bitDepth", 16);
         realtime->setProperty ("bytesPerChunk", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs)));
@@ -1463,14 +1687,16 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
                 {
                     std::cout << "[KINGZ WEBRTC] kingz-pcm OPEN — sending webrtc.data-channel-open\n" << std::flush;
                     const auto currentChunkMs = targetChunkMs.load (std::memory_order_acquire);
+                    const auto currentSampleRate = streamSampleRate.load (std::memory_order_acquire);
                     auto* response = new juce::DynamicObject();
                     response->setProperty ("type", "webrtc.data-channel-open");
                     response->setProperty ("label", "kingz-pcm");
                     response->setProperty ("format", "pcm_s16le");
-                    response->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
+                    response->setProperty ("sampleRate", currentSampleRate);
                     response->setProperty ("channels", AudioFifoWorker::inputChannels);
                     response->setProperty ("chunkMs", currentChunkMs);
-                    response->setProperty ("framesPerChunk", AudioFifoWorker::framesForChunkMs (currentChunkMs));
+                    response->setProperty ("framesPerChunk", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs)
+                                                                               / (AudioFifoWorker::inputChannels * sizeof (std::int16_t))));
                     response->setProperty ("bytesPerChunk", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentChunkMs)));
                     response->setProperty ("bitrate", pcmTelemetryBitrateBitsPerSecond);
                     response->setProperty ("ordered", false);
@@ -1600,6 +1826,8 @@ void NetworkTransmitter::streamReadyPcmChunks()
 void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChunk& chunk)
 {
     const juce::ScopedLock lock { clientLock };
+    const auto chunkFrames = static_cast<int> (chunk.byteCount
+        / (AudioFifoWorker::inputChannels * sizeof (std::int16_t)));
 
     auto openPcmClientCount = 0;
     auto worstBufferedBytes = std::size_t { 0 };
@@ -1663,6 +1891,103 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChu
     }
 
     chunkSizeTransitionPending.store (false, std::memory_order_release);
+    streamTransmitSamplePosition.fetch_add (chunkFrames, std::memory_order_release);
+    maybeBroadcastTransportSync (chunkFrames);
+}
+
+void NetworkTransmitter::maybeBroadcastTransportSync (int chunkFrames)
+{
+    const auto nowMs = juce::Time::currentTimeMillis();
+    if (nowMs - lastTransportSyncMs < 100)
+        return;
+
+    lastTransportSyncMs = nowMs;
+
+    const auto sampleRate = streamSampleRate.load (std::memory_order_acquire);
+    const auto streamTransmitPosition = streamTransmitSamplePosition.load (std::memory_order_acquire);
+    const auto hostSamplePosition = hostTransportSamplePosition.load (std::memory_order_acquire);
+    const auto streamWritePosition = streamWriteSamplePosition.load (std::memory_order_acquire);
+    const auto bpmX100 = hostTempoBpmX100.load (std::memory_order_acquire);
+    const auto ppqX1000 = hostPpqPositionX1000.load (std::memory_order_acquire);
+    const auto sequence = transportSyncSequence.fetch_add (1, std::memory_order_relaxed) + 1;
+
+    auto* response = new juce::DynamicObject();
+    response->setProperty ("type", "transport.sync");
+    response->setProperty ("sequence", sequence);
+    response->setProperty ("sentAtMs", nowMs);
+    response->setProperty ("sampleRate", sampleRate);
+    response->setProperty ("chunkFrames", chunkFrames);
+    response->setProperty ("streamSamplePosition", streamTransmitPosition);
+    response->setProperty ("streamWriteSamplePosition", streamWritePosition);
+    response->setProperty ("hostSamplePosition", hostSamplePosition);
+    response->setProperty ("hostPlaying", hostTransportPlaying.load (std::memory_order_acquire));
+    response->setProperty ("hostTimeSeconds",
+                           sampleRate > 0 ? static_cast<double> (hostSamplePosition) / static_cast<double> (sampleRate) : 0.0);
+    response->setProperty ("bpm", static_cast<double> (bpmX100) / 100.0);
+    response->setProperty ("ppqPosition", static_cast<double> (ppqX1000) / 1000.0);
+    response->setProperty ("targetLeadMs", 80);
+    response->setProperty ("syncMode", "sideband-low-rate");
+
+    const auto json = jsonString (juce::var (response));
+
+    for (auto& client : clients)
+    {
+        if (client != nullptr
+            && client->websocket
+            && ! client->closeRequested.load (std::memory_order_acquire)
+            && client->pcmChannel != nullptr
+            && client->pcmChannel->isOpen())
+        {
+            sendJson (*client, json);
+        }
+    }
+}
+
+void NetworkTransmitter::maybeBroadcastTransportState()
+{
+    const auto nowMs = juce::Time::currentTimeMillis();
+    const auto hostPlaying = hostTransportPlaying.load (std::memory_order_acquire);
+    const auto stateChanged = hostPlaying != lastBroadcastHostPlaying;
+
+    if (! stateChanged && nowMs - lastTransportStateBroadcastMs < (hostPlaying ? 250 : 1000))
+        return;
+
+    lastTransportStateBroadcastMs = nowMs;
+    lastBroadcastHostPlaying = hostPlaying;
+
+    const auto sampleRate = streamSampleRate.load (std::memory_order_acquire);
+    const auto hostSamplePosition = hostTransportSamplePosition.load (std::memory_order_acquire);
+    const auto streamWritePosition = streamWriteSamplePosition.load (std::memory_order_acquire);
+    const auto bpmX100 = hostTempoBpmX100.load (std::memory_order_acquire);
+    const auto ppqX1000 = hostPpqPositionX1000.load (std::memory_order_acquire);
+    const auto sequence = transportStateSequence.fetch_add (1, std::memory_order_relaxed) + 1;
+
+    auto* response = new juce::DynamicObject();
+    response->setProperty ("type", "transport.state");
+    response->setProperty ("sequence", sequence);
+    response->setProperty ("sentAtMs", nowMs);
+    response->setProperty ("stateChanged", stateChanged);
+    response->setProperty ("hostPlaying", hostPlaying);
+    response->setProperty ("sampleRate", sampleRate);
+    response->setProperty ("hostSamplePosition", hostSamplePosition);
+    response->setProperty ("streamWriteSamplePosition", streamWritePosition);
+    response->setProperty ("hostTimeSeconds",
+                           sampleRate > 0 ? static_cast<double> (hostSamplePosition) / static_cast<double> (sampleRate) : 0.0);
+    response->setProperty ("bpm", static_cast<double> (bpmX100) / 100.0);
+    response->setProperty ("ppqPosition", static_cast<double> (ppqX1000) / 1000.0);
+
+    const auto json = jsonString (juce::var (response));
+    const juce::ScopedLock lock { clientLock };
+
+    for (auto& client : clients)
+    {
+        if (client != nullptr
+            && client->websocket
+            && ! client->closeRequested.load (std::memory_order_acquire))
+        {
+            sendJson (*client, json);
+        }
+    }
 }
 
 bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,

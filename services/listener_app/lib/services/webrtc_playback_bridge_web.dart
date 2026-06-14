@@ -44,6 +44,7 @@ class WebRtcPlaybackBridge {
   final PcmPlaybackBridge _pcmPlaybackBridge = PcmPlaybackBridge();
   bool _active = false;
   bool _signalingInFlight = false;
+  int _streamSampleRate = 48000;
   int _offerGeneration = 0;
   Timer? _pendingDisconnectedTimer;
   DateTime? _backgroundedAt;
@@ -54,6 +55,13 @@ class WebRtcPlaybackBridge {
 
   void configureTransport(TransportConfig config) {
     _pcmPlaybackBridge.configureTransport(config);
+  }
+
+  Future<void> updateStreamFormat(Map<String, dynamic> message) async {
+    final sampleRate = message['sampleRate'];
+    if (sampleRate is num && sampleRate > 0) {
+      _streamSampleRate = sampleRate.round();
+    }
   }
 
   Future<bool> start({
@@ -69,6 +77,7 @@ class WebRtcPlaybackBridge {
       _configureMediaSession();
       _attachLifecycleHandlers();
       await _pcmPlaybackBridge.start();
+      await resetToLiveEdge(reason: 'webrtc-start');
       await _createOffer();
       return true;
     } catch (error) {
@@ -177,6 +186,12 @@ class WebRtcPlaybackBridge {
       unawaited(_playRemoteAudio(audio));
     }
     return telemetry;
+  }
+
+  Future<PcmPlaybackTelemetry> resetToLiveEdge({
+    String reason = 'live-edge',
+  }) async {
+    return _pcmPlaybackBridge.resetToLiveEdge(reason: reason);
   }
 
   Future<void> dispose() async {
@@ -324,16 +339,21 @@ class WebRtcPlaybackBridge {
       _log('pcm-data-channel-nonbinary');
       return;
     }
-    if (bytes.lengthInBytes != 1920) {
+    if (bytes.lengthInBytes % 4 != 0) {
       _log('pcm-data-channel-size', '${bytes.lengthInBytes}');
+      return;
     }
+    final chunkDurationMs =
+        ((bytes.lengthInBytes / 4) * 1000 / _streamSampleRate)
+            .round()
+            .clamp(1, 100);
 
     _pcmPlaybackBridge.enqueueBytes(
       bytes,
       channels: 2,
-      sampleRate: 48000,
+      sampleRate: _streamSampleRate,
       bitDepth: 16,
-      chunkDurationMs: 10,
+      chunkDurationMs: chunkDurationMs,
     );
   }
 

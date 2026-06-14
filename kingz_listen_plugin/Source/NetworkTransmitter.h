@@ -34,6 +34,12 @@ public:
     int getPort() const noexcept;
     int getConnectedClientCount() const noexcept;
     juce::String getLocalLanIpAddress() const;
+    void setStreamSampleRate (double sampleRate) noexcept;
+    void updateTransportSnapshot (bool isPlaying,
+                                  juce::int64 hostSamplePosition,
+                                  juce::int64 streamWritePosition,
+                                  double bpm,
+                                  double ppqPosition) noexcept;
     void setExternalSignalingSender (std::function<void (const juce::String&)> sender);
     void handleExternalSignalingMessage (const juce::var& message);
 
@@ -44,6 +50,12 @@ public:
     std::atomic<bool> chunkSizeTransitionPending { false };
     std::atomic<int> droppedPacketCount { 0 };
     std::atomic<int> bufferHealthAlert { 0 };
+    std::atomic<int> streamSampleRate { AudioFifoWorker::targetSampleRate };
+    std::atomic<bool> hostTransportPlaying { false };
+    std::atomic<juce::int64> hostTransportSamplePosition { 0 };
+    std::atomic<juce::int64> streamWriteSamplePosition { 0 };
+    std::atomic<int> hostTempoBpmX100 { 12000 };
+    std::atomic<juce::int64> hostPpqPositionX1000 { 0 };
 
 private:
    #if JUCE_WINDOWS
@@ -102,6 +114,8 @@ private:
     void streamReadyPcmChunks();
     void broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChunk& chunk);
     bool trySendPcmChunk (ClientConnection& client, const AudioFifoWorker::DynamicPcmChunk& chunk) noexcept;
+    void maybeBroadcastTransportState();
+    void maybeBroadcastTransportSync (int chunkFrames);
     void sendJson (ClientConnection& client, const juce::String& json);
     void sendJson (const std::shared_ptr<ClientConnection>& client, const juce::String& json);
     void sendHttpResponse (ClientConnection& client,
@@ -131,6 +145,12 @@ private:
     std::atomic<bool> shouldListen { false };
     std::atomic<int> connectedClients { 0 };
     juce::int64 lastPacketAdaptationMs = 0;
+    juce::int64 lastTransportSyncMs = 0;
+    juce::int64 lastTransportStateBroadcastMs = 0;
+    bool lastBroadcastHostPlaying = false;
+    std::atomic<juce::int64> streamTransmitSamplePosition { 0 };
+    std::atomic<juce::int64> transportSyncSequence { 0 };
+    std::atomic<juce::int64> transportStateSequence { 0 };
     int port = 8082;
 
     // CRITICAL: WebRTC task queue to prevent blocking HTTP server

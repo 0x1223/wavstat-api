@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 
@@ -11,8 +10,6 @@ import '../models/transport_config.dart';
 import '../services/lan_audio_client.dart';
 import '../widgets/connection_card.dart';
 import '../widgets/monitoring_mode_selector.dart';
-import '../widgets/qr_display_dialog.dart';
-import '../widgets/qr_scanner_page.dart';
 import '../widgets/now_listening_card.dart';
 import '../widgets/status_pill.dart';
 import '../widgets/stream_health_panel.dart';
@@ -54,7 +51,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     text: _defaultServerHost(),
   );
   final TextEditingController _portController = TextEditingController(
-    text: '8082',  // Plugin port (handles both HTTP and WebRTC)
+    text: '8082', // Plugin port (handles both HTTP and WebRTC)
   );
   final AudioPlayer _audioPlayer = AudioPlayer();
   final LanAudioClient _lanAudioClient = LanAudioClient();
@@ -65,6 +62,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
   ListenerStatus _status = ListenerStatus.disconnected;
   bool _muted = false;
   bool _playRequestInFlight = false;
+  bool _listenSessionActive = false;
   double _volume = 0.82;
   int _playbackOperation = 0;
   StreamTelemetry _telemetry = const StreamTelemetry();
@@ -134,7 +132,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     FocusScope.of(context).unfocus();
     final serverIp = _serverIpController.text.trim();
     final port = _portController.text.trim().isEmpty
-        ? '8082'  // Plugin single-port (HTTP + WebRTC)
+        ? '8082' // Plugin single-port (HTTP + WebRTC)
         : _portController.text.trim();
 
     if (serverIp.isEmpty) {
@@ -155,14 +153,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     await _lanAudioClient.connect(uri);
   }
 
-  static String _defaultServerHost() {
-    final host = Uri.base.host;
-    if (host.isNotEmpty && host != 'localhost') {
-      return host;
-    }
-
-    return '127.0.0.1';
-  }
+  static String _defaultServerHost() => '192.168.0.246';
 
   Uri _buildWebSocketUri(String serverIp, String port) {
     final normalized = serverIp
@@ -195,9 +186,14 @@ class _ListenerScreenState extends State<ListenerScreen> {
   Future<void> _play() async {
     debugPrint('[KINGZ] _play: ENTRY isConnected=$_isConnected');
     if (_playRequestInFlight ||
+        _listenSessionActive ||
         _status == ListenerStatus.playing ||
         _status == ListenerStatus.buffering) {
-      debugPrint('[KINGZ] _play: EXIT (already playing or request in flight)');
+      debugPrint(
+        '[KINGZ] _play: EXIT (already active) '
+        'requestInFlight=$_playRequestInFlight '
+        'listenSessionActive=$_listenSessionActive status=$_status',
+      );
       return;
     }
 
@@ -209,6 +205,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
 
     setState(() {
       _playRequestInFlight = true;
+      _listenSessionActive = true;
       _status = ListenerStatus.buffering;
       _telemetry = _telemetry.copyWith(
         bufferStatus: 'Buffering',
@@ -223,22 +220,26 @@ class _ListenerScreenState extends State<ListenerScreen> {
         _transportConfig.mode,
         enablePcmPlayback: true,
       );
-      debugPrint('[KINGZ] _play: startListening returned pcmPlaybackActive=$pcmPlaybackActive');
+      debugPrint(
+          '[KINGZ] _play: startListening returned pcmPlaybackActive=$pcmPlaybackActive');
       debugPrint('[KINGZ] _play: status is now $_status');
-      debugPrint('[KINGZ] _play: current _telemetry.bufferStatus=${_telemetry.bufferStatus}');
+      debugPrint(
+          '[KINGZ] _play: current _telemetry.bufferStatus=${_telemetry.bufferStatus}');
       if (operation != _playbackOperation) {
         debugPrint('[KINGZ] _play: EXIT (operation changed)');
         return;
       }
       if (pcmPlaybackActive) {
-        debugPrint('[KINGZ] _play: STUB - pcmPlaybackActive=true, returning from _play (status remains BUFFERING)');
-        debugPrint('[KINGZ] _play: NOTE: Status will only change if streamStatus event is emitted by lanAudioClient');
+        debugPrint(
+            '[KINGZ] _play: transport active; waiting for first PCM packet');
         return;
       }
       debugPrint('[KINGZ] _play: ERROR - pcmPlaybackActive=false');
+      _listenSessionActive = false;
       _setError('Audio transport unavailable');
     } catch (e, st) {
       debugPrint('[KINGZ] _play error: $e\n$st');
+      _listenSessionActive = false;
       _setError('Unable to play stream');
     } finally {
       if (mounted && operation == _playbackOperation) {
@@ -249,9 +250,25 @@ class _ListenerScreenState extends State<ListenerScreen> {
     }
   }
 
-  Future<void> _stop() async {
+  Future<void> _stop({
+    bool readyAfterStop = false,
+  }) async {
     final operation = ++_playbackOperation;
     _playRequestInFlight = false;
+    if (mounted) {
+      setState(() {
+        _listenSessionActive = false;
+        _status = _status == ListenerStatus.disconnected
+            ? ListenerStatus.disconnected
+            : readyAfterStop
+                ? ListenerStatus.connected
+                : ListenerStatus.stopped;
+        _telemetry = _telemetry.copyWith(
+          bufferStatus: 'Stopped',
+          networkStatus: 'Stopping audio stream',
+        );
+      });
+    }
     await _lanAudioClient.stopListening();
     await _audioPlayer.stop();
 
@@ -262,7 +279,9 @@ class _ListenerScreenState extends State<ListenerScreen> {
     setState(() {
       _status = _status == ListenerStatus.disconnected
           ? ListenerStatus.disconnected
-          : ListenerStatus.stopped;
+          : readyAfterStop
+              ? ListenerStatus.connected
+              : ListenerStatus.stopped;
       _telemetry = _telemetry.copyWith(
         bufferStatus: 'Stopped',
         networkStatus: 'LAN connected',
@@ -299,6 +318,13 @@ class _ListenerScreenState extends State<ListenerScreen> {
         _telemetry = event.telemetry!;
       }
 
+      if (event.dawTransportPlaying != null) {
+        final dawPlaying = event.dawTransportPlaying!;
+        _telemetry = _telemetry.copyWith(
+          networkStatus: dawPlaying ? 'DAW playing' : 'DAW stopped',
+        );
+      }
+
       if (event.realtimeMetrics != null) {
         _realtimeMetrics = event.realtimeMetrics!;
       }
@@ -318,19 +344,19 @@ class _ListenerScreenState extends State<ListenerScreen> {
       if (event.connectionState != null) {
         _status = switch (event.connectionState!) {
           LanAudioConnectionState.disconnected => ListenerStatus.disconnected,
-          LanAudioConnectionState.connected =>
-            _status == ListenerStatus.playing ||
-                    _status == ListenerStatus.buffering ||
-                    _status == ListenerStatus.stopped
-                ? _status
-                : ListenerStatus.connected,
+          LanAudioConnectionState.connected => _listenSessionActive ||
+                  _status == ListenerStatus.playing ||
+                  _status == ListenerStatus.buffering ||
+                  _status == ListenerStatus.stopped
+              ? _status
+              : ListenerStatus.connected,
           LanAudioConnectionState.reconnecting => ListenerStatus.reconnecting,
           LanAudioConnectionState.error => ListenerStatus.error,
         };
       }
 
       if (event.streamStatus != null) {
-        _status = switch (event.streamStatus!) {
+        final nextStatus = switch (event.streamStatus!) {
           'playing' => ListenerStatus.playing,
           'buffering' => ListenerStatus.buffering,
           'stopped' => ListenerStatus.stopped,
@@ -341,9 +367,23 @@ class _ListenerScreenState extends State<ListenerScreen> {
           'disconnected' => ListenerStatus.disconnected,
           _ => _status,
         };
+
+        if (nextStatus == ListenerStatus.playing ||
+            nextStatus == ListenerStatus.buffering ||
+            nextStatus == ListenerStatus.streamLost) {
+          _listenSessionActive = true;
+          _status = nextStatus;
+        } else if (nextStatus == ListenerStatus.stopped ||
+            nextStatus == ListenerStatus.disconnected) {
+          _listenSessionActive = false;
+          _status = nextStatus;
+        } else if (!_listenSessionActive) {
+          _status = nextStatus;
+        }
       }
 
       if (event.errorMessage != null) {
+        _listenSessionActive = false;
         _telemetry = _telemetry.copyWith(
           bufferStatus: 'Stopped',
           networkStatus: event.errorMessage,
@@ -351,15 +391,34 @@ class _ListenerScreenState extends State<ListenerScreen> {
       }
 
       if (event.realtimeMetrics?.packetFlow == 'Active' &&
-          _audioPlayer.playing &&
+          (_audioPlayer.playing || _listenSessionActive) &&
           _status == ListenerStatus.streamLost) {
         _status = ListenerStatus.playing;
+      }
+
+      if (_listenSessionActive &&
+          event.realtimeMetrics?.outputActive == true &&
+          _status == ListenerStatus.buffering) {
+        _status = ListenerStatus.playing;
+        _telemetry = _telemetry.copyWith(
+          bufferStatus: 'Playing',
+          networkStatus: 'Active LAN stream',
+        );
+      }
+
+      if (_listenSessionActive &&
+          _status != ListenerStatus.playing &&
+          _status != ListenerStatus.buffering &&
+          _status != ListenerStatus.streamLost &&
+          _status != ListenerStatus.reconnecting) {
+        _status = ListenerStatus.buffering;
       }
     });
   }
 
   void _setError(String networkStatus) {
     setState(() {
+      _listenSessionActive = false;
       _status = ListenerStatus.error;
       _telemetry = _telemetry.copyWith(
         networkStatus: networkStatus,
@@ -376,32 +435,15 @@ class _ListenerScreenState extends State<ListenerScreen> {
     _lanAudioClient.prepare(mode);
   }
 
-  /// Web / desktop: generate and display a QR code from the current IP field.
-  Future<void> _showQrCode() async {
-    final host = _serverIpController.text.trim();
-    final port = int.tryParse(_portController.text.trim()) ?? 8082;
-    if (host.isEmpty) {
-      _setError('Enter server IP before generating QR');
-      return;
-    }
-    await QrDisplayDialog.show(context, host: host, port: port);
-  }
-
-  /// Mobile: open the camera scanner, fill IP/port from the result, then
-  /// connect via the same path the manual Connect button uses.
-  Future<void> _openQrScanner() async {
-    FocusScope.of(context).unfocus();
-    final result = await QrScannerPage.push(context);
-    if (result == null || !mounted) return;
-    setState(() {
-      _serverIpController.text = result.host;
-      _portController.text = result.port.toString();
-    });
-    await _connect();
-  }
-
   void _handlePlayerState(PlayerState playerState) {
     if (!mounted) {
+      return;
+    }
+
+    // Native WebRTC/PCM playback owns state while a listen session is active.
+    // The legacy just_audio player can still emit loading/buffering states even
+    // though it is no longer the active output path.
+    if (_listenSessionActive) {
       return;
     }
 
@@ -526,8 +568,6 @@ class _ListenerScreenState extends State<ListenerScreen> {
                                 isConnected: _isConnected,
                                 onConnect: _connect,
                                 onDisconnect: _disconnect,
-                                onShowQr: kIsWeb ? _showQrCode : null,
-                                onScanQr: kIsWeb ? null : _openQrScanner,
                               ),
                               const SizedBox(height: 12),
                               NowListeningCard(
@@ -543,13 +583,18 @@ class _ListenerScreenState extends State<ListenerScreen> {
                               const SizedBox(height: 13),
                               TransportControls(
                                 isConnected: _isConnected,
-                                isPlaying: _status == ListenerStatus.playing,
-                                isBuffering:
+                                isPlaying: _listenSessionActive &&
+                                    _status != ListenerStatus.buffering,
+                                isBuffering: _listenSessionActive &&
                                     _status == ListenerStatus.buffering,
                                 isMuted: _muted,
                                 volume: _volume,
-                                onPlay: _play,
-                                onStop: _stop,
+                                onPlay: () {
+                                  unawaited(_play());
+                                },
+                                onStop: () {
+                                  unawaited(_stop());
+                                },
                                 onMute: _toggleMute,
                                 onVolumeChanged: _setVolume,
                               ),

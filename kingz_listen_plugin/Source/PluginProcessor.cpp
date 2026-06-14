@@ -21,7 +21,9 @@ KingzListenAudioProcessor::KingzListenAudioProcessor()
 
 void KingzListenAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
+    juce::ignoreUnused (samplesPerBlock);
+    networkTransmitter.setStreamSampleRate (sampleRate);
+    streamWritePositionSamples.store (0, std::memory_order_release);
     fifoWorker.reset();
     networkTransmitter.start (8082);  // Plugin runs on port 8082 (shared with HTTP/iOS app)
 }
@@ -53,7 +55,34 @@ void KingzListenAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto channel = getTotalNumInputChannels(); channel < getTotalNumOutputChannels(); ++channel)
         buffer.clear (channel, 0, buffer.getNumSamples());
 
+    auto isPlaying = false;
+    auto hostSamplePosition = streamWritePositionSamples.load (std::memory_order_relaxed);
+    auto bpm = 120.0;
+    auto ppqPosition = 0.0;
+
+    if (auto* playHead = getPlayHead())
+    {
+        if (auto position = playHead->getPosition())
+        {
+            isPlaying = position->getIsPlaying();
+            if (auto timeInSamples = position->getTimeInSamples())
+                hostSamplePosition = *timeInSamples;
+            if (auto tempo = position->getBpm())
+                bpm = *tempo;
+            if (auto ppq = position->getPpqPosition())
+                ppqPosition = *ppq;
+        }
+    }
+
     fifoWorker.writeAudioFrame (buffer);
+    const auto nextStreamWritePosition = streamWritePositionSamples.fetch_add (buffer.getNumSamples(),
+                                                                               std::memory_order_relaxed)
+        + buffer.getNumSamples();
+    networkTransmitter.updateTransportSnapshot (isPlaying,
+                                                hostSamplePosition,
+                                                nextStreamWritePosition,
+                                                bpm,
+                                                ppqPosition);
 }
 
 juce::AudioProcessorEditor* KingzListenAudioProcessor::createEditor()
@@ -206,7 +235,7 @@ juce::String KingzListenAudioProcessor::getTelemetryReport() const
     report->setProperty ("audioThreadTargetChunkMs",
                          currentAudioThreadTargetChunkMs.load (std::memory_order_relaxed));
     report->setProperty ("chunkSizeTransitionPending", isTransitioning);
-    report->setProperty ("sampleRate", AudioFifoWorker::targetSampleRate);
+    report->setProperty ("sampleRate", networkTransmitter.streamSampleRate.load (std::memory_order_acquire));
     report->setProperty ("channels", AudioFifoWorker::inputChannels);
     report->setProperty ("chunkMs", currentTargetChunkMs);
     report->setProperty ("chunkBytes", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentTargetChunkMs)));

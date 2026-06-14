@@ -36,6 +36,8 @@ class _TransportControlsState extends State<TransportControls>
 
   bool get _canPlay =>
       widget.isConnected && !widget.isPlaying && !widget.isBuffering;
+  bool get _canStop =>
+      widget.isConnected && (widget.isPlaying || widget.isBuffering);
 
   @override
   void initState() {
@@ -51,7 +53,7 @@ class _TransportControlsState extends State<TransportControls>
   @override
   void didUpdateWidget(covariant TransportControls oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.isPlaying || widget.isBuffering) {
+    if (widget.isBuffering) {
       if (!_pulseController.isAnimating) {
         _pulseController.repeat(reverse: true);
       }
@@ -122,7 +124,7 @@ class _TransportControlsState extends State<TransportControls>
                 animation: _pulseController,
                 builder: (context, child) {
                   final pulse = _pulseController.value;
-                  final isActive = widget.isPlaying || widget.isBuffering;
+                  final isActive = widget.isBuffering;
 
                   return AnimatedScale(
                     duration: const Duration(milliseconds: 140),
@@ -212,15 +214,20 @@ class _TransportControlsState extends State<TransportControls>
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: widget.isConnected &&
-                          (widget.isPlaying || widget.isBuffering)
-                      ? widget.onStop
-                      : null,
+                  onPressed: _canStop ? widget.onStop : null,
                   icon: const Icon(Icons.stop_rounded),
                   label: const Text('Stop'),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.white,
-                    side: const BorderSide(color: Color(0xFF3A3A3A)),
+                    foregroundColor:
+                        _canStop ? const Color(0xFF090909) : Colors.white,
+                    backgroundColor: _canStop ? const Color(0xFFD6A84F) : null,
+                    disabledForegroundColor:
+                        Colors.white.withValues(alpha: 0.34),
+                    side: BorderSide(
+                      color: _canStop
+                          ? const Color(0xFFFFE0A0)
+                          : const Color(0xFF3A3A3A),
+                    ),
                     padding: const EdgeInsets.symmetric(vertical: 11),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),

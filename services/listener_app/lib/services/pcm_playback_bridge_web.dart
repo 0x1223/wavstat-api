@@ -57,6 +57,9 @@ class PcmPlaybackTelemetry {
 }
 
 class PcmPlaybackBridge {
+  static const double _targetLeadFloorSeconds = 0.070;
+  static const double _resumeLeadFloorSeconds = 0.090;
+  static const double _hardSnapLeadSeconds = 0.150;
   static const double _resyncDriftSeconds = 0.38;
   static const double _fadeSeconds = 0.003;
   static const Duration _outputRefreshGrace = Duration(milliseconds: 700);
@@ -98,6 +101,8 @@ class PcmPlaybackBridge {
   int _decodedChannels = 0;
   int _chunkDurationMs = 0;
   int _scheduledLeadMs = 0;
+  int _workletBufferedMs = 0;
+  int _workletTargetBufferMs = 0;
   int _resumeAttempts = 0;
   int _outputRestartCount = 0;
   int _pcmWhileInactiveLogs = 0;
@@ -125,12 +130,20 @@ class PcmPlaybackBridge {
   PcmPlaybackTelemetry get telemetry => _telemetry;
 
   void configureTransport(TransportConfig config) {
-    _targetLeadSeconds = config.targetBufferMs / 1000;
-    _resumeLeadSeconds = max(_targetLeadSeconds, config.safeBufferMs / 1000);
+    _targetLeadSeconds = max(
+      _targetLeadFloorSeconds,
+      config.targetBufferMs / 1000,
+    );
+    _resumeLeadSeconds = max(
+      max(_resumeLeadFloorSeconds, _targetLeadSeconds),
+      config.safeBufferMs / 1000,
+    );
     _maxScheduleAheadSeconds = max(
       _resumeLeadSeconds + 0.08,
       config.safeBufferMs / 1000,
     );
+    _workletTargetBufferMs = (_targetLeadSeconds * 1000).round();
+    _configureWorkletRenderer(config);
   }
 
   Future<PcmPlaybackTelemetry> start() async {
@@ -199,6 +212,24 @@ class PcmPlaybackBridge {
     return _updateTelemetry(outputActive: false, stateOverride: 'stopped');
   }
 
+  Future<PcmPlaybackTelemetry> resetToLiveEdge({
+    String reason = 'live-edge',
+  }) async {
+    final context = _context;
+    _generation += 1;
+    _scheduledAt =
+        context == null ? 0 : context.currentTime + _targetLeadSeconds;
+    _queuedPcmMessages.clear();
+    _queuedPcmBytes.clear();
+    _stopSources();
+    _workletBufferedMs = 0;
+    try {
+      _workletNode?.port.postMessage(<String, Object>{'type': 'flush'}.jsify());
+    } catch (_) {}
+    _lastResumeResult = reason;
+    return _updateTelemetry(outputActive: false, stateOverride: reason);
+  }
+
   PcmPlaybackTelemetry enqueue(Map<String, dynamic> message) {
     final context = _context;
     if (!_active || context == null) {
@@ -212,7 +243,8 @@ class PcmPlaybackBridge {
       _logRecoveryState(
         'pcm-arrival-context-blocked',
         reason: 'pcm',
-        detail: 'arrival-count=$_pcmPacketArrivalCount queueDepth=${_queuedPcmMessages.length}',
+        detail:
+            'arrival-count=$_pcmPacketArrivalCount queueDepth=${_queuedPcmMessages.length}',
       );
       _logDiagnostic('pcm.arrived-context-blocked');
       _requestForegroundResume('chunk');
@@ -283,13 +315,12 @@ class PcmPlaybackBridge {
 
     final now = context.currentTime;
 
-    // AGGRESSIVE QUEUE FLUSHING: if latency spike detected, drop oldest queued data
-    final scheduledLeadMs = ((_scheduledAt - now) * 1000).round().clamp(0, 1 << 31);
-    if (scheduledLeadMs > 100) {
-      // Latency exceeded 100ms — aggressive flush to reset
+    final scheduledLeadMs =
+        ((_scheduledAt - now) * 1000).round().clamp(0, 1 << 31);
+    if (scheduledLeadMs > (_hardSnapLeadSeconds * 1000).round()) {
       if (_sources.isNotEmpty) {
         web.console.log(_structuredLog(
-          'backpressure-flush: leadMs=$scheduledLeadMs queuedMsgs=${_queuedPcmMessages.length} queuedBytes=${_queuedPcmBytes.length} sources=${_sources.length}',
+          'backpressure-hard-snap: leadMs=$scheduledLeadMs queuedMsgs=${_queuedPcmMessages.length} queuedBytes=${_queuedPcmBytes.length} sources=${_sources.length}',
           event: 'pcm-backpressure-flush',
           reason: 'enqueue',
         ).toJS);
@@ -358,19 +389,8 @@ class PcmPlaybackBridge {
       return _updateTelemetry(outputActive: true);
     }
 
-    final buffer = context.createBuffer(channels, frames, sampleRate);
-    final data = typed.ByteData.sublistView(bytes);
-
-    for (var channel = 0; channel < channels; channel += 1) {
-      final samples = typed.Float32List(frames);
-      for (var frame = 0; frame < frames; frame += 1) {
-        final offset = (frame * channels + channel) * 2;
-        final sample = data.getInt16(offset, typed.Endian.little);
-        samples[frame] = (sample / 32768).clamp(-1.0, 1.0);
-      }
-      _smoothEdges(samples, sampleRate);
-      buffer.copyToChannel(samples.toJS, channel);
-    }
+    final buffer =
+        _decodeBufferWithResample(context, bytes, channels, frames, sampleRate);
 
     final source = context.createBufferSource();
     source.buffer = buffer;
@@ -512,7 +532,8 @@ class PcmPlaybackBridge {
         _scheduledLeadMs = max(0, ((_scheduledAt - now) * 1000).round());
         return _updateTelemetry(outputActive: true);
       } catch (e) {
-        web.console.log('KINGZ WORKLET: enqueueBytes postMessage error: $e'.toJS);
+        web.console
+            .log('KINGZ WORKLET: enqueueBytes postMessage error: $e'.toJS);
         _workletUnavailable = true;
         _stopWorkletRenderer();
       }
@@ -532,19 +553,8 @@ class PcmPlaybackBridge {
       return _updateTelemetry(outputActive: true);
     }
 
-    final buffer = context.createBuffer(channels, frames, sampleRate);
-    final data = typed.ByteData.sublistView(bytes);
-
-    for (var channel = 0; channel < channels; channel += 1) {
-      final samples = typed.Float32List(frames);
-      for (var frame = 0; frame < frames; frame += 1) {
-        final offset = (frame * channels + channel) * 2;
-        final sample = data.getInt16(offset, typed.Endian.little);
-        samples[frame] = (sample / 32768).clamp(-1.0, 1.0);
-      }
-      _smoothEdges(samples, sampleRate);
-      buffer.copyToChannel(samples.toJS, channel);
-    }
+    final buffer =
+        _decodeBufferWithResample(context, bytes, channels, frames, sampleRate);
 
     final source = context.createBufferSource();
     source.buffer = buffer;
@@ -840,8 +850,10 @@ class PcmPlaybackBridge {
   }) {
     final context = _context;
     final now = context?.currentTime ?? 0;
-    final bufferDepthMs =
+    final scheduledBufferDepthMs =
         context == null ? 0 : max(0, ((_scheduledAt - now) * 1000).round());
+    final bufferDepthMs =
+        _workletNode == null ? scheduledBufferDepthMs : _workletBufferedMs;
     final scheduledLeadMs = max(_scheduledLeadMs, bufferDepthMs);
     _telemetry = PcmPlaybackTelemetry(
       audioContextState: stateOverride ?? context?.state ?? 'idle',
@@ -872,6 +884,54 @@ class PcmPlaybackBridge {
     }
 
     return fallback;
+  }
+
+  /// Decode Int16 interleaved PCM to an AudioBuffer at the context's native rate.
+  /// When [srcRate] differs from context.sampleRate, applies linear interpolation
+  /// so the browser plays at the correct pitch and speed on any device.
+  web.AudioBuffer _decodeBufferWithResample(
+    web.AudioContext context,
+    typed.Uint8List bytes,
+    int channels,
+    int srcFrames,
+    int srcRate,
+  ) {
+    final ctxRate = context.sampleRate.toInt();
+    final data = typed.ByteData.sublistView(bytes);
+    if (ctxRate <= 0 || ctxRate == srcRate) {
+      final buf = context.createBuffer(channels, srcFrames, srcRate);
+      for (var ch = 0; ch < channels; ch++) {
+        final samples = typed.Float32List(srcFrames);
+        for (var f = 0; f < srcFrames; f++) {
+          final offset = (f * channels + ch) * 2;
+          samples[f] = (data.getInt16(offset, typed.Endian.little) / 32768)
+              .clamp(-1.0, 1.0);
+        }
+        _smoothEdges(samples, srcRate);
+        buf.copyToChannel(samples.toJS, ch);
+      }
+      return buf;
+    }
+    final dstFrames = (srcFrames * ctxRate / srcRate).round();
+    final buf = context.createBuffer(channels, dstFrames, ctxRate);
+    final ratio = srcRate / ctxRate;
+    for (var ch = 0; ch < channels; ch++) {
+      final samples = typed.Float32List(dstFrames);
+      for (var i = 0; i < dstFrames; i++) {
+        final srcPos = i * ratio;
+        final idx = srcPos.toInt();
+        final frac = srcPos - idx;
+        final nxt = (idx + 1 < srcFrames) ? idx + 1 : idx;
+        final off0 = (idx * channels + ch) * 2;
+        final off1 = (nxt * channels + ch) * 2;
+        final s0 = data.getInt16(off0, typed.Endian.little) / 32768.0;
+        final s1 = data.getInt16(off1, typed.Endian.little) / 32768.0;
+        samples[i] = (s0 + frac * (s1 - s0)).clamp(-1.0, 1.0);
+      }
+      _smoothEdges(samples, ctxRate);
+      buf.copyToChannel(samples.toJS, ch);
+    }
+    return buf;
   }
 
   void _smoothEdges(typed.Float32List samples, int sampleRate) {
@@ -937,20 +997,22 @@ class PcmPlaybackBridge {
 
     try {
       if (!_workletModuleLoaded) {
-        web.console.log('KINGZ WORKLET: loading kingz_pcm_worklet.js (sampleRate=${context.sampleRate})'.toJS);
+        web.console.log(
+            'KINGZ WORKLET: loading kingz_pcm_worklet.js (sampleRate=${context.sampleRate})'
+                .toJS);
         await context.audioWorklet.addModule('kingz_pcm_worklet.js').toDart;
         _workletModuleLoaded = true;
         web.console.log('KINGZ WORKLET: module loaded OK'.toJS);
       }
       final node = web.AudioWorkletNode(context, 'kingz-pcm-renderer');
-      // Forward worklet messages (status, underrun, error) to console for visibility.
       node.port.onmessage = ((web.MessageEvent event) {
-        final data = event.data;
-        web.console.log('KINGZ WORKLET MSG: ${data.dartify()}'.toJS);
+        _handleWorkletMessage(event.data.dartify());
       }).toJS;
       node.connect(_outputDestination(context));
       _workletNode = node;
-      web.console.log('KINGZ WORKLET: AudioWorkletNode created and connected'.toJS);
+      _configureWorkletRenderer(null);
+      web.console
+          .log('KINGZ WORKLET: AudioWorkletNode created and connected'.toJS);
     } catch (e) {
       web.console.log('KINGZ WORKLET ERROR: $e'.toJS);
       _workletUnavailable = true;
@@ -969,6 +1031,67 @@ class PcmPlaybackBridge {
     } catch (_) {}
     try {
       node.disconnect();
+    } catch (_) {}
+    _workletBufferedMs = 0;
+  }
+
+  void _handleWorkletMessage(dynamic data) {
+    if (data is! Map) {
+      web.console.log('KINGZ WORKLET MSG: $data'.toJS);
+      return;
+    }
+
+    final type = data['type'];
+    final sampleRate = _readInt(data['sampleRate'], fallback: 0);
+    final bufferedFrames = _readInt(data['bufferedFrames'], fallback: -1);
+    final targetBufferFrames =
+        _readInt(data['targetBufferFrames'], fallback: 0);
+    final rate = sampleRate > 0
+        ? sampleRate
+        : (_context?.sampleRate.toInt() ?? _decodedSampleRate);
+
+    if (bufferedFrames >= 0 && rate > 0) {
+      _workletBufferedMs = (bufferedFrames * 1000 / rate).round();
+    }
+    if (targetBufferFrames > 0 && rate > 0) {
+      _workletTargetBufferMs = (targetBufferFrames * 1000 / rate).round();
+    }
+    if (type == 'underrun') {
+      _underrunCount = max(
+        _underrunCount,
+        _readInt(data['underruns'], fallback: _underrunCount),
+      );
+    }
+    if (type == 'status' || type == 'underrun' || type == 'started') {
+      _updateTelemetry(
+        outputActive: _active && (type == 'started' || data['playing'] == true),
+      );
+    }
+    web.console.log('KINGZ WORKLET MSG: $data'.toJS);
+  }
+
+  void _configureWorkletRenderer(TransportConfig? config) {
+    final node = _workletNode;
+    if (node == null) {
+      return;
+    }
+
+    final targetBufferMs = max(
+      (_targetLeadFloorSeconds * 1000).round(),
+      config?.targetBufferMs ?? _workletTargetBufferMs,
+    );
+    final safeBufferMs = max(
+      (_resumeLeadFloorSeconds * 1000).round(),
+      config?.safeBufferMs ?? (_resumeLeadSeconds * 1000).round(),
+    );
+    try {
+      node.port.postMessage(
+        <String, Object>{
+          'type': 'configure',
+          'targetBufferMs': targetBufferMs,
+          'safeBufferMs': max(targetBufferMs, safeBufferMs),
+        }.jsify(),
+      );
     } catch (_) {}
   }
 

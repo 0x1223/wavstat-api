@@ -55,6 +55,7 @@ private:
     juce::String lastUiAction;
     std::atomic<bool> monitoringRequested { false };
     std::atomic<int> currentAudioThreadTargetChunkMs { AudioFifoWorker::chunkDurationMs };
+    std::atomic<juce::int64> streamWritePositionSamples { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KingzListenAudioProcessor)
 };

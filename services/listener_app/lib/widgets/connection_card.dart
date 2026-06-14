@@ -7,8 +7,6 @@ class ConnectionCard extends StatelessWidget {
     required this.isConnected,
     required this.onConnect,
     required this.onDisconnect,
-    this.onShowQr,
-    this.onScanQr,
     super.key,
   });
 
@@ -18,12 +16,6 @@ class ConnectionCard extends StatelessWidget {
   final VoidCallback onConnect;
   final VoidCallback onDisconnect;
 
-  /// Web / desktop only: tapping shows a QR code the phone can scan.
-  final VoidCallback? onShowQr;
-
-  /// Mobile only: tapping opens the camera to scan a QR code.
-  final VoidCallback? onScanQr;
-
   @override
   Widget build(BuildContext context) {
     return _StudioPanel(
@@ -31,31 +23,18 @@ class ConnectionCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // ── Header row ──────────────────────────────────────────────────
-          Row(
+          const Row(
             children: [
-              const Icon(Icons.router_rounded, color: Color(0xFFD6A84F), size: 18),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Connection',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w900,
-                  ),
+              Icon(Icons.router_rounded, color: Color(0xFFD6A84F), size: 18),
+              SizedBox(width: 8),
+              Text(
+                'Connection',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
-              if (onShowQr != null)
-                IconButton(
-                  onPressed: onShowQr,
-                  icon: const Icon(Icons.qr_code_rounded),
-                  color: const Color(0xFFD6A84F),
-                  iconSize: 22,
-                  tooltip: 'Show QR code',
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
             ],
           ),
           const SizedBox(height: 10),
@@ -69,7 +48,7 @@ class ConnectionCard extends StatelessWidget {
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     labelText: 'Server IP',
-                    hintText: '192.168.1.40',
+                    hintText: '192.168.0.246',
                   ),
                 ),
               ),
@@ -89,21 +68,6 @@ class ConnectionCard extends StatelessWidget {
               ),
             ],
           ),
-          // ── Scan QR button (mobile only) ─────────────────────────────────
-          if (onScanQr != null) ...[
-            const SizedBox(height: 4),
-            TextButton.icon(
-              onPressed: onScanQr,
-              icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-              label: const Text('Scan QR Code'),
-              style: TextButton.styleFrom(
-                foregroundColor: const Color(0xFFD6A84F),
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                visualDensity: VisualDensity.compact,
-                alignment: Alignment.centerLeft,
-              ),
-            ),
-          ],
           const SizedBox(height: 10),
           // ── Connect / Disconnect buttons ──────────────────────────────────
           Row(
