@@ -9,11 +9,13 @@ private final class KingzPcmPlayer {
 
   private var engine: AVAudioEngine?
   private var sourceNode: AVAudioSourceNode?
-  private var sampleRate: Double = 48_000
+  private var sampleRate: Double = 48_000  // live STREAM (source/DAW) rate
+  private var outputSampleRate: Double = 48_000  // engine OUTPUT (hardware) rate; ring is resampled to this
   private let bufferLock = NSLock()
   private var ringBuffer: [Int16] = []
   private var ringCapacityFrames = 0
   private var readFrame = 0
+  private var readFraction: Double = 0  // fractional resampler read cursor (streamRate -> outputRate)
   private var writeFrame = 0
   private var enqueueLogCount = 0
   private var lastAutoStartAttempt = Date.distantPast
@@ -31,6 +33,7 @@ private final class KingzPcmPlayer {
   private var lastDiagnosticsLog = Date()
   private var receivedFramesSinceLog = 0
   private var renderedFramesSinceLog = 0
+  private var consumedFramesSinceLog = 0  // stream frames consumed by the resampler
   private var packetsSinceLog = 0
   private var lastPacketBytes = 0
 
@@ -66,22 +69,26 @@ private final class KingzPcmPlayer {
   private var format: AVAudioFormat {
     AVAudioFormat(
       commonFormat: .pcmFormatFloat32,
-      sampleRate: sampleRate,
+      sampleRate: outputSampleRate,
       channels: 2,
       interleaved: false
     )!
   }
 
-  func configure(sampleRate newSampleRate: Double) throws {
+  func configure(sampleRate newSampleRate: Double) {
     let normalizedSampleRate = supportedSampleRate(newSampleRate)
     guard abs(normalizedSampleRate - sampleRate) >= 1 else { return }
-    let wasRunning = engine?.isRunning == true
-    print("[KINGZ IOS PCM] configure requestedSampleRate=\(newSampleRate) streamSampleRate=\(normalizedSampleRate) wasRunning=\(wasRunning)")
-    stop()
+    let ratio = outputSampleRate > 0 ? normalizedSampleRate / outputSampleRate : 1.0
+    print("[KINGZ IOS PCM] stream rate \(sampleRate) -> \(normalizedSampleRate) (outputSampleRate=\(outputSampleRate) resampleRatio=\(String(format: "%.4f", ratio)))")
+    // Rate-agnostic: do NOT restart the engine or repin the hardware. The engine keeps
+    // running at outputSampleRate; render() resamples the stream-rate ring to it. We only
+    // resize/flush the ring so the queue math (sized in stream frames) stays consistent.
+    bufferLock.lock()
     sampleRate = normalizedSampleRate
-    if wasRunning {
-      try start()
-    }
+    ringCapacityFrames = ringCapacityTargetFrames
+    ringBuffer = Array(repeating: 0, count: ringCapacityFrames * Self.channelCount)
+    resetRingLocked()
+    bufferLock.unlock()
   }
 
   func configureQueue(
@@ -112,6 +119,8 @@ private final class KingzPcmPlayer {
     let session = AVAudioSession.sharedInstance()
     try configureSession(session)
     try session.setActive(true)
+    // Output runs at the granted hardware rate; the stream is resampled to it.
+    outputSampleRate = session.sampleRate > 0 ? session.sampleRate : 48_000
 
     prepareRingBuffer()
     let source = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
@@ -251,6 +260,7 @@ private final class KingzPcmPlayer {
 
   private func resetRingLocked() {
     readFrame = 0
+    readFraction = 0
     writeFrame = 0
     queuedFrames = 0
     playbackStarted = false
@@ -317,6 +327,8 @@ private final class KingzPcmPlayer {
     guard let right = right else { return }
 
     bufferLock.lock()
+    // Snapshot ratio inside lock; sampleRate/outputSampleRate only change at configure time.
+    let ratio = outputSampleRate > 0 ? sampleRate / outputSampleRate : 1.0
     for frame in 0..<frameCount {
       if !playbackStarted {
         if queuedFrames >= prebufferFrames {
@@ -340,16 +352,30 @@ private final class KingzPcmPlayer {
         continue
       }
 
-      let ringIndex = readFrame * Self.channelCount
+      // Linear interpolation: readFrame is the base stream frame; readFraction is the
+      // fractional offset into the next stream frame (0.0 = exactly readFrame).
+      let ri0 = readFrame * Self.channelCount
+      let ri1 = ((readFrame + 1) % ringCapacityFrames) * Self.channelCount
+      let frac = Float(readFraction)
+      let l0 = Float(ringBuffer[ri0]) / 32_768.0
+      let r0 = Float(ringBuffer[ri0 + 1]) / 32_768.0
+      let l1 = queuedFrames > 1 ? Float(ringBuffer[ri1]) / 32_768.0 : l0
+      let r1 = queuedFrames > 1 ? Float(ringBuffer[ri1 + 1]) / 32_768.0 : r0
       var gain: Float = 1.0
       if fadeRemainingFrames > 0 {
         gain = Float(fadeFrames - fadeRemainingFrames + 1) / Float(fadeFrames)
         fadeRemainingFrames -= 1
       }
-      left[frame] = (Float(ringBuffer[ringIndex]) / 32_768.0) * gain
-      right[frame] = (Float(ringBuffer[ringIndex + 1]) / 32_768.0) * gain
-      readFrame = (readFrame + 1) % ringCapacityFrames
-      queuedFrames -= 1
+      left[frame] = (l0 * (1 - frac) + l1 * frac) * gain
+      right[frame] = (r0 * (1 - frac) + r1 * frac) * gain
+
+      // Advance the fractional cursor by ratio stream-frames per output frame.
+      readFraction += ratio
+      let consumed = Int(readFraction)
+      readFraction -= Double(consumed)
+      readFrame = (readFrame + consumed) % ringCapacityFrames
+      queuedFrames -= min(consumed, queuedFrames)
+      consumedFramesSinceLog += consumed
     }
     renderedFramesSinceLog += frameCount
     bufferLock.unlock()
@@ -364,10 +390,12 @@ private final class KingzPcmPlayer {
     let queuedSnapshot = queuedFrames
     let receivedSnapshot = receivedFramesSinceLog
     let renderedSnapshot = renderedFramesSinceLog
+    let consumedSnapshot = consumedFramesSinceLog
     let packetsSnapshot = packetsSinceLog
     let packetBytesSnapshot = lastPacketBytes
     receivedFramesSinceLog = 0
     renderedFramesSinceLog = 0
+    consumedFramesSinceLog = 0
     packetsSinceLog = 0
     lastDiagnosticsLog = now
     bufferLock.unlock()
@@ -375,8 +403,10 @@ private final class KingzPcmPlayer {
     let queuedMs = Double(queuedSnapshot) * 1000.0 / sampleRate
     let receiveFps = Double(receivedSnapshot) / elapsed
     let renderFps = Double(renderedSnapshot) / elapsed
+    let consumeFps = Double(consumedSnapshot) / elapsed
+    let resampleRatio = outputSampleRate > 0 ? sampleRate / outputSampleRate : 1.0
     let packetFrames = packetBytesSnapshot / (Self.channelCount * MemoryLayout<Int16>.size)
-    print("[KINGZ IOS PCM] diag mode=\(monitoringMode) targetMs=\(targetBufferMs) streamSampleRate=\(sampleRate) queuedFrames=\(queuedSnapshot) queuedMs=\(Int(queuedMs.rounded())) receivedFps=\(Int(receiveFps.rounded())) renderedFps=\(Int(renderFps.rounded())) packets=\(packetsSnapshot) lastPacketBytes=\(packetBytesSnapshot) lastPacketFrames=\(packetFrames) underruns=\(underrunCount) overflowTrims=\(liveEdgeResetCount) recoveryTrims=\(recoveryTrimCount)")
+    print("[KINGZ IOS PCM] diag mode=\(monitoringMode) targetMs=\(targetBufferMs) streamSampleRate=\(sampleRate) outputSampleRate=\(outputSampleRate) resampleRatio=\(String(format: "%.4f", resampleRatio)) queuedFrames=\(queuedSnapshot) queuedMs=\(Int(queuedMs.rounded())) receivedFps=\(Int(receiveFps.rounded())) consumedFps=\(Int(consumeFps.rounded())) renderedFps=\(Int(renderFps.rounded())) packets=\(packetsSnapshot) lastPacketBytes=\(packetBytesSnapshot) lastPacketFrames=\(packetFrames) underruns=\(underrunCount) overflowTrims=\(liveEdgeResetCount) recoveryTrims=\(recoveryTrimCount)")
   }
 
   private func debugASBD(_ format: AVAudioFormat) -> String {
@@ -482,25 +512,15 @@ private final class KingzPcmPlayer {
         let adaptive = args?["adaptive"] as? Bool
           ?? (args?["adaptive"] as? NSNumber)?.boolValue
         let mode = args?["mode"] as? String
-        do {
-          print("[KINGZ IOS PCM] control configure sampleRate=\(sampleRate) targetMs=\(targetBufferMs ?? -1) safeMs=\(safeBufferMs ?? -1) adaptive=\(adaptive.map(String.init) ?? "nil") mode=\(mode ?? "nil")")
-          self.pcmPlayer.configureQueue(
-            targetBufferMs: targetBufferMs,
-            safeBufferMs: safeBufferMs,
-            adaptive: adaptive,
-            mode: mode
-          )
-          try self.pcmPlayer.configure(sampleRate: sampleRate)
-          result(nil)
-        } catch {
-          result(
-            FlutterError(
-              code: "PCM_CONFIGURE_FAILED",
-              message: error.localizedDescription,
-              details: nil
-            )
-          )
-        }
+        print("[KINGZ IOS PCM] control configure sampleRate=\(sampleRate) targetMs=\(targetBufferMs ?? -1) safeMs=\(safeBufferMs ?? -1) adaptive=\(adaptive.map(String.init) ?? "nil") mode=\(mode ?? "nil")")
+        self.pcmPlayer.configureQueue(
+          targetBufferMs: targetBufferMs,
+          safeBufferMs: safeBufferMs,
+          adaptive: adaptive,
+          mode: mode
+        )
+        self.pcmPlayer.configure(sampleRate: sampleRate)
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }

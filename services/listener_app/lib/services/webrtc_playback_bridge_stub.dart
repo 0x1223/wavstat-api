@@ -48,7 +48,9 @@ class WebRtcPlaybackBridge {
   bool _remoteDescriptionSet = false;
   bool _processingSignal =
       false; // NEW: guard against concurrent signal processing
-  int _streamSampleRate = 48000;
+  int _streamSampleRate = 48000; // provisional until the live DAW rate arrives
+  int _streamChannels = 2;
+  int _streamBitDepth = 16;
   int _offerGeneration = 0;
   int _pcmPacketCount = 0;
   Timer? _disconnectTimer;
@@ -75,6 +77,16 @@ class WebRtcPlaybackBridge {
   }
 
   Future<void> updateStreamFormat(Map<String, dynamic> message) async {
+    // Honor the advertised channel count / bit depth rather than assuming 2/16.
+    // (Sender currently normalizes to stereo/pcm_s16le; this follows it if that changes.)
+    final channels = message['channels'];
+    if (channels is num && channels >= 1) {
+      _streamChannels = channels.round().clamp(1, 2);
+    }
+    final format = message['format'];
+    if (format is String && format.contains('s16')) {
+      _streamBitDepth = 16;
+    }
     final sampleRate = message['sampleRate'];
     if (sampleRate is num && sampleRate > 0) {
       _streamSampleRate = sampleRate.round();
@@ -630,14 +642,16 @@ class WebRtcPlaybackBridge {
   void _handlePcmDataChannelMessage(typed.Uint8List bytes) {
     PcmPlaybackTelemetry telemetry;
     try {
+      final bytesPerFrame = 2 * _streamChannels;
       telemetry = _pcmPlaybackBridge.enqueueBytes(
         bytes,
-        channels: 2,
+        channels: _streamChannels,
         sampleRate: _streamSampleRate,
-        bitDepth: 16,
-        chunkDurationMs: ((bytes.lengthInBytes / 4) * 1000 / _streamSampleRate)
-            .round()
-            .clamp(1, 100),
+        bitDepth: _streamBitDepth,
+        chunkDurationMs:
+            ((bytes.lengthInBytes / bytesPerFrame) * 1000 / _streamSampleRate)
+                .round()
+                .clamp(1, 100),
       );
     } catch (e, st) {
       debugPrint('[KINGZ PCM] enqueueBytes error (packet dropped): $e\n$st');

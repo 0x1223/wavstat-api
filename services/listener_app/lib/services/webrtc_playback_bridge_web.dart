@@ -44,7 +44,9 @@ class WebRtcPlaybackBridge {
   final PcmPlaybackBridge _pcmPlaybackBridge = PcmPlaybackBridge();
   bool _active = false;
   bool _signalingInFlight = false;
-  int _streamSampleRate = 48000;
+  int _streamSampleRate = 48000; // provisional until the live DAW rate arrives
+  int _streamChannels = 2;
+  int _streamBitDepth = 16;
   int _offerGeneration = 0;
   Timer? _pendingDisconnectedTimer;
   DateTime? _backgroundedAt;
@@ -58,6 +60,15 @@ class WebRtcPlaybackBridge {
   }
 
   Future<void> updateStreamFormat(Map<String, dynamic> message) async {
+    // Honor the advertised channel count / bit depth rather than assuming 2/16.
+    final channels = message['channels'];
+    if (channels is num && channels >= 1) {
+      _streamChannels = channels.round().clamp(1, 2);
+    }
+    final format = message['format'];
+    if (format is String && format.contains('s16')) {
+      _streamBitDepth = 16;
+    }
     final sampleRate = message['sampleRate'];
     if (sampleRate is num && sampleRate > 0) {
       _streamSampleRate = sampleRate.round();
@@ -339,20 +350,21 @@ class WebRtcPlaybackBridge {
       _log('pcm-data-channel-nonbinary');
       return;
     }
-    if (bytes.lengthInBytes % 4 != 0) {
+    final bytesPerFrame = 2 * _streamChannels;
+    if (bytes.lengthInBytes % bytesPerFrame != 0) {
       _log('pcm-data-channel-size', '${bytes.lengthInBytes}');
       return;
     }
     final chunkDurationMs =
-        ((bytes.lengthInBytes / 4) * 1000 / _streamSampleRate)
+        ((bytes.lengthInBytes / bytesPerFrame) * 1000 / _streamSampleRate)
             .round()
             .clamp(1, 100);
 
     _pcmPlaybackBridge.enqueueBytes(
       bytes,
-      channels: 2,
+      channels: _streamChannels,
       sampleRate: _streamSampleRate,
-      bitDepth: 16,
+      bitDepth: _streamBitDepth,
       chunkDurationMs: chunkDurationMs,
     );
   }

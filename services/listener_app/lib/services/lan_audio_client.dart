@@ -492,6 +492,17 @@ class LanAudioClient {
     Map<String, dynamic> message, {
     required bool isStateMessage,
   }) {
+    // Live DAW format rides every transport.sync/state. Apply the source sample
+    // rate continuously so playback stays rate-agnostic (44.1/48/88.2/96k...) and
+    // self-heals within ~100ms, instead of trusting only the one-shot handshake.
+    // Both bridges share the same native MethodChannel — sync both so that
+    // subsequent configureTransport() calls (prepare, startListening) use the
+    // correct rate and don't overwrite it with the fallback bridge's stale 48k default.
+    final syncedRate = _readInt(message['sampleRate']);
+    if (syncedRate > 0) {
+      unawaited(_webRtcPlaybackBridge.updateStreamFormat(message));
+      unawaited(_pcmPlaybackBridge.configureStreamSampleRate(syncedRate));
+    }
     final sequence = _readInt(message['sequence']);
     final hostPlaying = message['hostPlaying'] == true;
     final targetLeadMs = _readInt(message['targetLeadMs']);
