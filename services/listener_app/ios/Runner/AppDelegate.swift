@@ -30,6 +30,12 @@ private final class KingzPcmPlayer {
   private var consumedFramesSinceLog = 0  // stream frames consumed by the resampler
   private var packetsSinceLog = 0
   private var lastPacketBytes = 0
+  // Per-10s rates — confirm underruns and trims drop to ~0 in steady state after the fix.
+  private var windowStart = Date()
+  private var underrunsAtWindowStart = 0
+  private var overflowsAtWindowStart = 0
+  private var underruns10s = 0
+  private var overflows10s = 0
 
   // Retained from the Dart config for the config log only; queue DEPTH is now adaptive.
   private var targetBufferMs = 80
@@ -56,10 +62,16 @@ private final class KingzPcmPlayer {
   // A slow control loop nudges the effective resample ratio by at most ±0.5% to pull
   // the queue toward target, absorbing clock drift + steady-state offset by
   // imperceptibly time-stretching instead of dropping/inserting samples. No trimming.
-  private static let maxRatioOffset: Double = 0.005   // ±0.5%
-  private static let driftFullScaleMs: Double = 40    // error at which the nudge saturates
+  private static let maxRatioOffset: Double = 0.005   // ±0.5% steady-state (pitch inaudible)
+  private static let driftFullScaleMs: Double = 40    // error at which the steady nudge saturates
   private static let driftDeadbandMs: Double = 4      // ignore tiny errors
-  private static let driftTauSeconds: Double = 3.0    // LPF time constant (slow)
+  private static let driftTauSeconds: Double = 3.0    // LPF time constant (slow, steady-state)
+  // Catch-up: when the cushion is starved (queue well below target), temporarily allow a
+  // larger correction to rebuild it FAST, easing back to the ±0.5% steady cap near target
+  // so pitch stays inaudible in steady state. Capped so the transient pitch shift is small.
+  private static let catchUpMaxRatioOffset: Double = 0.02  // ±2% transient ceiling
+  private static let catchUpFullScaleMs: Double = 60       // |err| at which catch-up hits full ±2%
+  private static let catchUpTauSeconds: Double = 0.4       // fast LPF while catching up
   private var ratioOffset: Double = 0
 
   // MARK: req 3 — crossfade / concealment
@@ -81,6 +93,13 @@ private final class KingzPcmPlayer {
   private var crossfadedUnderruns = 0
   private var crossfadedOverflows = 0
   private var diagFileLines: [String] = []  // recent diag lines mirrored to /tmp fallback
+
+  // MARK: background-audio resilience — observers + click-safe recovery
+  // iOS posts these on background / foreground / app-switch / lock / route / reset; we
+  // recover the engine and resume THROUGH the render concealment path (no hard cut).
+  private var audioObserverTokens: [NSObjectProtocol] = []
+  private var isInterrupted = false
+  private let reconfigQueue = DispatchQueue(label: "com.kingzbreadentertainment.kingzlisten.audioReconfig")
 
   private var format: AVAudioFormat {
     AVAudioFormat(
@@ -168,6 +187,7 @@ private final class KingzPcmPlayer {
     bufferLock.lock()  // engine is live now; reset under the lock to avoid racing render()
     resetRingLocked()
     bufferLock.unlock()
+    installAudioObservers()  // engine exists now; observe lifecycle for click-safe recovery
     let outputs = session.currentRoute.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
     print("[KINGZ IOS PCM] start ok streamSampleRate=\(sampleRate) hardwareSampleRate=\(session.sampleRate) asbd=[\(debugASBD(format))] engineRunning=\(eng.isRunning) route=[\(outputs)]")
   }
@@ -176,18 +196,179 @@ private final class KingzPcmPlayer {
     do {
       try session.setCategory(.playback, mode: .default, options: [])
     } catch {
-      print("[KINGZ IOS PCM] session playback category failed: \(error.localizedDescription)")
-      try session.setCategory(.ambient, mode: .default, options: [])
-      print("[KINGZ IOS PCM] session fallback category=ambient")
+      // NEVER fall back to .ambient — it is silenced in the background, which is exactly
+      // what breaks background-audio continuity. Log loudly and retry .playback; if the
+      // retry throws, let it propagate so start() reports a hard failure instead of
+      // silently degrading to a category that dies on backgrounding.
+      print("[KINGZ IOS PCM] ⚠️⚠️ setCategory(.playback) FAILED: \(error.localizedDescription) — retrying .playback (NOT falling back to .ambient)")
+      try session.setCategory(.playback, mode: .default, options: [])
     }
     try? session.setPreferredSampleRate(sampleRate)
     try? session.setPreferredIOBufferDuration(0.005)
+  }
+
+  // MARK: - Background-audio resilience
+  // Observe the audio lifecycle events iOS posts on background / foreground / app-switch /
+  // lock / route change / media reset, and recover WITHOUT a hard cut: every resume
+  // re-enters the render concealment path (decay-hold + equal-power fade-in) so the
+  // transition is click-safe. The ring contents are preserved across recovery.
+  private func installAudioObservers() {
+    removeAudioObservers()  // idempotent
+    let nc = NotificationCenter.default
+    let session = AVAudioSession.sharedInstance()
+    audioObserverTokens.append(
+      nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
+        self?.reconfigQueue.async { self?.recoverEngineThroughConcealment(reason: "config-change") }
+      })
+    audioObserverTokens.append(
+      nc.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: nil) { [weak self] note in
+        self?.reconfigQueue.async { self?.handleInterruption(note) }
+      })
+    audioObserverTokens.append(
+      nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: nil) { [weak self] note in
+        self?.reconfigQueue.async { self?.handleRouteChange(note) }
+      })
+    audioObserverTokens.append(
+      nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: session, queue: nil) { [weak self] _ in
+        self?.reconfigQueue.async { self?.handleMediaServicesReset() }
+      })
+    print("[KINGZ IOS PCM] audio observers installed (config-change, interruption, route-change, media-reset)")
+  }
+
+  private func removeAudioObservers() {
+    let nc = NotificationCenter.default
+    for token in audioObserverTokens { nc.removeObserver(token) }
+    audioObserverTokens.removeAll()
+  }
+
+  // Restart/repair the engine ONLY when it actually stopped or the hardware rate changed,
+  // then resume through concealment (ring kept; render fades back in). Never raw silence.
+  // Used for config-change, route-change, and interruption-ended.
+  private func recoverEngineThroughConcealment(reason: String) {
+    guard let eng = engine else { return }
+    if isInterrupted {
+      print("[KINGZ IOS PCM] recover (\(reason)) skipped — still interrupted")
+      return
+    }
+    let session = AVAudioSession.sharedInstance()
+    let newOut = session.sampleRate > 0 ? session.sampleRate : outputSampleRate
+    let rateChanged = abs(newOut - outputSampleRate) >= 1
+    if eng.isRunning && !rateChanged {
+      return  // engine healthy — nothing to hide, don't introduce a needless gap
+    }
+    print("[KINGZ IOS PCM] recover (\(reason)) wasRunning=\(eng.isRunning) rateChanged=\(rateChanged) out=\(outputSampleRate)->\(newOut)")
+    if eng.isRunning { eng.pause() }
+    // Re-enter pre-roll so render resumes via the equal-power fade-in; KEEP the ring data.
+    bufferLock.lock()
+    playbackStarted = false
+    concealing = false
+    seamFadePos = -1
+    bufferLock.unlock()
+    if rateChanged, let src = sourceNode {
+      outputSampleRate = newOut
+      buildRampTables()  // 3ms ramp lives in OUTPUT frames — rebuild for the new rate
+      eng.disconnectNodeOutput(src)
+      eng.connect(src, to: eng.mainMixerNode, format: format)
+    }
+    // Non-blocking restart. The setActive 2003329396 transient (session not yet released
+    // after an interruption) is handled by rescheduling with short backoff on reconfigQueue —
+    // NO Thread.sleep, so the queue is never blocked and we never manufacture a ~1.5s silence.
+    // Render resumes through the equal-power fade-in the instant start() succeeds.
+    attemptEngineStart(reason: reason, attempt: 1)
+  }
+
+  // One non-blocking start attempt; on the transient setActive/start failure it reschedules
+  // itself with short backoff (never sleeps the queue). Bails if a new interruption arrives.
+  private func attemptEngineStart(reason: String, attempt: Int) {
+    guard let eng = engine, !isInterrupted else { return }
+    let session = AVAudioSession.sharedInstance()
+    do {
+      try configureSession(session)
+      try session.setActive(true)
+      if !eng.isRunning { try eng.start() }
+      print("[KINGZ IOS PCM] recover (\(reason)) engine running (attempt \(attempt))")
+    } catch {
+      let maxAttempts = 8
+      print("[KINGZ IOS PCM] recover (\(reason)) attempt \(attempt)/\(maxAttempts) transient: \(error.localizedDescription)")
+      guard attempt < maxAttempts else {
+        print("[KINGZ IOS PCM] recover (\(reason)) gave up after \(maxAttempts) attempts")
+        return
+      }
+      let delayMs = min(400, 50 * attempt)  // 50,100,…,400ms backoff — non-blocking
+      reconfigQueue.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+        self?.attemptEngineStart(reason: reason, attempt: attempt + 1)
+      }
+    }
+  }
+
+  private func handleInterruption(_ note: Notification) {
+    guard let info = note.userInfo,
+      let typeRaw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+      let type = AVAudioSession.InterruptionType(rawValue: typeRaw)
+    else { return }
+    switch type {
+    case .began:
+      // Do NOT pause the engine, and do NOT force re-pre-roll. With background-audio mode the
+      // engine rides through a plain backgrounding / app-switch / home exactly like the (clean)
+      // lock-screen path — pausing a benign transition was the cause of the minimize SKIP. For
+      // a GENUINE interruption (phone call / Siri / another app taking the session) iOS
+      // deactivates our session and stops the engine itself; we don't need to pause it. Recovery
+      // on .ended acts ONLY if the engine actually stopped (the isRunning guard), so a benign
+      // minimize ends as a no-op — identical to lock-screen.
+      isInterrupted = true
+      print("[KINGZ IOS PCM] interruption began — NOT pausing (engine rides through; recover only if it truly stopped)")
+    case .ended:
+      isInterrupted = false
+      var shouldResume = true
+      if let optsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt {
+        shouldResume = AVAudioSession.InterruptionOptions(rawValue: optsRaw).contains(.shouldResume)
+      }
+      print("[KINGZ IOS PCM] interruption ended shouldResume=\(shouldResume)")
+      if shouldResume { recoverEngineThroughConcealment(reason: "interruption-ended") }
+    @unknown default:
+      break
+    }
+  }
+
+  private func handleRouteChange(_ note: Notification) {
+    let reasonRaw = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
+    print("[KINGZ IOS PCM] route change reason=\(reasonRaw)")
+    // No hard restart: the recovery is a no-op unless the engine actually stopped (e.g.
+    // oldDeviceUnavailable pauses it) or the hardware rate changed — then resume through
+    // concealment.
+    recoverEngineThroughConcealment(reason: "route-change(\(reasonRaw))")
+  }
+
+  private func handleMediaServicesReset() {
+    print("[KINGZ IOS PCM] mediaServicesWereReset — full rebuild of audio chain")
+    let wasActive = engine != nil
+    engine?.stop()
+    if let src = sourceNode { engine?.detach(src) }
+    engine = nil
+    sourceNode = nil
+    removeAudioObservers()
+    bufferLock.lock()
+    playbackStarted = false
+    concealing = false
+    seamFadePos = -1
+    lastOutL = 0
+    lastOutR = 0
+    bufferLock.unlock()
+    guard wasActive else { return }
+    do {
+      // Recreates session + engine + source + ring and reinstalls observers; render
+      // resumes by fading in from silence (still click-safe, no hard cut).
+      try start()
+    } catch {
+      print("[KINGZ IOS PCM] media-reset rebuild FAILED: \(error.localizedDescription)")
+    }
   }
 
   func stop() {
     if engine != nil || sourceNode != nil {
       print("[KINGZ IOS PCM] stop")
     }
+    removeAudioObservers()
     engine?.stop()
     if let source = sourceNode {
       engine?.detach(source)
@@ -434,13 +615,25 @@ private final class KingzPcmPlayer {
     // the ratio nudges over seconds and never jumps per block.
     if playbackStarted, targetQueueFrames > 0 {
       let errMs = Double(queuedFrames - targetQueueFrames) * 1000.0 / sampleRate
+      let absErr = abs(errMs)
       var desired = 0.0
-      if abs(errMs) > Self.driftDeadbandMs {
-        desired = (errMs / Self.driftFullScaleMs) * Self.maxRatioOffset
-        desired = min(max(desired, -Self.maxRatioOffset), Self.maxRatioOffset)
+      if absErr > Self.driftDeadbandMs {
+        if absErr <= Self.driftFullScaleMs {
+          // Steady state: gentle proportional nudge, capped ±0.5% — pitch inaudible.
+          desired = (errMs / Self.driftFullScaleMs) * Self.maxRatioOffset
+        } else {
+          // Cushion starved/overfull: ramp the authority from ±0.5% toward ±2% as |err|
+          // grows from driftFullScaleMs→catchUpFullScaleMs, so a thin cushion rebuilds
+          // fast (and a too-deep queue drains fast) instead of starving/ballooning.
+          let t = min(1.0, (absErr - Self.driftFullScaleMs) / (Self.catchUpFullScaleMs - Self.driftFullScaleMs))
+          let mag = Self.maxRatioOffset + (Self.catchUpMaxRatioOffset - Self.maxRatioOffset) * t
+          desired = (errMs < 0 ? -mag : mag)
+        }
       }
+      // Fast LPF while catching up (|err| beyond steady range); slow LPF near target.
       let blockDt = Double(frameCount) / outputSampleRate
-      let aLP = min(1.0, blockDt / Self.driftTauSeconds)
+      let tau = absErr > Self.driftFullScaleMs ? Self.catchUpTauSeconds : Self.driftTauSeconds
+      let aLP = min(1.0, blockDt / tau)
       ratioOffset += (desired - ratioOffset) * aLP
     } else {
       ratioOffset += (0 - ratioOffset) * 0.1  // ease back to neutral while not playing
@@ -541,6 +734,7 @@ private final class KingzPcmPlayer {
     let adaptiveTargetMsSnapshot = adaptiveTargetMs
     let jitterSnapshot = jitterStdevMs
     let ratioOffsetSnapshot = ratioOffset
+    let underrunSnapshot = underrunCount
     let crossUnderSnapshot = crossfadedUnderruns
     let crossOverSnapshot = crossfadedOverflows
     receivedFramesSinceLog = 0
@@ -550,6 +744,15 @@ private final class KingzPcmPlayer {
     lastDiagnosticsLog = now
     bufferLock.unlock()
 
+    // Roll the per-10s rate window (single-threaded here on the enqueue/diag path).
+    if now.timeIntervalSince(windowStart) >= 10 {
+      underruns10s = underrunSnapshot - underrunsAtWindowStart
+      overflows10s = crossOverSnapshot - overflowsAtWindowStart
+      underrunsAtWindowStart = underrunSnapshot
+      overflowsAtWindowStart = crossOverSnapshot
+      windowStart = now
+    }
+
     let queuedMs = Double(queuedSnapshot) * 1000.0 / sampleRate
     let targetMsActual = Double(targetSnapshot) * 1000.0 / sampleRate
     let receiveFps = Double(receivedSnapshot) / elapsed
@@ -558,7 +761,7 @@ private final class KingzPcmPlayer {
     let resampleRatio = outputSampleRate > 0 ? sampleRate / outputSampleRate : 1.0
     let ratioOffsetPpm = Int((ratioOffsetSnapshot * 1_000_000).rounded())
     let packetFrames = packetBytesSnapshot / (Self.channelCount * MemoryLayout<Int16>.size)
-    let line = "[KINGZ IOS PCM] diag mode=\(monitoringMode) streamSampleRate=\(sampleRate) outputSampleRate=\(outputSampleRate) resampleRatio=\(String(format: "%.4f", resampleRatio)) adaptiveTargetMs=\(Int(adaptiveTargetMsSnapshot.rounded())) targetQueueMs=\(Int(targetMsActual.rounded())) jitterStdevMs=\(String(format: "%.1f", jitterSnapshot)) currentRatioOffsetPpm=\(ratioOffsetPpm) queuedFrames=\(queuedSnapshot) queuedMs=\(Int(queuedMs.rounded())) receivedFps=\(Int(receiveFps.rounded())) consumedFps=\(Int(consumeFps.rounded())) renderedFps=\(Int(renderFps.rounded())) packets=\(packetsSnapshot) lastPacketBytes=\(packetBytesSnapshot) lastPacketFrames=\(packetFrames) underruns=\(underrunCount) crossfadedUnderruns=\(crossUnderSnapshot) crossfadedOverflows=\(crossOverSnapshot) recoveryTrims=0"
+    let line = "[KINGZ IOS PCM] diag mode=\(monitoringMode) streamSampleRate=\(sampleRate) outputSampleRate=\(outputSampleRate) resampleRatio=\(String(format: "%.4f", resampleRatio)) adaptiveTargetMs=\(Int(adaptiveTargetMsSnapshot.rounded())) targetQueueMs=\(Int(targetMsActual.rounded())) jitterStdevMs=\(String(format: "%.1f", jitterSnapshot)) currentRatioOffsetPpm=\(ratioOffsetPpm) queuedFrames=\(queuedSnapshot) queuedMs=\(Int(queuedMs.rounded())) receivedFps=\(Int(receiveFps.rounded())) consumedFps=\(Int(consumeFps.rounded())) renderedFps=\(Int(renderFps.rounded())) packets=\(packetsSnapshot) lastPacketBytes=\(packetBytesSnapshot) lastPacketFrames=\(packetFrames) underruns=\(underrunSnapshot) underrunsPer10s=\(underruns10s) crossfadedUnderruns=\(crossUnderSnapshot) crossfadedOverflows=\(crossOverSnapshot) overflowTrimsPer10s=\(overflows10s) recoveryTrims=0"
     print(line)
     writeDiagLine(line)
   }
