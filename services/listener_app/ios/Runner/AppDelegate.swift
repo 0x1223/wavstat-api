@@ -69,9 +69,15 @@ private final class KingzPcmPlayer {
   // Catch-up: when the cushion is starved (queue well below target), temporarily allow a
   // larger correction to rebuild it FAST, easing back to the ±0.5% steady cap near target
   // so pitch stays inaudible in steady state. Capped so the transient pitch shift is small.
-  private static let catchUpMaxRatioOffset: Double = 0.02  // ±2% transient ceiling
-  private static let catchUpFullScaleMs: Double = 60       // |err| at which catch-up hits full ±2%
-  private static let catchUpTauSeconds: Double = 0.4       // fast LPF while catching up
+  // Catch-up is gentle now that the sender delivers an even stream (decoupled PCM thread):
+  // ±0.75% cap, wide full-scale, slow LPF — so it CONVERGES on target instead of overshooting
+  // a spike down to ~empty (the old ±2%/0.4s version oscillated to 5ms → near-underruns =
+  // clicks). The larger ±2% authority is reserved for genuine starvation (FILL side only).
+  private static let catchUpMaxRatioOffset: Double = 0.0075  // ±0.75% general catch-up cap
+  private static let catchUpFullScaleMs: Double = 120        // |err| to reach the cap (gentle ramp)
+  private static let catchUpTauSeconds: Double = 1.2         // damped LPF (was 0.4 — too fast, oscillated)
+  private static let rebuildMaxRatioOffset: Double = 0.02    // ±2%, FILL only, genuine-starve rebuild
+  private static let starveQueueDivisor: Int = 3             // "genuinely starved" = queue < target/3
   private var ratioOffset: Double = 0
 
   // MARK: req 3 — crossfade / concealment
@@ -622,11 +628,15 @@ private final class KingzPcmPlayer {
           // Steady state: gentle proportional nudge, capped ±0.5% — pitch inaudible.
           desired = (errMs / Self.driftFullScaleMs) * Self.maxRatioOffset
         } else {
-          // Cushion starved/overfull: ramp the authority from ±0.5% toward ±2% as |err|
-          // grows from driftFullScaleMs→catchUpFullScaleMs, so a thin cushion rebuilds
-          // fast (and a too-deep queue drains fast) instead of starving/ballooning.
+          // Beyond the steady band, ramp authority from ±0.5% toward a cap as |err| grows.
+          // DRAIN (queue above target, errMs>0) uses the gentle ±0.75% cap so it can't
+          // overshoot a spike down to ~empty. FILL (errMs<0) is also ±0.75% normally, but when
+          // GENUINELY starved (queue < target/divisor — a real drop drained it) it may use the
+          // larger ±2% to rebuild fast. So smooth-delivery spikes never trigger the big swing.
+          let starved = errMs < 0 && queuedFrames < (targetQueueFrames / Self.starveQueueDivisor)
+          let cap = starved ? Self.rebuildMaxRatioOffset : Self.catchUpMaxRatioOffset
           let t = min(1.0, (absErr - Self.driftFullScaleMs) / (Self.catchUpFullScaleMs - Self.driftFullScaleMs))
-          let mag = Self.maxRatioOffset + (Self.catchUpMaxRatioOffset - Self.maxRatioOffset) * t
+          let mag = Self.maxRatioOffset + (cap - Self.maxRatioOffset) * t
           desired = (errMs < 0 ? -mag : mag)
         }
       }
