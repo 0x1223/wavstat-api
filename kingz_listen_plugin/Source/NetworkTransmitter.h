@@ -87,7 +87,13 @@ private:
     static constexpr int pcmTelemetryBitrateBitsPerSecond = AudioFifoWorker::telemetryBitrateBitsPerSecond;
     static constexpr int lanOptimisedWebRtcMtuBytes = 1200;
     static constexpr int pcmMaxPacketLifetimeMs = AudioFifoWorker::chunkDurationMs;
-    static constexpr std::size_t maxBufferedPcmBytesPerClient = AudioFifoWorker::bytesPerChunk * 2;
+    // Drop a PCM chunk only when the data-channel send buffer exceeds this much queued audio.
+    // The old ceiling was 10ms (bytesPerChunk*2), which dropped on every minor link stall and
+    // punched holes in the stream — the receiver hears those gaps as the periodic click. The
+    // receiver now has an adaptive jitter buffer + drift catch-up that ABSORBS this latency; it
+    // cannot recover dropped samples. 250ms is well above normal jitter and caps memory/latency
+    // below a runaway, so it doubles as the last-resort safety valve.
+    static constexpr int pcmDropCeilingMs = 250;
 
     void run() override;
 
@@ -111,7 +117,7 @@ private:
     void adaptPacketSize();
     static bool isClientReadyForPcm (const ClientConnection& client) noexcept;
 
-    void streamReadyPcmChunks();
+    void pumpPcmOnce();
     void broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChunk& chunk);
     bool trySendPcmChunk (ClientConnection& client, const AudioFifoWorker::DynamicPcmChunk& chunk) noexcept;
     void maybeBroadcastTransportState();
@@ -161,4 +167,17 @@ private:
     };
     std::vector<WebRtcSignalingTask> webRtcQueue;
     juce::CriticalSection webRtcQueueLock;
+
+    // Dedicated, higher-priority PCM sender so audio delivery is decoupled from the
+    // HTTP/WebSocket/WebRTC-signaling/JSON work on the main network thread. It drains the
+    // (lock-free SPSC) FIFO one chunk per ~1ms wake → even cadence, no burst-drain. The
+    // main thread no longer calls readPcmChunk, so the SPSC invariant holds (single consumer).
+    struct PcmSenderThread final : juce::Thread
+    {
+        explicit PcmSenderThread (NetworkTransmitter& ownerToUse)
+            : juce::Thread ("KingzPcmSender"), owner (ownerToUse) {}
+        void run() override;
+        NetworkTransmitter& owner;
+    };
+    std::unique_ptr<PcmSenderThread> pcmSenderThread;
 };

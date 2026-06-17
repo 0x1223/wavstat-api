@@ -847,7 +847,12 @@ bool NetworkTransmitter::start (int portToUse)
 
     startThread();
 
-    std::cout << "[KINGZ] NetworkTransmitter::start() - thread started" << std::endl;
+    // Dedicated PCM sender at elevated priority so DAW CPU load can't starve audio delivery,
+    // and so PCM cadence is independent of the main thread's HTTP/WS/signaling/JSON work.
+    pcmSenderThread = std::make_unique<PcmSenderThread> (*this);
+    pcmSenderThread->startThread (juce::Thread::Priority::high);
+
+    std::cout << "[KINGZ] NetworkTransmitter::start() - thread started (+ PCM sender)" << std::endl;
     return true;
 }
 
@@ -866,6 +871,14 @@ void NetworkTransmitter::stop()
     streamTransmitSamplePosition.store (0, std::memory_order_release);
     transportSyncSequence.store (0, std::memory_order_release);
     transportStateSequence.store (0, std::memory_order_release);
+    // Stop the PCM sender first (before closing clients/sockets) so it can't touch a
+    // half-torn-down client list.
+    if (pcmSenderThread != nullptr)
+    {
+        pcmSenderThread->signalThreadShouldExit();
+        pcmSenderThread->stopThread (2000);
+        pcmSenderThread.reset();
+    }
     signalThreadShouldExit();
     closeSocket (listener);
     stopThread (2000);
@@ -1061,7 +1074,9 @@ void NetworkTransmitter::run()
         pumpClients();              // Process HTTP/WebSocket messages
         processWebRtcQueue();        // Handle queued WebRTC operations (non-blocking)
         maybeBroadcastTransportState();
-        streamReadyPcmChunks();      // Stream audio
+        // PCM streaming now runs on the dedicated pcmSenderThread (decoupled from this loop).
+        // transport.sync is broadcast here, off the PCM path; it self-rate-limits to 100ms.
+        maybeBroadcastTransportSync (AudioFifoWorker::framesForChunkMs (targetChunkMs.load (std::memory_order_acquire)));
         wait (2);                   // Small sleep to prevent busy-wait
     }
 
@@ -1783,44 +1798,36 @@ void NetworkTransmitter::closePeerConnection (ClientConnection& client)
 
 void NetworkTransmitter::adaptPacketSize()
 {
-    const auto nowMs = juce::Time::currentTimeMillis();
-    if (nowMs - lastPacketAdaptationMs < 500)
-        return;
-
-    lastPacketAdaptationMs = nowMs;
-
-    if (! isConnected.load (std::memory_order_acquire))
-        return;
-
-    const auto health = bufferHealth.load (std::memory_order_acquire);
-    const auto currentChunkMs = AudioFifoWorker::normaliseChunkMs (
-        targetChunkMs.load (std::memory_order_acquire));
-
-    const auto bufferedRatio = juce::jlimit (0.0f, 1.0f, 1.0f - health);
-    const auto estimatedLatencyMs = static_cast<float> (currentChunkMs)
-        + bufferedRatio * static_cast<float> (currentChunkMs * 2);
-
-    auto nextChunkMs = currentChunkMs;
-
-    if (estimatedLatencyMs > 15.0f || health < 0.7f)
-        nextChunkMs = juce::jmin (AudioFifoWorker::maxChunkDurationMs,
-                                  currentChunkMs + AudioFifoWorker::chunkDurationStepMs);
-    else if (estimatedLatencyMs < 10.0f && health > 0.9f)
-        nextChunkMs = juce::jmax (AudioFifoWorker::minChunkDurationMs,
-                                  currentChunkMs - AudioFifoWorker::chunkDurationStepMs);
-
-    if (nextChunkMs != currentChunkMs)
+    // PINNED to the minimum chunk size (5ms). Growing chunks 5→20ms under "stress" made
+    // delivery chunkier/burstier — the opposite of what we want now that the receiver absorbs
+    // latency. And since bufferHealth is measured against the raised drop ceiling, the old
+    // health-driven growth would misbehave. Smaller, even 5ms chunks = smoothest stream.
+    // (Kept as a function/no-op-style pin so the call site and transition signalling stay intact.)
+    if (targetChunkMs.load (std::memory_order_acquire) != AudioFifoWorker::minChunkDurationMs)
     {
-        targetChunkMs.store (nextChunkMs, std::memory_order_release);
+        targetChunkMs.store (AudioFifoWorker::minChunkDurationMs, std::memory_order_release);
         chunkSizeTransitionPending.store (true, std::memory_order_release);
     }
 }
 
-void NetworkTransmitter::streamReadyPcmChunks()
+void NetworkTransmitter::pumpPcmOnce()
 {
+    // Send AT MOST one ready chunk per wake — a scheduling backlog drains as a gentle
+    // catch-up (≤1 chunk/ms), never an all-at-once burst. (Previously a while-loop drained
+    // the whole FIFO each pass, so any thread stall became a delivery burst.)
     AudioFifoWorker::DynamicPcmChunk chunk {};
-    while (fifo.readPcmChunk (chunk, targetChunkMs))
+    if (fifo.readPcmChunk (chunk, targetChunkMs))
         broadcastPcmChunk (chunk);
+}
+
+void NetworkTransmitter::PcmSenderThread::run()
+{
+    // Even-paced PCM drain, independent of the main thread's HTTP/WS/signaling/JSON work.
+    while (! threadShouldExit() && owner.shouldListen.load (std::memory_order_acquire))
+    {
+        owner.pumpPcmOnce();
+        wait (1);  // ~1ms wake; chunks arrive ~every 5ms → steady ~1 send / 5ms
+    }
 }
 
 void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChunk& chunk)
@@ -1828,6 +1835,14 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChu
     const juce::ScopedLock lock { clientLock };
     const auto chunkFrames = static_cast<int> (chunk.byteCount
         / (AudioFifoWorker::inputChannels * sizeof (std::int16_t)));
+
+    // Measure health against the (raised) drop ceiling so it stays meaningful — otherwise
+    // normal buffering above the old 10ms would peg health at 0 and mislead telemetry.
+    const auto srForHealth = streamSampleRate.load (std::memory_order_acquire);
+    const auto bytesPerMsForHealth = juce::jmax (1, srForHealth * AudioFifoWorker::inputChannels
+                                                    * static_cast<int> (sizeof (std::int16_t)) / 1000);
+    const auto dropCeilingBytes = static_cast<std::size_t> (bytesPerMsForHealth)
+                                  * static_cast<std::size_t> (pcmDropCeilingMs);
 
     auto openPcmClientCount = 0;
     auto worstBufferedBytes = std::size_t { 0 };
@@ -1845,8 +1860,8 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChu
             const auto clientBuffered = channel->bufferedAmount();
             worstBufferedBytes = std::max (worstBufferedBytes, clientBuffered);
 
-            // Count clients in critical state (>10ms buffered)
-            if (clientBuffered > chunk.byteCount * 2)
+            // Count clients approaching the drop ceiling (>half of it)
+            if (clientBuffered > dropCeilingBytes / 2)
                 ++criticalClientsCount;
         }
 
@@ -1860,9 +1875,9 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChu
         return;
     }
 
-    // Health = 1.0 - (ratio of buffer used on worst client)
-    // This excludes clients still in WebRTC negotiation
-    const auto maxBufferedBytes = chunk.byteCount * 2;
+    // Health = 1.0 - (ratio of buffer used on worst client), measured against the drop ceiling.
+    // This excludes clients still in WebRTC negotiation.
+    const auto maxBufferedBytes = dropCeilingBytes;
     const auto ratio = static_cast<float> (worstBufferedBytes)
         / static_cast<float> (maxBufferedBytes);
 
@@ -1892,7 +1907,7 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChu
 
     chunkSizeTransitionPending.store (false, std::memory_order_release);
     streamTransmitSamplePosition.fetch_add (chunkFrames, std::memory_order_release);
-    maybeBroadcastTransportSync (chunkFrames);
+    // transport.sync is now broadcast from the main signaling thread (off the PCM path).
 }
 
 void NetworkTransmitter::maybeBroadcastTransportSync (int chunkFrames)
@@ -2001,52 +2016,45 @@ bool NetworkTransmitter::trySendPcmChunk (ClientConnection& client,
         return false;
 
     const auto bufferedAmount = channel->bufferedAmount();
-    const auto targetLatencyBytes = chunk.byteCount;      // 1 chunk = 5ms
-    const auto maxQueueBytes = chunk.byteCount * 2;       // 10ms ceiling
-    const auto criticalThresholdBytes = chunk.byteCount * 3;  // 15ms = alert
 
-    // AGGRESSIVE DROP LOGIC: if buffer exceeds 10ms ceiling, we've hit TCP backpressure
-    if (bufferedAmount > maxQueueBytes)
+    // Drop ceiling in bytes, rate-accurate for pcmDropCeilingMs of audio at the live stream
+    // rate (handles 44.1/48/88.2/96k without pinning a value).
+    const auto sr = streamSampleRate.load (std::memory_order_acquire);
+    const auto bytesPerMs = juce::jmax (1, sr * AudioFifoWorker::inputChannels
+                                           * static_cast<int> (sizeof (std::int16_t)) / 1000);
+    const auto dropCeilingBytes = static_cast<std::size_t> (bytesPerMs)
+                                  * static_cast<std::size_t> (pcmDropCeilingMs);
+
+    // LAST-RESORT drop ONLY. The old design dropped at 10ms buffered ("prefer a click over
+    // latency"), which punched a hole in the stream on every minor link stall — the receiver
+    // hears those gaps as the periodic click. The receiver now absorbs latency (adaptive
+    // jitter buffer + ±2% drift catch-up); it cannot recover dropped samples. So we let the
+    // SCTP buffer ride through normal stalls and drop only when it genuinely runs away
+    // (>pcmDropCeilingMs ≈ link effectively dead), which also caps memory/latency.
+    if (bufferedAmount > dropCeilingBytes)
     {
-        // TCP is backed up — prefer a click over accumulated latency
-        // This signals to the client that network jitter is causing dropout
-        // Log to JUCE console for debugging
+        droppedPacketCount.fetch_add (1, std::memory_order_relaxed);
         if (bufferHealthAlert.load (std::memory_order_acquire) == 0)
         {
-            juce::Logger::writeToLog (
-                juce::String ("TCP_BACKPRESSURE: buffered=") + juce::String (bufferedAmount)
-                + " bytes maxQueue=" + juce::String (maxQueueBytes)
-                + " chunk=" + juce::String (chunk.byteCount)
-                + " dropCount=" + juce::String (droppedPacketCount.load (std::memory_order_acquire))
-            );
             bufferHealthAlert.store (1, std::memory_order_release);
+            juce::Logger::writeToLog (
+                juce::String ("PCM_DROP (runaway): buffered=") + juce::String (static_cast<int> (bufferedAmount))
+                + "B > ceiling=" + juce::String (static_cast<int> (dropCeilingBytes))
+                + "B (" + juce::String (pcmDropCeilingMs) + "ms) link stalled; dropCount="
+                + juce::String (droppedPacketCount.load (std::memory_order_acquire))
+            );
         }
-        droppedPacketCount.fetch_add (1, std::memory_order_relaxed);
-        return false;  // Skip this packet — client will resync to live edge
-    }
-
-    // Clear alert if buffer is now healthy
-    if (bufferedAmount < targetLatencyBytes && bufferHealthAlert.load (std::memory_order_acquire) != 0)
-    {
-        juce::Logger::writeToLog (
-            juce::String ("TCP_BACKPRESSURE_RECOVERED: buffered=") + juce::String (bufferedAmount)
-            + " bytes normalcy restored"
-        );
-        bufferHealthAlert.store (0, std::memory_order_release);
-    }
-
-    // Critical alert if approaching 15ms — network is under stress
-    if (bufferedAmount > criticalThresholdBytes)
-    {
-        juce::Logger::writeToLog (
-            juce::String ("TCP_ALERT_CRITICAL: buffered=") + juce::String (bufferedAmount)
-            + " bytes (15ms+) dropCount=" + juce::String (droppedPacketCount.load (std::memory_order_acquire))
-        );
-    }
-
-    // Standard backpressure: don't queue if we're already at 10ms
-    if (bufferedAmount > chunk.byteCount * 2)
         return false;
+    }
+
+    // Recovered: clear the alert once the buffer drains back under a quarter of the ceiling.
+    if (bufferedAmount < dropCeilingBytes / 4 && bufferHealthAlert.load (std::memory_order_acquire) != 0)
+    {
+        bufferHealthAlert.store (0, std::memory_order_release);
+        juce::Logger::writeToLog (
+            juce::String ("PCM_DROP_RECOVERED: buffered=") + juce::String (static_cast<int> (bufferedAmount)) + "B"
+        );
+    }
 
     try
     {
