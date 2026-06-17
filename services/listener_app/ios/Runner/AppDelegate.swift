@@ -22,13 +22,7 @@ private final class KingzPcmPlayer {
   private var queuedFrames: Int = 0
   private var playbackStarted = false
   private var underrunCount = 0
-  private var fadeRemainingFrames = 0
   private var liveEdgeResetCount = 0
-  private var recoveryTrimCount = 0
-  private var lastRecoveryTrim = Date.distantPast
-  private var targetBufferMs = 80
-  private var safeBufferMs = 140
-  private var adaptiveQueue = true
   private var monitoringMode = "balanced"
   private var lastDiagnosticsLog = Date()
   private var receivedFramesSinceLog = 0
@@ -37,34 +31,56 @@ private final class KingzPcmPlayer {
   private var packetsSinceLog = 0
   private var lastPacketBytes = 0
 
-  private var prebufferFrames: Int {
-    msToFrames(max(35, min(targetBufferMs, safeBufferMs)))
-  }
+  // Retained from the Dart config for the config log only; queue DEPTH is now adaptive.
+  private var targetBufferMs = 80
+  private var safeBufferMs = 140
+  private var adaptiveQueue = true
 
-  private var targetLiveQueueFrames: Int {
-    msToFrames(max(45, targetBufferMs))
-  }
+  // MARK: req 1 — adaptive target depth
+  // EMA of packet inter-arrival time + its variance form a network-jitter estimate;
+  // targetQueueMs = base + k*jitterStdev (clamped) so the buffer grows on bursty
+  // links and shrinks on clean ones.
+  private static let jitterBaseMs: Double = 60
+  private static let jitterK: Double = 2.5
+  private static let jitterMinMs: Double = 40
+  private static let jitterMaxMs: Double = 300
+  private static let iatAlpha: Double = 0.02
+  private var iatEmaMs: Double = 0
+  private var iatVarEmaMs2: Double = 0
+  private var jitterStdevMs: Double = 0
+  private var lastPacketArrival: Date?
+  private var adaptiveTargetMs: Double = 60
+  private var targetQueueFrames: Int = 0  // adaptive target in stream frames (bufferLock)
 
-  private var recoveryTrimThresholdFrames: Int {
-    let multiplier = adaptiveQueue ? 2 : 3
-    return max(targetLiveQueueFrames + 1, msToFrames(max(targetBufferMs + 80, targetBufferMs * multiplier)))
-  }
+  // MARK: req 2 — drift correction via resample ratio
+  // A slow control loop nudges the effective resample ratio by at most ±0.5% to pull
+  // the queue toward target, absorbing clock drift + steady-state offset by
+  // imperceptibly time-stretching instead of dropping/inserting samples. No trimming.
+  private static let maxRatioOffset: Double = 0.005   // ±0.5%
+  private static let driftFullScaleMs: Double = 40    // error at which the nudge saturates
+  private static let driftDeadbandMs: Double = 4      // ignore tiny errors
+  private static let driftTauSeconds: Double = 3.0    // LPF time constant (slow)
+  private var ratioOffset: Double = 0
 
-  private var overflowRetainFrames: Int {
-    max(targetLiveQueueFrames, msToFrames(max(targetBufferMs + 40, safeBufferMs)))
-  }
-
-  private var maxQueuedFrames: Int {
-    max(overflowRetainFrames + 1, msToFrames(max(safeBufferMs * 3, targetBufferMs + 300)))
-  }
-
-  private var ringCapacityTargetFrames: Int {
-    max(maxQueuedFrames + Int(sampleRate * 0.500), Int(sampleRate * 2.500))
-  }
-
-  private var fadeFrames: Int {
-    max(1, Int(sampleRate * 0.003))
-  }
+  // MARK: req 3 — crossfade / concealment
+  // Equal-power ramps hide the only two events allowed to change sample count:
+  // overflow drops and underruns. Never a hard cut or raw-silence step.
+  private static let rampSeconds: Double = 0.003      // 3ms
+  private var rampFrames: Int = 1
+  private var fadeInTable: [Float] = [1]              // equal-power, length rampFrames
+  private var fadeOutTable: [Float] = [0]
+  private var seamFadePos: Int = -1                   // -1 idle; else index into fade tables
+  private var seamAnchorL: Float = 0
+  private var seamAnchorR: Float = 0
+  private var lastOutL: Float = 0
+  private var lastOutR: Float = 0
+  private var concealing = false
+  private var concealPos = 0
+  private var concealAnchorL: Float = 0
+  private var concealAnchorR: Float = 0
+  private var crossfadedUnderruns = 0
+  private var crossfadedOverflows = 0
+  private var diagFileLines: [String] = []  // recent diag lines mirrored to /tmp fallback
 
   private var format: AVAudioFormat {
     AVAudioFormat(
@@ -73,6 +89,17 @@ private final class KingzPcmPlayer {
       channels: 2,
       interleaved: false
     )!
+  }
+
+  // MARK: req 4 — ring sized to comfortably hold 2× the max target plus headroom,
+  // so normal bursts never reach the ceiling.
+  private var ringCapacityTargetFrames: Int {
+    max(framesForMs(Self.jitterMaxMs * 2 + 500), Int(sampleRate * 1.5))
+  }
+
+  // Hard latency ceiling — a rare safety valve sitting above the max adaptive target.
+  private var overflowCeilingFrames: Int {
+    framesForMs(Self.jitterMaxMs + 150)
   }
 
   func configure(sampleRate newSampleRate: Double) {
@@ -88,6 +115,7 @@ private final class KingzPcmPlayer {
     ringCapacityFrames = ringCapacityTargetFrames
     ringBuffer = Array(repeating: 0, count: ringCapacityFrames * Self.channelCount)
     resetRingLocked()
+    targetQueueFrames = framesForMs(adaptiveTargetMs)  // ms→frames mapping changed with the rate
     bufferLock.unlock()
   }
 
@@ -110,7 +138,9 @@ private final class KingzPcmPlayer {
       monitoringMode = newMode
     }
     safeBufferMs = clamp(safeBufferMs, min: targetBufferMs + 20, max: 600)
-    print("[KINGZ IOS PCM] queue config mode=\(monitoringMode) targetMs=\(targetBufferMs) safeMs=\(safeBufferMs) adaptive=\(adaptiveQueue) prebuffer=\(prebufferFrames) recovery=\(recoveryTrimThresholdFrames) max=\(maxQueuedFrames)")
+    // Depth is adaptive now (req 1); these values are accepted for compatibility but no
+    // longer set the queue depth. base/k/min/max drive the target instead.
+    print("[KINGZ IOS PCM] queue config mode=\(monitoringMode) adaptive=ALWAYS base=\(Int(Self.jitterBaseMs)) k=\(Self.jitterK) min=\(Int(Self.jitterMinMs)) max=\(Int(Self.jitterMaxMs)) overflowCeiling=\(overflowCeilingFrames) ring=\(ringCapacityTargetFrames) (dartTargetMs=\(targetBufferMs) safeMs=\(safeBufferMs) ignored)")
   }
 
   func start() throws {
@@ -121,6 +151,7 @@ private final class KingzPcmPlayer {
     try session.setActive(true)
     // Output runs at the granted hardware rate; the stream is resampled to it.
     outputSampleRate = session.sampleRate > 0 ? session.sampleRate : 48_000
+    buildRampTables()  // equal-power crossfade ramps live in OUTPUT-frame space
 
     prepareRingBuffer()
     let source = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
@@ -134,7 +165,9 @@ private final class KingzPcmPlayer {
     engine = eng
     sourceNode = source
     enqueueLogCount = 0
+    bufferLock.lock()  // engine is live now; reset under the lock to avoid racing render()
     resetRingLocked()
+    bufferLock.unlock()
     let outputs = session.currentRoute.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
     print("[KINGZ IOS PCM] start ok streamSampleRate=\(sampleRate) hardwareSampleRate=\(session.sampleRate) asbd=[\(debugASBD(format))] engineRunning=\(eng.isRunning) route=[\(outputs)]")
   }
@@ -199,30 +232,44 @@ private final class KingzPcmPlayer {
     let incomingFrameCount = data.count / 4  // 2 channels × 2 bytes/sample
     guard incomingFrameCount > 0 else { return }
 
-    let frameCount = min(incomingFrameCount, maxQueuedFrames)
+    // req 1: update the network-jitter estimate from packet inter-arrival times and
+    // recompute the adaptive target depth. Gaps (stream (re)start) are excluded so a
+    // single long pause doesn't blow up the variance.
+    let arrival = Date()
+    if let last = lastPacketArrival {
+      let dtMs = arrival.timeIntervalSince(last) * 1000.0
+      if dtMs > 0, dtMs < 500 {
+        if iatEmaMs == 0 { iatEmaMs = dtMs }
+        let prevMean = iatEmaMs
+        iatEmaMs = (1 - Self.iatAlpha) * iatEmaMs + Self.iatAlpha * dtMs
+        let dev = dtMs - prevMean
+        iatVarEmaMs2 = (1 - Self.iatAlpha) * iatVarEmaMs2 + Self.iatAlpha * (dev * dev)
+        jitterStdevMs = iatVarEmaMs2.squareRoot()
+      }
+    }
+    lastPacketArrival = arrival
+    let tMs = min(max(Self.jitterBaseMs + Self.jitterK * jitterStdevMs, Self.jitterMinMs), Self.jitterMaxMs)
+    adaptiveTargetMs = tMs
+
+    let frameCount = min(incomingFrameCount, ringCapacityFrames > 0 ? ringCapacityFrames - 1 : incomingFrameCount)
     let sourceStartFrame = max(0, incomingFrameCount - frameCount)
 
     bufferLock.lock()
-    if queuedFrames + frameCount > maxQueuedFrames {
-      let queuedBeforeFlush = queuedFrames
-      trimOldestFramesLocked(
-        max(0, queuedFrames - overflowRetainFrames)
-      )
-      liveEdgeResetCount += 1
-      fadeRemainingFrames = fadeFrames
-      print("[KINGZ IOS PCM] overflow trim #\(liveEdgeResetCount) queued=\(queuedBeforeFlush) incoming=\(frameCount) retain=\(overflowRetainFrames) max=\(maxQueuedFrames)")
-    } else if adaptiveQueue,
-      queuedFrames + frameCount > recoveryTrimThresholdFrames,
-      Date().timeIntervalSince(lastRecoveryTrim) >= 0.35
-    {
-      let queuedBeforeTrim = queuedFrames
-      trimOldestFramesLocked(
-        max(0, queuedFrames - targetLiveQueueFrames)
-      )
-      recoveryTrimCount += 1
-      lastRecoveryTrim = Date()
-      fadeRemainingFrames = fadeFrames
-      print("[KINGZ IOS PCM] recovery trim #\(recoveryTrimCount) queued=\(queuedBeforeTrim) incoming=\(frameCount) target=\(targetLiveQueueFrames) threshold=\(recoveryTrimThresholdFrames)")
+    targetQueueFrames = framesForMs(tMs)
+
+    // req 4: overflow is now a RARE safety valve. With the ring sized to ~2× the max
+    // target, normal bursts never reach the ceiling; only a pathological backlog above
+    // the latency ceiling forces a drop, and that seam is crossfaded (req 3) — no
+    // recovery-trim, ever. Steady-state offset is corrected by the drift loop (req 2).
+    if queuedFrames + frameCount > overflowCeilingFrames {
+      let queuedBeforeDrop = queuedFrames
+      let dropCount = max(0, queuedFrames - targetQueueFrames)
+      if dropCount > 0 {
+        trimOldestFramesLocked(dropCount)
+        startSeamFadeLocked()      // crossfade pre-drop tail → post-drop samples
+        crossfadedOverflows += 1
+        print("[KINGZ IOS PCM] overflow xfade #\(crossfadedOverflows) queued=\(queuedBeforeDrop) -> \(queuedFrames) ceiling=\(overflowCeilingFrames) target=\(targetQueueFrames)")
+      }
     }
 
     data.withUnsafeBytes { raw in
@@ -246,7 +293,7 @@ private final class KingzPcmPlayer {
 
     if enqueueLogCount < 10 {
       enqueueLogCount += 1
-      print("[KINGZ IOS PCM] enqueue #\(enqueueLogCount) bytes=\(data.count) frames=\(frameCount) queued=\(queuedSnapshot) target=\(prebufferFrames) max=\(maxQueuedFrames) engineRunning=\(engine?.isRunning == true) renderStarted=\(isPlaybackStarted)")
+      print("[KINGZ IOS PCM] enqueue #\(enqueueLogCount) bytes=\(data.count) frames=\(frameCount) queued=\(queuedSnapshot) target=\(targetQueueFrames) ceiling=\(overflowCeilingFrames) engineRunning=\(engine?.isRunning == true) renderStarted=\(isPlaybackStarted)")
     }
   }
 
@@ -255,6 +302,7 @@ private final class KingzPcmPlayer {
     ringCapacityFrames = ringCapacityTargetFrames
     ringBuffer = Array(repeating: 0, count: ringCapacityFrames * Self.channelCount)
     resetRingLocked()
+    targetQueueFrames = framesForMs(adaptiveTargetMs)
     bufferLock.unlock()
   }
 
@@ -264,7 +312,56 @@ private final class KingzPcmPlayer {
     writeFrame = 0
     queuedFrames = 0
     playbackStarted = false
-    fadeRemainingFrames = fadeFrames
+    // Reset playback/concealment/drift state; keep the jitter estimate (it describes
+    // the link, not this buffer instance).
+    ratioOffset = 0
+    seamFadePos = -1
+    concealing = false
+    concealPos = 0
+    lastOutL = 0
+    lastOutR = 0
+  }
+
+  // Precompute equal-power crossfade ramps in OUTPUT-frame space (req 3).
+  private func buildRampTables() {
+    let n = max(1, Int((outputSampleRate * Self.rampSeconds).rounded()))
+    var fin = [Float](repeating: 0, count: n)
+    var fout = [Float](repeating: 0, count: n)
+    for i in 0..<n {
+      let t = Double(i + 1) / Double(n)  // (0, 1]
+      fin[i] = Float(sin(t * .pi / 2.0))   // fade-in,  sin
+      fout[i] = Float(cos(t * .pi / 2.0))  // fade-out, cos  (fin² + fout² = 1)
+    }
+    bufferLock.lock()
+    rampFrames = n
+    fadeInTable = fin
+    fadeOutTable = fout
+    bufferLock.unlock()
+  }
+
+  // Begin an equal-power fade-IN from the current output level into the upcoming
+  // samples — used on resume-from-underrun and on an overflow drop seam (req 3).
+  private func startSeamFadeLocked() {
+    seamAnchorL = lastOutL
+    seamAnchorR = lastOutR
+    seamFadePos = 0
+  }
+
+  // Underrun/pre-roll concealment: decay the last good sample to zero over one ramp,
+  // then hold silence — never a raw-silence step (req 3). Returns the concealed frame.
+  private func concealmentSampleLocked() -> (Float, Float) {
+    if concealPos < rampFrames {
+      let g = fadeOutTable[concealPos]
+      concealPos += 1
+      let oL = concealAnchorL * g
+      let oR = concealAnchorR * g
+      lastOutL = oL
+      lastOutR = oR
+      return (oL, oR)
+    }
+    lastOutL = 0
+    lastOutR = 0
+    return (0, 0)
   }
 
   private func trimOldestFramesLocked(_ frameCount: Int) {
@@ -327,28 +424,64 @@ private final class KingzPcmPlayer {
     guard let right = right else { return }
 
     bufferLock.lock()
-    // Snapshot ratio inside lock; sampleRate/outputSampleRate only change at configure time.
-    let ratio = outputSampleRate > 0 ? sampleRate / outputSampleRate : 1.0
+    // Base ratio converts stream-rate → output-rate; sampleRate/outputSampleRate only
+    // change at configure time. The drift loop (req 2) adds a tiny ±0.5% nudge on top.
+    let baseRatio = outputSampleRate > 0 ? sampleRate / outputSampleRate : 1.0
+
+    // req 2: slow control loop, once per render block. Pull the queue toward the adaptive
+    // target by gently speeding up (queue too deep) or slowing down (queue too shallow)
+    // the effective resample ratio — capped at ±maxRatioOffset, low-passed over ~tau s so
+    // the ratio nudges over seconds and never jumps per block.
+    if playbackStarted, targetQueueFrames > 0 {
+      let errMs = Double(queuedFrames - targetQueueFrames) * 1000.0 / sampleRate
+      var desired = 0.0
+      if abs(errMs) > Self.driftDeadbandMs {
+        desired = (errMs / Self.driftFullScaleMs) * Self.maxRatioOffset
+        desired = min(max(desired, -Self.maxRatioOffset), Self.maxRatioOffset)
+      }
+      let blockDt = Double(frameCount) / outputSampleRate
+      let aLP = min(1.0, blockDt / Self.driftTauSeconds)
+      ratioOffset += (desired - ratioOffset) * aLP
+    } else {
+      ratioOffset += (0 - ratioOffset) * 0.1  // ease back to neutral while not playing
+    }
+    let effectiveRatio = baseRatio * (1.0 + ratioOffset)
+
     for frame in 0..<frameCount {
+      // Pre-roll / resume gate. Start (or resume) once the queue reaches the adaptive
+      // target; until then, conceal rather than emit raw silence.
       if !playbackStarted {
-        if queuedFrames >= prebufferFrames {
+        if queuedFrames >= max(1, targetQueueFrames), ringCapacityFrames > 0 {
           playbackStarted = true
-          fadeRemainingFrames = fadeFrames
+          concealing = false
+          startSeamFadeLocked()  // equal-power fade-in from the (decayed) concealment level
         } else {
-          left[frame] = 0
-          right[frame] = 0
+          if !concealing {
+            concealing = true
+            concealPos = 0
+            concealAnchorL = lastOutL
+            concealAnchorR = lastOutR
+          }
+          let s = concealmentSampleLocked()
+          left[frame] = s.0
+          right[frame] = s.1
           continue
         }
       }
 
+      // Underrun: the only other event allowed to change sample count. Conceal (decay →
+      // hold), count it, and drop back to pre-roll so we resume at target with a fade-in.
       guard queuedFrames > 0, ringCapacityFrames > 0 else {
-        left[frame] = 0
-        right[frame] = 0
-        if playbackStarted {
-          playbackStarted = false
-          underrunCount += 1
-          fadeRemainingFrames = fadeFrames
-        }
+        playbackStarted = false
+        underrunCount += 1
+        crossfadedUnderruns += 1
+        concealing = true
+        concealPos = 0
+        concealAnchorL = lastOutL
+        concealAnchorR = lastOutR
+        let s = concealmentSampleLocked()
+        left[frame] = s.0
+        right[frame] = s.1
         continue
       }
 
@@ -361,16 +494,27 @@ private final class KingzPcmPlayer {
       let r0 = Float(ringBuffer[ri0 + 1]) / 32_768.0
       let l1 = queuedFrames > 1 ? Float(ringBuffer[ri1]) / 32_768.0 : l0
       let r1 = queuedFrames > 1 ? Float(ringBuffer[ri1 + 1]) / 32_768.0 : r0
-      var gain: Float = 1.0
-      if fadeRemainingFrames > 0 {
-        gain = Float(fadeFrames - fadeRemainingFrames + 1) / Float(fadeFrames)
-        fadeRemainingFrames -= 1
-      }
-      left[frame] = (l0 * (1 - frac) + l1 * frac) * gain
-      right[frame] = (r0 * (1 - frac) + r1 * frac) * gain
+      var outL = l0 * (1 - frac) + l1 * frac
+      var outR = r0 * (1 - frac) + r1 * frac
 
-      // Advance the fractional cursor by ratio stream-frames per output frame.
-      readFraction += ratio
+      // Equal-power crossfade over a seam (resume or overflow drop): blend the held
+      // pre-seam level into the incoming samples. fin² + fout² = 1, so no power dip.
+      if seamFadePos >= 0, seamFadePos < rampFrames {
+        let fi = fadeInTable[seamFadePos]
+        let fo = fadeOutTable[seamFadePos]
+        outL = seamAnchorL * fo + outL * fi
+        outR = seamAnchorR * fo + outR * fi
+        seamFadePos += 1
+        if seamFadePos >= rampFrames { seamFadePos = -1 }
+      }
+
+      left[frame] = outL
+      right[frame] = outR
+      lastOutL = outL
+      lastOutR = outR
+
+      // Advance the fractional cursor by the drift-corrected ratio per output frame.
+      readFraction += effectiveRatio
       let consumed = Int(readFraction)
       readFraction -= Double(consumed)
       readFrame = (readFrame + consumed) % ringCapacityFrames
@@ -393,6 +537,12 @@ private final class KingzPcmPlayer {
     let consumedSnapshot = consumedFramesSinceLog
     let packetsSnapshot = packetsSinceLog
     let packetBytesSnapshot = lastPacketBytes
+    let targetSnapshot = targetQueueFrames
+    let adaptiveTargetMsSnapshot = adaptiveTargetMs
+    let jitterSnapshot = jitterStdevMs
+    let ratioOffsetSnapshot = ratioOffset
+    let crossUnderSnapshot = crossfadedUnderruns
+    let crossOverSnapshot = crossfadedOverflows
     receivedFramesSinceLog = 0
     renderedFramesSinceLog = 0
     consumedFramesSinceLog = 0
@@ -401,12 +551,31 @@ private final class KingzPcmPlayer {
     bufferLock.unlock()
 
     let queuedMs = Double(queuedSnapshot) * 1000.0 / sampleRate
+    let targetMsActual = Double(targetSnapshot) * 1000.0 / sampleRate
     let receiveFps = Double(receivedSnapshot) / elapsed
     let renderFps = Double(renderedSnapshot) / elapsed
     let consumeFps = Double(consumedSnapshot) / elapsed
     let resampleRatio = outputSampleRate > 0 ? sampleRate / outputSampleRate : 1.0
+    let ratioOffsetPpm = Int((ratioOffsetSnapshot * 1_000_000).rounded())
     let packetFrames = packetBytesSnapshot / (Self.channelCount * MemoryLayout<Int16>.size)
-    print("[KINGZ IOS PCM] diag mode=\(monitoringMode) targetMs=\(targetBufferMs) streamSampleRate=\(sampleRate) outputSampleRate=\(outputSampleRate) resampleRatio=\(String(format: "%.4f", resampleRatio)) queuedFrames=\(queuedSnapshot) queuedMs=\(Int(queuedMs.rounded())) receivedFps=\(Int(receiveFps.rounded())) consumedFps=\(Int(consumeFps.rounded())) renderedFps=\(Int(renderFps.rounded())) packets=\(packetsSnapshot) lastPacketBytes=\(packetBytesSnapshot) lastPacketFrames=\(packetFrames) underruns=\(underrunCount) overflowTrims=\(liveEdgeResetCount) recoveryTrims=\(recoveryTrimCount)")
+    let line = "[KINGZ IOS PCM] diag mode=\(monitoringMode) streamSampleRate=\(sampleRate) outputSampleRate=\(outputSampleRate) resampleRatio=\(String(format: "%.4f", resampleRatio)) adaptiveTargetMs=\(Int(adaptiveTargetMsSnapshot.rounded())) targetQueueMs=\(Int(targetMsActual.rounded())) jitterStdevMs=\(String(format: "%.1f", jitterSnapshot)) currentRatioOffsetPpm=\(ratioOffsetPpm) queuedFrames=\(queuedSnapshot) queuedMs=\(Int(queuedMs.rounded())) receivedFps=\(Int(receiveFps.rounded())) consumedFps=\(Int(consumeFps.rounded())) renderedFps=\(Int(renderFps.rounded())) packets=\(packetsSnapshot) lastPacketBytes=\(packetBytesSnapshot) lastPacketFrames=\(packetFrames) underruns=\(underrunCount) crossfadedUnderruns=\(crossUnderSnapshot) crossfadedOverflows=\(crossOverSnapshot) recoveryTrims=0"
+    print(line)
+    writeDiagLine(line)
+  }
+
+  // Mirror recent diag lines to /tmp/kingz_diag.log as a fallback for when the mDNS
+  // port-5353 error blocks the live VM stdout read. Keeps the last N lines in memory and
+  // rewrites atomically (a throwing Swift API — no iOS 13.4-only FileHandle calls, no
+  // uncatchable NSException). Best-effort: silently no-ops where the sandbox forbids /tmp
+  // (real device), where print() over the VM remains primary.
+  private func writeDiagLine(_ line: String) {
+    diagFileLines.append(line)
+    let cap = 300
+    if diagFileLines.count > cap {
+      diagFileLines.removeFirst(diagFileLines.count - cap)
+    }
+    let blob = diagFileLines.joined(separator: "\n") + "\n"
+    try? blob.write(toFile: "/tmp/kingz_diag.log", atomically: true, encoding: .utf8)
   }
 
   private func debugASBD(_ format: AVAudioFormat) -> String {
@@ -421,8 +590,8 @@ private final class KingzPcmPlayer {
     return requested.rounded()
   }
 
-  private func msToFrames(_ milliseconds: Int) -> Int {
-    max(1, Int((sampleRate * Double(milliseconds) / 1000.0).rounded()))
+  private func framesForMs(_ ms: Double) -> Int {
+    max(1, Int((sampleRate * ms / 1000.0).rounded()))
   }
 
   private func clamp(_ value: Int, min minValue: Int, max maxValue: Int) -> Int {
