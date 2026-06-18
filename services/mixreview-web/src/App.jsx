@@ -51,6 +51,7 @@ const clientReviewerIdentities = ["Artist", "Manager", "Label"];
 // The real password lives in the ENGINEER_PASSWORD Railway env var — not in this bundle.
 const ADMIN_UNLOCK_SESSION_KEY = "mixreview.engineerUnlocked";
 const ACCESS_STORAGE_KEY = "mixreview.accessState";
+const PREVIOUS_TRACK_RESTART_THRESHOLD_SECONDS = 3;
 
 const emptyProjectName = "Untitled MixReview Session";
 const emptySessionDetails = {
@@ -250,6 +251,7 @@ export default function App({ onFirstRender } = {}) {
   const tracksRef = useRef(tracks);
   const playbackTracksRef = useRef(tracks);
   const activeTrackIdRef = useRef(activeTrackId);
+  const currentTimeRef = useRef(0);
   const selectTrackRef = useRef(null);
   const repeatModeRef = useRef("off");
   // isPlayingRef — always-current mirror of isPlaying state used by
@@ -329,6 +331,7 @@ export default function App({ onFirstRender } = {}) {
   );
   const playbackTrackIndex = getPlaybackIndex(playbackTracks, activeTrackId);
   const hasPrev =
+    currentTime >= PREVIOUS_TRACK_RESTART_THRESHOLD_SECONDS ||
     playbackTrackIndex > 0 ||
     (repeatMode === "all" && playbackTracks.length > 1);
   const hasNext =
@@ -559,6 +562,10 @@ export default function App({ onFirstRender } = {}) {
   useEffect(() => {
     activeTrackIdRef.current = activeTrackId;
   }, [activeTrackId]);
+
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
 
   useEffect(() => {
     appViewRef.current = appView;
@@ -1964,23 +1971,45 @@ export default function App({ onFirstRender } = {}) {
     });
   }, []);
 
+  const restartActiveTrack = useCallback(() => {
+    const shouldResume = isPlayingRef.current;
+    currentTimeRef.current = 0;
+    setCurrentTime(0);
+    playerRef.current?.seekToTime?.(0);
+    if (shouldResume) {
+      playerRef.current?.play?.()?.catch?.(() => {});
+    }
+  }, []);
+
   const handlePrevTrack = useCallback(() => {
     const sequence = playbackTracks;
     const idx = sequence.findIndex((t) => t.id === activeTrackId);
     if (idx < 0) return;
+
+    if (currentTimeRef.current >= PREVIOUS_TRACK_RESTART_THRESHOLD_SECONDS) {
+      if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
+        unlockAudioSession();
+      }
+      restartActiveTrack();
+      return;
+    }
+
     let targetId = null;
     if (idx > 0) {
       targetId = sequence[idx - 1].id;
-    } else {
+    } else if (repeatMode === "all") {
       targetId = sequence.length > 1 ? sequence[sequence.length - 1].id : sequence[0]?.id ?? null;
     }
-    if (!targetId) return;
+    if (!targetId) {
+      restartActiveTrack();
+      return;
+    }
     autoPlayNextRef.current = true;
     if (isMobileViewport() && isReviewerMode && userHasPlayedRef.current) {
       unlockAudioSession();
     }
     selectTrack(targetId);
-  }, [activeTrackId, isReviewerMode, playbackTracks, selectTrack]);
+  }, [activeTrackId, isReviewerMode, playbackTracks, repeatMode, restartActiveTrack, selectTrack]);
 
   const handleNextTrack = useCallback(() => {
     const sequence = playbackTracks;
@@ -2409,6 +2438,7 @@ export default function App({ onFirstRender } = {}) {
   }, [updateActiveVersion]);
 
   const handlePlaybackTimeUpdate = useCallback((time) => {
+    currentTimeRef.current = time;
     setCurrentTime(time);
 
     const crossedMarker = [...comments]
