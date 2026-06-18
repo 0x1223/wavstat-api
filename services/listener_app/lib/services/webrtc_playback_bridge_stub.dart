@@ -54,6 +54,10 @@ class WebRtcPlaybackBridge {
   int _offerGeneration = 0;
   int _pcmPacketCount = 0;
   Timer? _disconnectTimer;
+  // Last peer connection state reported by onConnectionState for the current generation. Used
+  // to re-check liveness when the disconnect-recovery timer fires, so a transient minimize blip
+  // (Disconnected -> Connected on resume) never tears down a recovered stream.
+  RTCPeerConnectionState? _lastConnectionState;
   Timer? _legacyOfferFallbackTimer;
   String? _lastOfferSdp;
   String _lastOfferType = 'offer';
@@ -322,6 +326,7 @@ class WebRtcPlaybackBridge {
     _peerReady = false;
     _playbackStartedSignaled = false;
     _remoteDescriptionSet = false;
+    _lastConnectionState = null;
     _processingSignal = false; // Reset signal processing flag
     _pcmPacketCount = 0;
     _pendingCandidates.clear();
@@ -359,6 +364,7 @@ class WebRtcPlaybackBridge {
     _closePeer();
 
     _remoteDescriptionSet = false;
+    _lastConnectionState = null;
     _pendingCandidates.clear();
 
     final config = <String, dynamic>{
@@ -438,8 +444,18 @@ class WebRtcPlaybackBridge {
         return;
       }
       debugPrint('[KINGZ WebRTC] connection state: $state');
+      _lastConnectionState = state;
 
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        // Peer recovered (e.g. UDP resumed after a minimize suspend). Cancel any pending
+        // disconnect-recovery timer so a transient blip never falls back / tears down a live
+        // stream. A genuine, sustained failure leaves the timer to fire normally.
+        if (_disconnectTimer != null) {
+          debugPrint(
+              '[KINGZ WebRTC] peer back to Connected — cancelling pending disconnect recovery');
+          _disconnectTimer?.cancel();
+          _disconnectTimer = null;
+        }
         _updateTelemetry(
           outputActive: _pcmPlaybackBridge.telemetry.outputActive,
           stateOverride: 'native-webrtc-connected',
@@ -730,10 +746,22 @@ class WebRtcPlaybackBridge {
   void _scheduleDisconnectRecovery(int generation) {
     _disconnectTimer?.cancel();
     _disconnectTimer = Timer(const Duration(seconds: 2), () {
-      if (generation == _offerGeneration && _active) {
-        debugPrint('[KINGZ WebRTC] disconnect recovery triggered');
-        onFallback?.call('connection-failed');
+      if (generation != _offerGeneration || !_active) {
+        return;
       }
+      // Re-check the LIVE peer state before falling back. A minimize-induced UDP suspend makes
+      // the peer blip Disconnected then return to Connected on resume; the old code fired
+      // regardless and dropped the current-generation stream (active=false). Only fall back if
+      // the peer is STILL genuinely down at expiry. (Generation guard kept intact above.)
+      final liveState = _lastConnectionState;
+      if (liveState == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        debugPrint(
+            '[KINGZ WebRTC] disconnect recovery SKIPPED — peer recovered to Connected (transient blip)');
+        return;
+      }
+      debugPrint(
+          '[KINGZ WebRTC] disconnect recovery triggered (peerState=$liveState)');
+      onFallback?.call('connection-failed');
     });
   }
 
