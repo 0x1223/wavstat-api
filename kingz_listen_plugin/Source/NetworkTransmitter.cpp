@@ -301,27 +301,12 @@ var pcmSampleRate = 48000;
 var bufferAhead   = 0.06;
 var maxLead       = 0.16;
 var minLead       = 0.012;
-// Adaptive jitter window. Delivery is bursty (clump-then-gap), so a fixed window thrashes
-// between backlog-drop and underrun. Grow the cushion on underrun and the ceiling on drop,
-// then decay both toward the mode floor during clean playback — self-stabilizes low latency
-// to the smallest click-free window the link sustains.
-var baseBufferAhead = 0.06;   // mode floor for the cushion
-var baseMaxLead     = 0.16;   // mode floor for the drop ceiling
-var maxBufferAhead  = 0.18;   // cushion cap (180ms)
-var maxMaxLead      = 0.35;   // ceiling cap (350ms)
-var adaptStep       = 0.015;  // grow cushion +15ms per underrun
-var maxLeadStep     = 0.030;  // grow ceiling +30ms per backlog drop
-var lastEventAt     = 0;      // audioCtx time of last underrun/drop (for decay)
-var fadeSec         = 0.005;  // conceal fade length (ramp around resets)
-var concealGain   = null;     // envelope node — fades around resets (no hard cut)
 var underruns     = 0;
 var droppedChunks = 0;
 var scheduledSources = [];
 var pendingCandidates = [];
 var lastHiddenAt = 0;
 var restoreInFlight = false;
-var lastDiagAt = 0;  // [KINGZ 8082 diag] periodic-status throttle (temporary instrumentation)
-console.log("[KINGZ 8082] app.js loaded buildTag=8082-adaptive-v1");
 
 function tryParse(s){ try{ return JSON.parse(s); }catch(_){ return null; } }
 
@@ -405,9 +390,6 @@ function ensureAudio(){
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
     gainNode = audioCtx.createGain();
     gainNode.gain.value = parseFloat(document.getElementById("vol-slider").value) / 100;
-    concealGain = audioCtx.createGain();   // conceal envelope: src -> concealGain -> gainNode(volume) -> out
-    concealGain.gain.value = 1;
-    concealGain.connect(gainNode);
     configureMediaSession();
     try{
       mediaDest = audioCtx.createMediaStreamDestination();
@@ -451,22 +433,6 @@ function updateStreamFormat(msg){
   document.getElementById("stat-quality").textContent = formatSampleRate(pcmSampleRate) + " / 16-bit";
 }
 
-// Conceal a jitter-window reset (underrun/drop): fade the tail out then the resumed audio in via
-// a dedicated envelope node, so a reset is click-free instead of a hard cut. Always ramps back
-// to 1 (cannot get stuck silent); resumeTime is the new nextPlayTime.
-function concealReset(now, resumeTime){
-  if(!concealGain) return;
-  var g = concealGain.gain;
-  var resume = Math.max(now + fadeSec, resumeTime);
-  try{
-    g.cancelScheduledValues(now);
-    g.setValueAtTime(g.value, now);
-    g.linearRampToValueAtTime(0, now + fadeSec);
-    g.setValueAtTime(0, resume);
-    g.linearRampToValueAtTime(1, resume + fadeSec);
-  }catch(_){ try{ g.value = 1; }catch(__){} }
-}
-
 function playPcm(arrayBuffer){
   if(!audioCtx || stopped) return;
   var samples = new Int16Array(arrayBuffer);
@@ -480,7 +446,7 @@ function playPcm(arrayBuffer){
   }
   var src = audioCtx.createBufferSource();
   src.buffer = buf;
-  src.connect(concealGain || gainNode);
+  src.connect(gainNode);
   src.onended = function(){
     var idx = scheduledSources.indexOf(src);
     if(idx >= 0) scheduledSources.splice(idx, 1);
@@ -492,23 +458,10 @@ function playPcm(arrayBuffer){
     stopScheduledSources();
     nextPlayTime = now + bufferAhead;
     lead = bufferAhead;
-    // Backlog from a delivery burst: grow the ceiling so future bursts fit without dropping.
-    maxLead = Math.min(maxMaxLead, maxLead + maxLeadStep);
-    lastEventAt = now;
-    concealReset(now, nextPlayTime);
-    console.log("[KINGZ 8082] DROP backlog #" + droppedChunks + " grew maxLead=" + Math.round(maxLead*1000) + "ms bufferAhead=" + Math.round(bufferAhead*1000) + "ms");  // [KINGZ 8082 diag]
   } else if(nextPlayTime < now + minLead){
-    if(nextPlayTime > 0){
-      underruns++;
-      // Starvation from a delivery gap: grow the cushion so future gaps don't underrun.
-      bufferAhead = Math.min(maxBufferAhead, bufferAhead + adaptStep);
-      if(maxLead < bufferAhead + 0.06) maxLead = Math.min(maxMaxLead, bufferAhead + 0.06);
-      lastEventAt = now;
-      console.log("[KINGZ 8082] UNDERRUN #" + underruns + " schedLead=" + Math.round((nextPlayTime - now)*1000) + "ms grew bufferAhead=" + Math.round(bufferAhead*1000) + "ms maxLead=" + Math.round(maxLead*1000) + "ms");  // [KINGZ 8082 diag]
-    }
+    if(nextPlayTime > 0) underruns++;
     nextPlayTime = now + bufferAhead;
     lead = bufferAhead;
-    concealReset(now, nextPlayTime);
   }
   src.start(nextPlayTime);
   scheduledSources.push(src);
@@ -516,16 +469,6 @@ function playPcm(arrayBuffer){
   lead = Math.max(0, nextPlayTime - now);
   document.getElementById("stat-latency").textContent =
     Math.round(Math.min(lead, maxLead) * 1000) + " ms";
-  if(now - lastDiagAt >= 1){  // [KINGZ 8082 diag] periodic buffer/underrun status (~1s)
-    lastDiagAt = now;
-    // Reclaim latency: after a sustained clean stretch (no underrun/drop), ease the window back
-    // toward the mode floor so a transient burst doesn't inflate latency for the whole session.
-    if(lastEventAt > 0 && now - lastEventAt > 8){
-      if(bufferAhead > baseBufferAhead) bufferAhead = Math.max(baseBufferAhead, bufferAhead - adaptStep / 2);
-      if(maxLead > baseMaxLead) maxLead = Math.max(baseMaxLead, maxLead - maxLeadStep / 2);
-    }
-    console.log("[KINGZ 8082] diag lead=" + Math.round(lead*1000) + "ms bufferAhead=" + Math.round(bufferAhead*1000) + "ms maxLead=" + Math.round(maxLead*1000) + "ms underruns=" + underruns + " dropped=" + droppedChunks + " pcmRate=" + pcmSampleRate);
-  }
 }
 
 function sendSignal(payload){
@@ -738,11 +681,8 @@ Object.keys(modes).forEach(function(id){
   document.getElementById(id).addEventListener("click", function(){
     document.querySelectorAll(".mode-btn").forEach(function(b){ b.classList.remove("active"); });
     this.classList.add("active");
-    baseBufferAhead = modes[id].target;
-    baseMaxLead     = modes[id].max;
-    bufferAhead  = baseBufferAhead;
-    maxLead      = baseMaxLead;
-    lastEventAt  = 0;
+    bufferAhead  = modes[id].target;
+    maxLead      = modes[id].max;
     nextPlayTime = 0;
     stopScheduledSources();
   });
