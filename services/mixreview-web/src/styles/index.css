@@ -2135,6 +2135,10 @@ h2 {
   cursor: crosshair;
 }
 
+.waveform.waveform-render-pending > * {
+  opacity: 0;
+}
+
 .waveform-zoom-wrapper {
   display: flex;
   align-items: center;

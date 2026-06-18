@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const app = express();
@@ -34,6 +34,7 @@ const upload = multer({
   limits: { fileSize: maxAudioBytes }
 });
 const pendingPeakRepairKeys = new Set();
+const verifiedPeakObjectKeys = new Set();
 let peakRepairChain = Promise.resolve();
 
 const r2Config = {
@@ -491,6 +492,7 @@ async function generateAndUploadPeaks(audioBuffer, peaksKey, numPoints = 800) {
     }),
     R2_LONG_TIMEOUT_MS,
   );
+  verifiedPeakObjectKeys.add(peaksKey);
   console.log("[MixReview] Peaks uploaded", { peaksKey, numPoints: peaks.length });
 }
 
@@ -511,6 +513,25 @@ async function generateAndStoreSessionPeaksFromR2(originalKey, peaksKey, apiBase
   await generateAndStoreSessionPeaks(audioBuffer, peaksKey, apiBaseUrl, sessionId, trackId, versionId, originalKey);
 }
 
+async function r2ObjectExists(objectKey) {
+  if (verifiedPeakObjectKeys.has(objectKey)) return true;
+
+  try {
+    await sendR2(
+      new HeadObjectCommand({ Bucket: r2Config.bucketName, Key: objectKey }),
+      R2_TIMEOUT_MS,
+    );
+    verifiedPeakObjectKeys.add(objectKey);
+    return true;
+  } catch (error) {
+    const status = error?.$metadata?.httpStatusCode;
+    if (status === 404 || error?.name === "NotFound" || error?.name === "NoSuchKey") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function queueMissingPeakRepairs(session, req) {
   if (!hasR2Config || !session?.id) return;
 
@@ -521,16 +542,26 @@ function queueMissingPeakRepairs(session, req) {
     const versions = Array.isArray(track.versions) ? track.versions : [];
     const version = versions.find((candidate) => candidate.id === track.activeVersionId) || versions[0];
     const audio = version?.audioMetadata;
-    if (!version?.id || !audio?.key || audio.peaksUrl) return;
+    if (!version?.id || !audio?.key) return;
 
+    const peaksKey = `${audio.key}.peaks.json`;
+    if (audio.peaksUrl && verifiedPeakObjectKeys.has(peaksKey)) return;
     const repairId = `${session.id}:${track.id}:${version.id}:${audio.key}`;
     if (pendingPeakRepairKeys.has(repairId)) return;
     pendingPeakRepairKeys.add(repairId);
 
-    const peaksKey = `${audio.key}.peaks.json`;
     peakRepairChain = peakRepairChain
       .catch(() => {})
-      .then(() => generateAndStoreSessionPeaksFromR2(audio.key, peaksKey, apiBaseUrl, session.id, track.id, version.id))
+      .then(async () => {
+        const peaksUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(peaksKey)}`;
+        if (await r2ObjectExists(peaksKey)) {
+          if (!audio.peaksUrl) {
+            await patchSessionAudioMetadata(session.id, track.id, version.id, { peaksUrl });
+          }
+          return;
+        }
+        await generateAndStoreSessionPeaksFromR2(audio.key, peaksKey, apiBaseUrl, session.id, track.id, version.id);
+      })
       .catch((err) => console.error("[MixReview] Missing peaks repair failed", { key: audio.key, error: err.message }))
       .finally(() => pendingPeakRepairKeys.delete(repairId));
   });

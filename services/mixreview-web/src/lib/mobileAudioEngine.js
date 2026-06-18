@@ -26,6 +26,7 @@ let _detachWaveformResize = null;
 let _latePeaksPollTimer = null;
 const _handlers = { current: null };
 let _loadGeneration = 0;
+let _renderedUrl = null;
 // Tracks the current track duration so Media Session setPositionState() has
 // a stable value between durationchange events.
 let _mediaDuration = 0;
@@ -953,7 +954,12 @@ export function mountMobileEngine(container, url, handlers) {
       const duration = Math.max(wsDuration, mediaDuration);
       if (duration > 0) _handlers.current?.onDurationChange?.(duration);
       if (mediaEl && (mediaSourceMatchesUrl(mediaEl, url) || mediaEl.readyState >= 1 || duration > 0)) {
-        _handlers.current?.onReady?.(buildMobilePlayer(existingWs, mediaEl));
+        const player = buildMobilePlayer(existingWs, mediaEl);
+        if (_renderedUrl === url) {
+          _handlers.current?.onReady?.(player);
+        } else {
+          _handlers.current?.onWaveformUnavailable?.(player, "audio-ready");
+        }
         _handlers.current?.onPlaybackChange?.(!mediaEl.paused);
       }
     });
@@ -966,6 +972,7 @@ export function mountMobileEngine(container, url, handlers) {
   _wasTimeAdvancing = false;
   _isRestoring = false;
   _mediaDuration = 0;
+  _renderedUrl = null;
   clearLatePeaksPoll();
 
   // Reuse the existing WaveSurfer instance when one is available — calling
@@ -994,6 +1001,7 @@ export function mountMobileEngine(container, url, handlers) {
     _detachWaveformResize?.();
     _detachWaveformResize = null;
     if (_ws) { _ws.destroy(); _ws = null; }
+    _renderedUrl = null;
     return null;
   }
 
@@ -1280,6 +1288,7 @@ export function mountMobileEngine(container, url, handlers) {
       console.log("[MixReview] Late waveform decode success after fallback");
       const duration = ws.getDuration();
       const mediaElement = ws.getMediaElement?.();
+      _renderedUrl = url;
       _handlers.current?.onDurationChange?.(duration);
       _handlers.current?.onReady?.(buildMobilePlayer(ws, mediaElement));
       return;
@@ -1304,6 +1313,7 @@ export function mountMobileEngine(container, url, handlers) {
       }
     }
     console.log("[MixReview] WaveSurfer decode success", { duration });
+    _renderedUrl = url;
     _handlers.current?.onDurationChange?.(duration);
     _handlers.current?.onReady?.(buildMobilePlayer(ws, mediaElement));
   });
@@ -1427,6 +1437,7 @@ export function disposeMobileEngine() {
     _ws = null;
   }
   _url = null;
+  _renderedUrl = null;
   _wasPlayingOnHide = false;
   _urlOnHide = null;
   _wasTimeAdvancing = false;

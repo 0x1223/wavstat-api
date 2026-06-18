@@ -136,6 +136,7 @@ export function WaveformReview({
   const [waveformWidth, setWaveformWidth] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [mobileWaveformRendered, setMobileWaveformRendered] = useState(false);
   const [internalMarkerToolActive, setInternalMarkerToolActive] = useState(false);
   const [pendingMarker, setPendingMarker] = useState(null);
   const isMarkerToolActive =
@@ -298,6 +299,7 @@ export function WaveformReview({
 
     setIsLoading(true);
     setLoadError("");
+    setMobileWaveformRendered(false);
     setDuration(0);
     setWaveformWidth(getWaveformMetrics(containerRef.current).width);
     callbacksRef.current.onReady(null);
@@ -344,6 +346,7 @@ export function WaveformReview({
           console.log("[WaveformReview] Mobile decode success");
           setIsLoading(false);
           setLoadError("");
+          setMobileWaveformRendered(true);
           callbacksRef.current.onReady(player);
         },
         // Called when waveform decode fails/times out but the audio element
@@ -352,12 +355,14 @@ export function WaveformReview({
           console.log("[WaveformReview] Waveform unavailable — audio-only mode", { reason });
           setIsLoading(false);
           setLoadError("");
+          setMobileWaveformRendered(false);
           callbacksRef.current.onReady(player);
         },
         onError: (err) => {
           console.warn("[WaveformReview] Mobile decode failure", err?.message);
           setIsLoading(false);
           setLoadError("This audio file could not be decoded. Try a WAV or MP3 file.");
+          setMobileWaveformRendered(false);
           callbacksRef.current.onReady(null);
           callbacksRef.current.onDurationChange(0);
           callbacksRef.current.onPlaybackChange(false);
@@ -849,6 +854,8 @@ export function WaveformReview({
     : [];
 
   const timelineLabels = duration > 0 ? getTimelineLabels(duration) : [];
+  const hideMobileWaveform =
+    hasAudio && isMobileViewport() && !mobileWaveformRendered;
 
   return (
     <section className="waveform-panel" aria-label="Waveform review">
@@ -911,7 +918,7 @@ export function WaveformReview({
             {/* Canvas — WaveSurfer mounts here */}
             <div
               ref={containerRef}
-              className="waveform"
+              className={`waveform${hideMobileWaveform ? " waveform-render-pending" : ""}`}
               onTouchStart={(event) => {
                 if (event.touches.length > 1) return; // 2-finger pinch → stage listener
                 // Record the initial touch position so we can determine gesture
