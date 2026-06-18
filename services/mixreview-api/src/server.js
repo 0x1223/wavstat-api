@@ -9,10 +9,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DeleteObjectCommand, DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import ffmpegStaticPath from "ffmpeg-static";
 
 const app = express();
 const port = process.env.PORT || 4301;
 const isProduction = process.env.NODE_ENV === "production";
+const ffmpegCommand = process.env.FFMPEG_PATH || ffmpegStaticPath || "ffmpeg";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const serviceRoot = path.resolve(__dirname, "..");
 const uploadRoot = path.join(serviceRoot, "storage", "uploads");
@@ -572,7 +574,7 @@ function queueMissingPeakRepairs(session, req) {
 // Each point is the highest-magnitude sample in its window (sign preserved).
 async function generatePeaksWithFfmpeg(audioBuffer, numPoints = 800) {
   return new Promise((resolve, reject) => {
-    const ff = spawn("ffmpeg", [
+    const ff = spawn(ffmpegCommand, [
       "-i", "pipe:0",   // read from stdin
       "-ac", "1",       // mix down to mono
       "-f", "f32le",    // raw float32-LE PCM output
@@ -815,7 +817,7 @@ function classifyAudioFormat(fileName, mimetype) {
 // an M4A container.  Returns the output as a Node Buffer.
 async function transcodeToAac(inputBuffer) {
   return new Promise((resolve, reject) => {
-    const ff = spawn("ffmpeg", [
+    const ff = spawn(ffmpegCommand, [
       "-i",        "pipe:0",
       "-c:a",      "aac",
       "-b:a",      "256k",
