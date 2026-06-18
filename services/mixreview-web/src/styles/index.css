@@ -5401,7 +5401,7 @@ button.stem-toggle-action.solo-btn.active {
 
 /* ════════════════════════════════════════════════════════════════════════════
    DESKTOP LAYOUT REFINEMENTS  (≥ 981 px)
-   Scope: project/track/stem panel only. No mobile, no playback, no transport.
+   Scope: desktop workspace fit and short-height desktop transport visibility.
    ════════════════════════════════════════════════════════════════════════════ */
 @media (min-width: 981px) {
   .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) {
@@ -5524,11 +5524,17 @@ button.stem-toggle-action.solo-btn.active {
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell) {
+      --desktop-short-edge: clamp(12px, 1.2vw, 18px);
+      --desktop-short-gap: 10px;
+      --desktop-short-transport-height: 64px;
       height: auto;
       min-height: 100dvh;
       overflow: visible;
-      gap: 12px;
-      padding-block: clamp(14px, 2dvh, 18px);
+      gap: var(--desktop-short-gap);
+      padding:
+        clamp(10px, 1.6dvh, 14px)
+        var(--desktop-short-edge)
+        calc(var(--desktop-short-transport-height) + 24px);
     }
 
     .app-shell.reviewer-mode:not(.setup-shell):not(.admin-shell) {
@@ -5536,16 +5542,17 @@ button.stem-toggle-action.solo-btn.active {
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell) .top-stack {
-      gap: 8px;
+      gap: 6px;
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell) .topbar {
-      min-height: 76px;
-      padding-block: 14px;
+      min-height: 68px;
+      gap: 12px;
+      padding: 10px 14px;
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell) .topbar h1 {
-      font-size: clamp(1.55rem, 2.5vw, 2rem);
+      font-size: clamp(1.4rem, 2.25vw, 1.85rem);
       line-height: 1;
     }
 
@@ -5557,30 +5564,88 @@ button.stem-toggle-action.solo-btn.active {
       margin-top: 5px;
     }
 
+    .app-shell:not(.setup-shell):not(.admin-shell) .project-controls {
+      min-width: 0;
+      gap: 12px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .header-action-cluster {
+      min-width: 0;
+      gap: 6px;
+      flex-wrap: nowrap;
+      justify-content: flex-start;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .header-action-cluster::-webkit-scrollbar {
+      display: none;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .header-action-cluster .session-actions {
+      flex-wrap: nowrap;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .review-count {
+      min-width: 94px;
+      padding: 4px 10px;
+      font-size: 0.7rem;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .review-count span {
+      font-size: 1.22rem;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .header-export-button,
+    .app-shell:not(.setup-shell):not(.admin-shell) .session-actions button,
+    .app-shell:not(.setup-shell):not(.admin-shell) .permission-badge,
+    .app-shell:not(.setup-shell):not(.admin-shell) .status-switch button {
+      min-height: 32px;
+      font-size: 0.76rem;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .header-export-button,
+    .app-shell:not(.setup-shell):not(.admin-shell) .session-actions button,
+    .app-shell:not(.setup-shell):not(.admin-shell) .status-switch button {
+      padding-inline: 10px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .approval-switch {
+      grid-template-columns: repeat(3, minmax(92px, 1fr));
+    }
+
     .app-shell:not(.setup-shell):not(.admin-shell) .review-layout {
       --workspace-top-row-height: clamp(300px, 38dvh, 360px);
-      --workspace-waveform-panel-min: clamp(320px, 42dvh, 400px);
-      --workspace-waveform-stage-min: clamp(180px, 23dvh, 240px);
+      --workspace-waveform-panel-min: clamp(220px, 30dvh, 360px);
+      --workspace-waveform-stage-min: clamp(96px, 14dvh, 220px);
       height: auto;
       min-height: 0;
       overflow: visible;
       align-items: start;
+      gap: var(--desktop-short-gap);
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
-      grid-template-rows: var(--workspace-top-row-height) minmax(var(--workspace-waveform-panel-min), auto) auto;
+      grid-template-rows:
+        var(--workspace-top-row-height)
+        minmax(var(--workspace-waveform-panel-min), auto)
+        var(--desktop-short-transport-height);
+      gap: var(--desktop-short-gap);
       height: auto;
       overflow: visible;
     }
 
     .app-shell.reviewer-mode:not(.setup-shell):not(.admin-shell) .review-main {
       grid-template-rows: var(--workspace-top-row-height) minmax(var(--workspace-waveform-panel-min), auto);
+      gap: var(--desktop-short-gap);
       height: auto;
       overflow: visible;
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-side {
       grid-template-rows: var(--workspace-top-row-height) minmax(var(--workspace-waveform-panel-min), auto);
+      gap: var(--desktop-short-gap);
       height: auto;
       overflow: visible;
     }
@@ -5600,16 +5665,67 @@ button.stem-toggle-action.solo-btn.active {
       height: auto;
       max-height: none;
       min-height: var(--workspace-waveform-panel-min);
-      gap: 10px;
-      padding: 14px 16px;
+      gap: 6px;
+      padding: 10px 14px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .mix-strip {
+      align-items: center;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .mix-strip h2 {
+      font-size: 0.94rem;
+      line-height: 1.08;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .selected-time {
+      min-width: 68px;
+      padding: 6px 9px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .timeline {
+      font-size: 0.7rem;
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .review-console {
-      padding-bottom: 8px;
+      padding-top: 6px;
+      padding-bottom: 4px;
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .marker-tool-toggle {
-      min-height: 32px;
+      min-height: 30px;
+      padding-inline: 12px;
+      font-size: 0.76rem;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .waveform-stage {
+      min-height: var(--workspace-waveform-stage-min);
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .transport {
+      position: fixed;
+      left: var(--desktop-short-edge);
+      right: calc(var(--desktop-short-edge) + 380px + var(--desktop-short-gap));
+      bottom: clamp(8px, 0.8dvh, 12px);
+      z-index: 80;
+      min-height: var(--desktop-short-transport-height);
+      gap: 12px;
+      padding: 10px 16px;
+      box-shadow:
+        0 -10px 34px rgba(0, 0, 0, 0.52),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .transport button {
+      min-height: 36px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .transport .play-button {
+      min-width: 104px;
+    }
+
+    .review-layout.side-collapsed .review-main .transport {
+      right: var(--desktop-short-edge);
     }
   }
 
