@@ -4,8 +4,8 @@ import WaveSurfer from "wavesurfer.js";
 // so comment state changes and re-renders never cause WaveSurfer to be
 // destroyed or re-created.
 
-// How long to wait for WaveSurfer's waveform decode (fetch + decodeAudioData)
-// before activating the audio-only fallback.
+// How long to wait for WaveSurfer's peaks-backed render before activating the
+// audio-only fallback.
 const WAVEFORM_TIMEOUT_MS = 12_000;
 const PEAKS_FETCH_TIMEOUT_MS = 3_500;
 const MOBILE_WAVEFORM_MAX_HEIGHT = 180;
@@ -23,6 +23,7 @@ let _wasTimeAdvancing = false;  // true if timeupdate fired within 500 ms of hid
 let _lastTimeUpdateAt = 0;      // performance.now() of the last timeupdate tick
 let _detachNativeListeners = null;
 let _detachWaveformResize = null;
+let _latePeaksPollTimer = null;
 const _handlers = { current: null };
 // Tracks the current track duration so Media Session setPositionState() has
 // a stable value between durationchange events.
@@ -75,6 +76,13 @@ function resolveMobilePeaks(peaksUrls) {
     (chain, peaksUrl) => chain.then((peaks) => peaks ?? fetchPeaksCandidate(peaksUrl)),
     Promise.resolve(null),
   );
+}
+
+function clearLatePeaksPoll() {
+  if (_latePeaksPollTimer) {
+    window.clearTimeout(_latePeaksPollTimer);
+    _latePeaksPollTimer = null;
+  }
 }
 
 function getMobileWaveformHeight(container) {
@@ -881,6 +889,7 @@ export function mountMobileEngine(container, url, handlers) {
   _wasTimeAdvancing = false;
   _isRestoring = false;
   _mediaDuration = 0;
+  clearLatePeaksPoll();
 
   // Reuse the existing WaveSurfer instance when one is available — calling
   // ws.load(newUrl) keeps the same HTMLAudioElement alive so iOS retains the
@@ -930,8 +939,8 @@ export function mountMobileEngine(container, url, handlers) {
   // full audio blob fetch + decodeAudioData decode cycle.
   //
   // If peaks are absent, or every candidate fails quickly, peaksFetch resolves
-  // to null and we fall back to ws.load(url) with no peaks
-  // (the existing full-decode path), silently.
+  // to null and we load the native audio element directly. That keeps playback
+  // available without forcing iOS through a large decodeAudioData pass.
   const peaksFetch = resolveMobilePeaks(peaksUrls);
 
   // ── WaveSurfer instance ────────────────────────────────────────────────
@@ -1038,19 +1047,6 @@ export function mountMobileEngine(container, url, handlers) {
 
     const mediaEl = ws.getMediaElement?.();
 
-    // Hard failure: the media element itself reported a network/decode error.
-    if (mediaEl?.error) {
-      didSettle = true;
-      clearFallbackTimer();
-      console.warn("[MixReview] Media element error — audio unavailable", {
-        reason,
-        code: mediaEl.error.code,
-        message: mediaEl.error.message,
-      });
-      _handlers.current?.onError?.(new Error("Audio decode failed"));
-      return;
-    }
-
     if (!mediaEl) {
       didSettle = true;
       clearFallbackTimer();
@@ -1059,10 +1055,18 @@ export function mountMobileEngine(container, url, handlers) {
       return;
     }
 
+    if (mediaEl.error) {
+      console.warn("[MixReview] Media element error — retrying direct audio load", {
+        reason,
+        code: mediaEl.error.code,
+        message: mediaEl.error.message,
+      });
+    }
+
     // Case A — WaveSurfer's fetch already completed and it set a blob URL on
     // the media element. The decode step failed or timed out, but the element
     // can play because it has audio data.
-    if (mediaEl.src || mediaEl.currentSrc) {
+    if ((mediaEl.src || mediaEl.currentSrc) && !mediaEl.error) {
       if (mediaEl.readyState >= 2) {
         // Already HAVE_CURRENT_DATA — can play immediately
         didSettle = true;
@@ -1108,18 +1112,31 @@ export function mountMobileEngine(container, url, handlers) {
 
     const giveUp = setTimeout(() => {
       if (didSettle || _ws !== ws) return;
-      didSettle = true;
-      console.warn("[MixReview] Fallback: direct audio load timeout");
-      _handlers.current?.onError?.(new Error("Audio loading timeout"));
-    }, 10_000);
+      if (mediaEl.error) {
+        didSettle = true;
+        console.warn("[MixReview] Fallback: direct audio load failed", mediaEl.error?.message);
+        _handlers.current?.onError?.(new Error("Audio failed to load"));
+        return;
+      }
+      console.warn("[MixReview] Fallback: direct audio metadata slow — enabling playback anyway");
+      finishDirectLoad();
+    }, 20_000);
 
-    mediaEl.addEventListener("canplay", () => {
+    const finishDirectLoad = () => {
       clearTimeout(giveUp);
       if (didSettle || _ws !== ws) return;
       didSettle = true;
       clearFallbackTimer();
       doFallbackWithEl(mediaEl, reason);
-    }, { once: true });
+    };
+
+    if (mediaEl.readyState >= 1) {
+      finishDirectLoad();
+    } else {
+      mediaEl.addEventListener("loadedmetadata", finishDirectLoad, { once: true });
+      mediaEl.addEventListener("loadeddata", finishDirectLoad, { once: true });
+      mediaEl.addEventListener("canplay", finishDirectLoad, { once: true });
+    }
 
     mediaEl.addEventListener("error", () => {
       clearTimeout(giveUp);
@@ -1205,6 +1222,7 @@ export function mountMobileEngine(container, url, handlers) {
 
   ws.on("ready", () => {
     if (_ws !== ws) return;
+    clearLatePeaksPoll();
     if (didSettle) {
       // A fallback fired before ready arrived. The waveform has now been
       // rendered, so notify React again to clear any temporary audio-only UI.
@@ -1325,6 +1343,35 @@ export function mountMobileEngine(container, url, handlers) {
     if (!didSettle) activateFallback("canvas-error");
   }
 
+  function scheduleLatePeaksPoll() {
+    const urls = [...new Set(peaksUrls.filter(Boolean))];
+    if (urls.length === 0) return;
+
+    const pollDeadlineMs = Date.now() + 90_000;
+    const poll = () => {
+      _latePeaksPollTimer = null;
+      if (_ws !== ws || _url !== url) return;
+      if (Date.now() >= pollDeadlineMs) return;
+
+      resolveMobilePeaks(urls).then((latePeaks) => {
+        if (_ws !== ws || _url !== url) return;
+        if (latePeaks) {
+          console.log("[MixReview] Late mobile peaks resolved — rendering waveform", {
+            numChannels: latePeaks.length,
+            numPoints: latePeaks?.[0]?.length ?? 0,
+            url: url.slice(0, 80),
+          });
+          ws.load(url, latePeaks).catch(_onLoadError);
+          return;
+        }
+
+        _latePeaksPollTimer = window.setTimeout(poll, 15_000);
+      });
+    };
+
+    _latePeaksPollTimer = window.setTimeout(poll, 15_000);
+  }
+
   peaksFetch.then((peaks) => {
     // Guard: URL changed or engine was disposed while peaks were in flight.
     if (_ws !== ws || _url !== url) return;
@@ -1337,8 +1384,11 @@ export function mountMobileEngine(container, url, handlers) {
       armFallbackTimer();
       ws.load(url, peaks).catch(_onLoadError);
     } else {
-      armFallbackTimer();
-      ws.load(url).catch(_onLoadError);
+      console.log("[MixReview] No mobile peaks available — using direct audio while peaks repair runs", {
+        url: url.slice(0, 80),
+      });
+      activateFallback("missing-peaks");
+      scheduleLatePeaksPoll();
     }
   });
 
@@ -1352,6 +1402,7 @@ export function mountMobileEngine(container, url, handlers) {
  * reconnect without requiring a new user gesture.
  */
 export function disposeMobileEngine() {
+  clearLatePeaksPoll();
   _detachNativeListeners?.();
   _detachNativeListeners = null;
   _detachWaveformResize?.();
