@@ -676,8 +676,9 @@ function resolvePlaybackContentType(objectKey, storedContentType = "") {
 }
 
 async function streamAudioPlayback(req, res, next) {
+  let objectKey = "";
   try {
-    const objectKey = decodeURIComponent(req.params.encodedKey || "");
+    objectKey = decodeURIComponent(req.params.encodedKey || "");
     if (!objectKey || objectKey.includes("..")) {
       return res.status(400).json({ error: "Valid audio key is required." });
     }
