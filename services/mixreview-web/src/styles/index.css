@@ -3262,7 +3262,7 @@ body:has(.app-shell.reviewer-mode) {
   .reviewer-mode .waveform-stage {
     /* Waveform stage takes all remaining height inside the waveform card.
        min-height: 0 lets it shrink below 320px on small screens;
-       overflow: hidden clips the WaveSurfer canvas on ultra-short viewports. */
+       the mobile engine sizes the WaveSurfer canvas to this stage. */
     flex: 1;
     min-height: 0;
     overflow: hidden;
@@ -3270,8 +3270,9 @@ body:has(.app-shell.reviewer-mode) {
   }
 
   .reviewer-mode .waveform {
-    min-height: 180px;
-    height: 180px;
+    min-height: 0;
+    height: var(--mobile-waveform-height, 180px);
+    max-height: 100%;
     padding: 0 12px;
     cursor: pointer;
     /* pan-y: browser handles vertical scrolling natively; horizontal
@@ -4020,8 +4021,8 @@ body:has(.app-shell.reviewer-mode) {
   }
 
   /* Waveform stage grows to fill whatever height the card has after the
-     other flex siblings claim their natural sizes. WaveSurfer's 180px
-     canvas is clipped here if the viewport is very short — intentional. */
+     other flex siblings claim their natural sizes. The mobile engine measures
+     this stage and draws a canvas that fits instead of clipping on small phones. */
   .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
     flex: 1;
     min-height: 0;
@@ -4042,8 +4043,7 @@ body:has(.app-shell.reviewer-mode) {
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .waveform-stage {
     order: 2;
-    /* Reserve space below the waveform canvas equal to ~1 REVIEW button height */
-    padding-bottom: 56px;
+    padding-bottom: 0;
   }
 
 }
@@ -4110,8 +4110,7 @@ body:has(.app-shell.reviewer-mode) {
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    /* Slightly less padding than portrait since the REVIEW button is shorter */
-    padding-bottom: 38px;
+    padding-bottom: 0;
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-console {

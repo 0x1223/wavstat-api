@@ -8,6 +8,9 @@ import WaveSurfer from "wavesurfer.js";
 // before activating the audio-only fallback.
 const WAVEFORM_TIMEOUT_MS = 12_000;
 const PEAKS_FETCH_TIMEOUT_MS = 3_500;
+const MOBILE_WAVEFORM_MAX_HEIGHT = 180;
+const MOBILE_WAVEFORM_MIN_HEIGHT = 72;
+const MOBILE_WAVEFORM_STAGE_GUTTER = 8;
 const peaksCache = new Map();
 
 let _ws = null;
@@ -19,6 +22,7 @@ let _urlOnHide = null;          // _url value captured at hide time
 let _wasTimeAdvancing = false;  // true if timeupdate fired within 500 ms of hide
 let _lastTimeUpdateAt = 0;      // performance.now() of the last timeupdate tick
 let _detachNativeListeners = null;
+let _detachWaveformResize = null;
 const _handlers = { current: null };
 // Tracks the current track duration so Media Session setPositionState() has
 // a stable value between durationchange events.
@@ -71,6 +75,73 @@ function resolveMobilePeaks(peaksUrls) {
     (chain, peaksUrl) => chain.then((peaks) => peaks ?? fetchPeaksCandidate(peaksUrl)),
     Promise.resolve(null),
   );
+}
+
+function getMobileWaveformHeight(container) {
+  const stage = container?.closest?.(".waveform-stage");
+  const stageHeight = stage?.clientHeight || 0;
+
+  if (stageHeight > 0) {
+    const availableHeight = Math.max(0, stageHeight - MOBILE_WAVEFORM_STAGE_GUTTER);
+    return Math.round(Math.max(1, Math.min(MOBILE_WAVEFORM_MAX_HEIGHT, availableHeight)));
+  }
+
+  const viewportHeight = window.visualViewport?.height || window.innerHeight || 0;
+  if (viewportHeight > 0) {
+    return Math.round(Math.max(
+      MOBILE_WAVEFORM_MIN_HEIGHT,
+      Math.min(MOBILE_WAVEFORM_MAX_HEIGHT, viewportHeight * 0.24),
+    ));
+  }
+
+  return MOBILE_WAVEFORM_MAX_HEIGHT;
+}
+
+function syncMobileWaveformHeight(container, ws) {
+  if (!container) return MOBILE_WAVEFORM_MAX_HEIGHT;
+  const height = getMobileWaveformHeight(container);
+  container.style.setProperty("--mobile-waveform-height", `${height}px`);
+
+  if (ws?.options?.height !== height) {
+    try {
+      ws?.setOptions?.({ height });
+    } catch (error) {
+      console.warn("[MixReview] Unable to resize mobile waveform:", error?.message ?? String(error));
+    }
+  }
+
+  return height;
+}
+
+function watchMobileWaveformHeight(container, ws) {
+  _detachWaveformResize?.();
+
+  const stage = container?.closest?.(".waveform-stage") || container;
+  let frameId = 0;
+  const schedule = () => {
+    if (frameId) window.cancelAnimationFrame(frameId);
+    frameId = window.requestAnimationFrame(() => {
+      frameId = 0;
+      if (_ws === ws) syncMobileWaveformHeight(container, ws);
+    });
+  };
+
+  syncMobileWaveformHeight(container, ws);
+
+  const resizeObserver = typeof ResizeObserver === "function"
+    ? new ResizeObserver(schedule)
+    : null;
+  resizeObserver?.observe(stage);
+
+  window.visualViewport?.addEventListener("resize", schedule);
+  window.addEventListener("orientationchange", schedule);
+
+  _detachWaveformResize = () => {
+    if (frameId) window.cancelAnimationFrame(frameId);
+    resizeObserver?.disconnect();
+    window.visualViewport?.removeEventListener("resize", schedule);
+    window.removeEventListener("orientationchange", schedule);
+  };
 }
 
 // ── Persistent iOS/Safari keep-alive AudioContext ─────────────────────────
@@ -833,6 +904,8 @@ export function mountMobileEngine(container, url, handlers) {
   _url = url;
 
   if (!url) {
+    _detachWaveformResize?.();
+    _detachWaveformResize = null;
     if (_ws) { _ws.destroy(); _ws = null; }
     return null;
   }
@@ -885,6 +958,7 @@ export function mountMobileEngine(container, url, handlers) {
   //   fillParent: true already set — canvas width = container width, so the
   //                    minPxPerSec ceiling only matters when the calculated
   //                    width would exceed fillParent; keep it as a floor guard.
+  const waveformHeight = syncMobileWaveformHeight(container);
   let ws;
   if (!_reusingInstance) {
     try {
@@ -895,7 +969,7 @@ export function mountMobileEngine(container, url, handlers) {
         progressColor,
         cursorColor: "#f5efe3",
         cursorWidth: 2,
-        height: 180,
+        height: waveformHeight,
         barWidth: 2,
         barGap: 2,
         barRadius: 2,
@@ -914,6 +988,7 @@ export function mountMobileEngine(container, url, handlers) {
     }
 
     _ws = ws;
+    watchMobileWaveformHeight(container, ws);
 
     const earlyMediaEl = ws.getMediaElement?.();
     if (earlyMediaEl) {
@@ -928,6 +1003,7 @@ export function mountMobileEngine(container, url, handlers) {
   } else {
     // Reuse existing instance — same <audio> element, iOS permission intact.
     ws = _ws;
+    watchMobileWaveformHeight(container, ws);
     console.log("[MixReview] MobileEngine reuse — calling ws.load() on existing instance");
   }
 
@@ -1278,6 +1354,8 @@ export function mountMobileEngine(container, url, handlers) {
 export function disposeMobileEngine() {
   _detachNativeListeners?.();
   _detachNativeListeners = null;
+  _detachWaveformResize?.();
+  _detachWaveformResize = null;
   _isRestoring = false;
   _interruptedWhilePlaying = false;
   // Disarm the gesture-recovery listener so a stale handler cannot fire
