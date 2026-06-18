@@ -5411,7 +5411,7 @@ button.stem-toggle-action.solo-btn.active {
   }
 
   .app-shell:not(.setup-shell):not(.admin-shell) .review-layout {
-    --workspace-top-row-height: minmax(300px, 1fr);
+    --workspace-top-row-height: minmax(min(300px, 34dvh), 1fr);
     --workspace-bottom-row-height: minmax(250px, 0.82fr);
     align-items: start;
     height: 100%;
@@ -5467,6 +5467,41 @@ button.stem-toggle-action.solo-btn.active {
     max-height: 100%;
     overflow-y: auto;
     overscroll-behavior: contain;
+  }
+
+  /* Stereo waveform fit: keep the same desktop/tablet layout, but let the
+     preview row shrink with shorter laptop viewports instead of clipping. */
+  .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) {
+    grid-template-rows: auto auto auto minmax(80px, 1fr);
+    gap: clamp(12px, 1.45dvh, 18px);
+    padding: clamp(16px, 1.85dvh, 22px);
+  }
+
+  .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .waveform-stage {
+    min-height: 0;
+  }
+
+  @media (max-height: 820px) {
+    .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
+      grid-template-rows: minmax(0, clamp(150px, 21dvh, 220px)) minmax(0, 1fr) auto;
+    }
+
+    .app-shell.reviewer-mode .review-main {
+      grid-template-rows: minmax(0, clamp(150px, 21dvh, 220px)) minmax(0, 1fr);
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) {
+      gap: 8px;
+      padding: 12px 16px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .review-console {
+      padding-bottom: 8px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .marker-tool-toggle {
+      min-height: 32px;
+    }
   }
 
   /* ── 3a. DAW-style track lane height ─────────────────────────────────────── */
