@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/listener_playback_state.dart';
@@ -57,7 +56,7 @@ class LanAudioEvent {
   final String? errorMessage;
 }
 
-class LanAudioClient with WidgetsBindingObserver {
+class LanAudioClient {
   final StreamController<LanAudioEvent> _events =
       StreamController<LanAudioEvent>.broadcast();
 
@@ -90,91 +89,14 @@ class LanAudioClient with WidgetsBindingObserver {
   bool _pcmFallbackActive = false;
   bool _pcmFallbackAllowed = false;
 
-  // iOS minimize ride-through. Audio rides the WebRTC `kingz-pcm` data channel; the
-  // WebSocket only carries signaling + transport.sync + ping. When iOS briefly drops the
-  // TCP WebSocket during a foreground->background transition, WebRTC keeps delivering PCM, so
-  // the reconnect must NOT flush + renegotiate the audio path — that teardown gap is the
-  // minimize click (lock-screen never drops the socket, so it is already clean). We track the
-  // app lifecycle and, for a loss that happens while backgrounded, preserve the live WebRTC
-  // peer + native ring and only restore signaling. Web is unaffected (kIsWeb-gated).
-  AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
-  bool _preserveWebRtcOnReconnect = false;
-  // Timestamp of the most recent return to foreground from background. With the current
-  // lifecycle state this defines the "benign background window": a WebRTC peer blip caused by
-  // iOS suspending UDP across a minimize must not be treated as a genuine disconnect. The
-  // disconnect-recovery timer can fire up to ~2s after the blip (i.e. shortly after resume), so
-  // the window extends a few seconds past resume.
-  DateTime? _resumedFromBackgroundAt;
-  static const Duration _benignBackgroundResumeWindow = Duration(seconds: 6);
-
   LanAudioClient() {
     _webRtcPlaybackBridge.onTelemetry = _emitPlaybackTelemetry;
     _pcmPlaybackBridge.onTelemetry = _emitPlaybackTelemetry;
     _webRtcPlaybackBridge
         .configureTransport(_audioEngineService.transportConfig);
     _pcmPlaybackBridge.configureTransport(_audioEngineService.transportConfig);
-    _registerLifecycleObserver();
     debugPrint(
         '[KINGZ] LanAudioClient: bridge=${_pcmPlaybackBridge.telemetry.audioContextState} kIsWeb=$kIsWeb');
-  }
-
-  // Observe app foreground<->background transitions so a WebSocket drop that happens while the
-  // app is minimized can be treated as benign (ride through, don't renegotiate). Guarded so a
-  // missing WidgetsBinding (e.g. a pure-Dart test) is a no-op rather than a crash.
-  void _registerLifecycleObserver() {
-    try {
-      WidgetsBinding.instance.addObserver(this);
-    } catch (_) {
-      // No WidgetsBinding available; lifecycle gating stays inert and reconnect is unchanged.
-    }
-  }
-
-  void _removeLifecycleObserver() {
-    try {
-      WidgetsBinding.instance.removeObserver(this);
-    } catch (_) {}
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    final wasResumed = _appLifecycleState == AppLifecycleState.resumed;
-    _appLifecycleState = state;
-    // Cover the race where the socket's onDone fired a beat BEFORE this callback arrived: if
-    // we're backgrounding with a reconnect already pending, retroactively mark it benign so
-    // the in-flight reconnect rides through instead of renegotiating on the way down.
-    if (!kIsWeb &&
-        wasResumed &&
-        state != AppLifecycleState.resumed &&
-        _wasListening &&
-        _reconnectTimer?.isActive == true) {
-      _preserveWebRtcOnReconnect = true;
-      debugPrint(
-          '[KINGZ] lifecycle: backgrounding with reconnect pending — marking benign (ride through)');
-    }
-    // Returning to foreground from background opens the benign-background window during which a
-    // WebRTC peer blip (UDP suspended across the transition) is treated as transient, not a
-    // genuine disconnect — so the disconnect-recovery fallback does not tear the stream down.
-    if (!kIsWeb && !wasResumed && state == AppLifecycleState.resumed) {
-      _resumedFromBackgroundAt = DateTime.now();
-    }
-    debugPrint('[KINGZ] lifecycle: $state');
-  }
-
-  // A WebSocket loss is benign when the app is minimized/backgrounding on iOS: WebRTC + the
-  // native ring keep running, so we restore signaling without flushing or renegotiating.
-  bool _isBenignBackgroundLoss() =>
-      !kIsWeb && _appLifecycleState != AppLifecycleState.resumed;
-
-  // True while a WebRTC peer-state blip should be treated as a transient minimize artifact
-  // rather than a genuine disconnect: the app is currently backgrounded, OR it returned to the
-  // foreground within the last few seconds (the disconnect-recovery timer can fire up to ~2s
-  // after the blip). Outside this window a peer failure is genuine and the normal fallback runs.
-  bool _inBenignBackgroundWindow() {
-    if (kIsWeb) return false;
-    if (_appLifecycleState != AppLifecycleState.resumed) return true;
-    final resumedAt = _resumedFromBackgroundAt;
-    return resumedAt != null &&
-        DateTime.now().difference(resumedAt) < _benignBackgroundResumeWindow;
   }
 
   Stream<LanAudioEvent> get events => _events.stream;
@@ -203,7 +125,6 @@ class LanAudioClient with WidgetsBindingObserver {
     _webRtcActive = false;
     _pcmFallbackActive = false;
     _pcmFallbackAllowed = false;
-    _preserveWebRtcOnReconnect = false;
     _resetTransportSync();
     await _webRtcPlaybackBridge.stop();
     await _pcmPlaybackBridge.stop();
@@ -241,7 +162,6 @@ class LanAudioClient with WidgetsBindingObserver {
         '[KINGZ] startListening: ENTRY mode=$mode enablePcmPlayback=$enablePcmPlayback kIsWeb=$kIsWeb channel=${_channel != null}');
     _wasListening = true;
     _resetTransportSync();
-    _preserveWebRtcOnReconnect = false;
     _pcmFallbackAllowed = enablePcmPlayback;
     _pcmFallbackActive = false;
     final state = _audioEngineService.selectMode(mode);
@@ -317,7 +237,6 @@ class LanAudioClient with WidgetsBindingObserver {
     _wasListening = false;
     _pcmIdleTimer?.cancel();
     _resetTransportSync();
-    _preserveWebRtcOnReconnect = false;
     _webRtcActive = false;
     _pcmFallbackActive = false;
     _pcmFallbackAllowed = false;
@@ -349,7 +268,6 @@ class LanAudioClient with WidgetsBindingObserver {
 
   Future<void> dispose() async {
     _isDisposed = true;
-    _removeLifecycleObserver();
     _pcmIdleTimer?.cancel();
     await disconnect();
     await _webRtcPlaybackBridge.dispose();
@@ -407,21 +325,12 @@ class LanAudioClient with WidgetsBindingObserver {
       _startClientPing();
       _isOpening = false;
       if (isReconnect && _wasListening) {
-        if (_preserveWebRtcOnReconnect) {
-          // Benign minimize: the WebRTC peer + native ring kept running across the socket
-          // blip. Signaling was restored above — do NOT flush or renegotiate (that gap is the
-          // minimize click), and do NOT renegotiate on resume either. Resume from the retained
-          // buffer so queuedMs is preserved across the transition.
-          _preserveWebRtcOnReconnect = false;
-          _webRtcActive = true; // the preserved peer is still live; keep bookkeeping honest
-          debugPrint(
-              '[KINGZ] _open: RECONNECT (benign background) - signaling restored, WebRTC + ring PRESERVED (no flush/renegotiate)');
-        } else if (_pcmFallbackAllowed && !_pcmFallbackActive) {
+        if (_pcmFallbackAllowed && !_pcmFallbackActive) {
           unawaited(
             _restartWebRtcAfterReconnect(),
           );
-          debugPrint('[KINGZ] _open: RECONNECT - WebRTC will re-negotiate');
         }
+        debugPrint('[KINGZ] _open: RECONNECT - WebRTC will re-negotiate');
       } else if (_pendingStartMode != null) {
         final mode = _pendingStartMode;
         _pendingStartMode = null;
@@ -631,24 +540,15 @@ class LanAudioClient with WidgetsBindingObserver {
   }
 
   void _handleConnectionLoss() {
+    debugPrint(
+        '[KINGZ] _handleConnectionLoss: manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed');
     if (_manualDisconnect || _isDisposed) {
       return;
     }
 
-    // On iOS a benign minimize briefly drops the signaling WebSocket while the WebRTC data
-    // channel keeps delivering audio. Preserve the live audio path across the reconnect in
-    // that case (no flush, no renegotiation) so minimize rides through like the lock screen.
-    // A genuine loss (foreground, or a long disconnect) takes the full reconnect path as before.
-    final benign = _isBenignBackgroundLoss();
-    _preserveWebRtcOnReconnect = benign;
-    debugPrint(
-        '[KINGZ] _handleConnectionLoss: benignBackground=$benign lifecycle=$_appLifecycleState manualDisconnect=$_manualDisconnect isDisposed=$_isDisposed');
-
     _clientPingTimer?.cancel();
     _pcmIdleTimer?.cancel();
-    if (!benign) {
-      _webRtcActive = false;
-    }
+    _webRtcActive = false;
     _resetTransportSync();
     _channel = null;
     _subscription = null;
@@ -717,19 +617,6 @@ class LanAudioClient with WidgetsBindingObserver {
         _manualDisconnect ||
         _isDisposed ||
         _pcmFallbackActive) {
-      return _pcmPlaybackBridge.telemetry;
-    }
-
-    // Benign-background gate (mirrors the verified WebSocket ride-through): a peer-state blip
-    // from an iOS minimize UDP suspend reaches here as 'connection-failed'. If it lands inside
-    // the background->resume window, treat it as transient — keep the live WebRTC peer + native
-    // ring feeding; do NOT stop the bridge (which would set active=false and drop the current
-    // stream) and do NOT send listen.stop. The bridge already re-checks peer liveness before
-    // firing this, so reaching here in-window means the blip hadn't settled yet — it recovers on
-    // its own. Genuine failures (foreground, or sustained past the window) fall back as before.
-    if (reason == 'connection-failed' && _inBenignBackgroundWindow()) {
-      debugPrint(
-          '[KINGZ] _startPcmFallback SKIPPED (benign background window) reason=$reason lifecycle=$_appLifecycleState — keeping WebRTC active');
       return _pcmPlaybackBridge.telemetry;
     }
 
