@@ -2822,10 +2822,6 @@ export default function App({ onFirstRender } = {}) {
       onPrev={handlePrevTrack}
       onNext={handleNextTrack}
       onRepeatChange={handleRepeatChange}
-      canReview={isMobileViewport() && duration > 0}
-      reviewLabel="Review"
-      isReviewActive={isMarkerToolActive}
-      onReviewToggle={() => setIsMarkerToolActive((v) => !v)}
     />
   ) : null;
 

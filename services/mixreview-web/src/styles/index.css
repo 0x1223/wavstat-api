@@ -3065,6 +3065,8 @@ body:has(.app-shell.reviewer-mode) {
       iPad landscape is ≥ 768 px so it is NOT matched here) */
 @media (max-width: 768px), (orientation: landscape) and (max-height: 500px) {
   .app-shell.reviewer-mode {
+    --mobile-transport-base-height: 56px;
+    --mobile-transport-clearance: calc(var(--mobile-transport-base-height) + env(safe-area-inset-bottom, 0px));
     /* Rigid full-screen flex column — nothing scrolls, nothing overflows.
        height: 100dvh uses the dynamic viewport height so the layout
        adapts correctly when the iOS Safari address bar shows/hides.
@@ -3078,9 +3080,9 @@ body:has(.app-shell.reviewer-mode) {
     overflow: hidden;
     overscroll-behavior: none;
     padding: 8px 8px 0;
-    /* Transport is anchored at bottom:0 (50px tall + safe-area padding inside).
-       Reserve exactly that height so content never slides under the bar. */
-    padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px));
+    /* Transport is anchored at bottom:0. Reserve the exact footer height so
+       content never slides under the bar on short or notched phones. */
+    padding-bottom: var(--mobile-transport-clearance);
   }
 
   .reviewer-mode .top-stack {
@@ -3390,22 +3392,20 @@ body:has(.app-shell.reviewer-mode) {
   }
 
   .reviewer-mode .transport {
-    /* Fixed to the bottom edge of the viewport — full-bleed, flush against
-       the screen. Internal padding-bottom pushes button content above the
-       iOS home indicator so nothing is clipped on notched devices. */
+    /* Fixed footer with three stable lanes: time | prev/play/next | skips. */
     position: fixed;
     left: 0;
     right: 0;
     bottom: 0;
     z-index: 50;
-    /* flex: 0 0 auto keeps the bar from growing/shrinking in any parent flex
-       context (e.g. when the shell is refactored to in-flow in the future) */
     flex: 0 0 auto;
-    min-height: 50px;
-    display: flex;
+    min-height: var(--mobile-transport-clearance);
+    display: grid;
+    grid-template-columns: minmax(64px, 0.8fr) auto minmax(90px, 0.95fr);
     align-items: center;
-    justify-content: space-between;
-    padding: 6px 8px;
+    column-gap: clamp(3px, 1.2vw, 6px);
+    width: 100%;
+    padding: 6px clamp(4px, 1.6vw, 8px);
     /* Safe-area padding: bar background fills the home-indicator zone;
        buttons are pushed above it by the padding value.
        max(8px, …) ensures at least 8px gap even on notchless devices. */
@@ -3420,20 +3420,43 @@ body:has(.app-shell.reviewer-mode) {
       inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
-  /* Absolutely center ⏮ Play ⏭ so it's always at 50% width,
-     independent of the timestamp and utility group widths */
   .reviewer-mode .transport-controls {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    gap: 8px;
+    position: static;
+    grid-column: 2;
+    justify-self: center;
+    min-width: 0;
+    transform: none;
+    order: 0;
+    gap: clamp(3px, 1.2vw, 7px);
+  }
+
+  .reviewer-mode .transport-nav {
+    grid-column: 3;
+    justify-self: end;
+    min-width: 0;
+    gap: clamp(3px, 1.1vw, 6px);
   }
 
   .reviewer-mode .transport-time {
+    grid-column: 1;
     display: grid;
-    gap: 2px;
+    min-width: 0;
+    gap: 1px;
     justify-items: start;
-    font-size: 0.76rem;
+    order: 0;
+    line-height: 1.05;
+    font-size: clamp(0.68rem, 3vw, 0.78rem);
+    overflow: hidden;
+  }
+
+  .reviewer-mode .transport-time span {
+    max-width: 100%;
+    white-space: nowrap;
+  }
+
+  .reviewer-mode .transport-time span:first-child {
+    font-size: clamp(1rem, 5.2vw, 1.36rem);
+    line-height: 1;
   }
 
   .reviewer-mode .transport-meta {
@@ -3441,23 +3464,37 @@ body:has(.app-shell.reviewer-mode) {
   }
 
   .reviewer-mode .transport button {
-    min-width: 38px;
-    min-height: 38px;
+    min-width: clamp(28px, 8.8vw, 38px);
+    min-height: clamp(34px, 10.4vw, 42px);
+    padding: 0;
+    border-radius: 7px;
   }
 
   .reviewer-mode .transport .play-button {
-    min-width: 76px;
+    width: clamp(80px, 25.5vw, 116px);
+    min-width: 0;
+    gap: clamp(5px, 1.4vw, 9px);
+    padding: 0 clamp(6px, 1.8vw, 10px);
+    font-size: clamp(0.92rem, 4.3vw, 1.06rem);
+    white-space: nowrap;
   }
 
   .reviewer-mode .transport-nav-btn {
-    min-width: 28px !important;
-    min-height: 30px !important;
-    font-size: 0.9rem;
+    min-width: clamp(28px, 8.4vw, 34px) !important;
+    min-height: clamp(32px, 9.8vw, 38px) !important;
+    color: #d4af37 !important;
+    font-size: clamp(0.9rem, 4.1vw, 1.16rem) !important;
+  }
+
+  .reviewer-mode .skip-button {
+    min-width: clamp(28px, 8.8vw, 38px);
+    min-height: clamp(34px, 10.4vw, 42px);
+    font-size: clamp(0.86rem, 3.9vw, 1rem);
   }
 
   .mobile-note-popover {
-    /* Clear the edge-to-edge transport: 50px bar + safe-area + 8px gap */
-    inset: auto 0 calc(58px + env(safe-area-inset-bottom, 0px));
+    /* Clear the edge-to-edge transport plus a small tap comfort gap. */
+    inset: auto 0 calc(var(--mobile-transport-clearance) + 8px);
     align-items: end;
     padding: 0 6px;
   }
@@ -3535,11 +3572,9 @@ body:has(.app-shell.reviewer-mode) {
     background: linear-gradient(180deg, #ffd889, #d6a354);
   }
 
-  /* Comment drawer must always clear the full-bleed transport.
-     Transport is at bottom:0, internal height = 50px + safe-area.
-     Adding 20px gap gives comfortable clearance on all devices. */
+  /* Comment drawer must always clear the full-bleed transport. */
   .reviewer-mode .mobile-comment-drawer {
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 70px);
+    bottom: calc(var(--mobile-transport-clearance) + 14px);
     max-height: 50vh;
   }
 
@@ -3987,8 +4022,7 @@ body:has(.app-shell.reviewer-mode) {
     height: 100dvh;
     max-height: 100dvh;
     overflow: hidden;
-    /* Matches the transport's new height: 50px bar + safe-area padding */
-    padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: var(--mobile-transport-clearance);
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-layout {
@@ -4069,8 +4103,7 @@ body:has(.app-shell.reviewer-mode) {
     height: 100dvh;
     max-height: 100dvh;
     overflow: hidden;
-    /* Transport (50px) + safe-area padding — same formula as portrait */
-    padding-bottom: calc(50px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: var(--mobile-transport-clearance);
   }
 
   .app-shell.reviewer-mode:has(.mobile-track-nav) .review-layout {
