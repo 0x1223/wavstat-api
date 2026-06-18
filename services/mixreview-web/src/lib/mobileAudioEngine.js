@@ -25,6 +25,7 @@ let _detachNativeListeners = null;
 let _detachWaveformResize = null;
 let _latePeaksPollTimer = null;
 const _handlers = { current: null };
+let _loadGeneration = 0;
 // Tracks the current track duration so Media Session setPositionState() has
 // a stable value between durationchange events.
 let _mediaDuration = 0;
@@ -83,6 +84,67 @@ function clearLatePeaksPoll() {
     window.clearTimeout(_latePeaksPollTimer);
     _latePeaksPollTimer = null;
   }
+}
+
+function mediaSourceMatchesUrl(mediaEl, url) {
+  const currentSrc = mediaEl?.currentSrc || mediaEl?.src || "";
+  if (!currentSrc || !url) return false;
+  return currentSrc.split("#")[0] === url.split("#")[0];
+}
+
+function buildMobilePlayer(ws, mediaEl) {
+  return {
+    wavesurfer: ws,
+    mediaElement: mediaEl,
+    play: async () => {
+      try {
+        await ws.play();
+      } catch (e) {
+        console.warn("[MixReview] ws.play fallback", e?.message ?? String(e));
+        try { await mediaEl?.play?.(); } catch (_) {}
+      }
+    },
+    pause: () => {
+      // Synchronous stop priority: halt the media element immediately as the
+      // very first action, bypassing any WaveSurfer async state machine so
+      // hardware audio is silenced before anything else runs.
+      try { mediaEl?.pause?.(); } catch (_) {}
+      _wasPlayingOnHide = false;
+      _isRestoring = false;
+      _interruptedWhilePlaying = false;
+      _detachGestureRecovery?.();
+      _detachGestureRecovery = null;
+      try { ws.pause(); } catch (_) {}
+    },
+    playPause: async () => {
+      try {
+        await ws.playPause();
+      } catch (_) {
+        if (mediaEl?.paused) {
+          try { await mediaEl.play(); } catch (_) {}
+        } else {
+          try { mediaEl?.pause?.(); } catch (_) {}
+        }
+      }
+    },
+    skip: (seconds) => {
+      try {
+        ws.skip(seconds);
+      } catch (_) {
+        if (!mediaEl) return;
+        const duration = Number.isFinite(mediaEl?.duration) ? mediaEl.duration : 0;
+        mediaEl.currentTime = Math.max(0, Math.min(duration, (mediaEl.currentTime || 0) + seconds));
+      }
+    },
+    seekToTime: (time) => {
+      const wsDuration = Number.isFinite(ws.getDuration?.()) ? ws.getDuration() : 0;
+      const mediaDuration = Number.isFinite(mediaEl?.duration) ? mediaEl.duration : 0;
+      const duration = Math.max(wsDuration, mediaDuration);
+      const t = Math.max(0, Math.min(time, duration || time));
+      try { ws.setTime(t); } catch (_) { if (mediaEl) mediaEl.currentTime = t; }
+      _handlers.current?.onTimeUpdate?.(t);
+    },
+  };
 }
 
 function getMobileWaveformHeight(container) {
@@ -881,9 +943,24 @@ export function mountMobileEngine(container, url, handlers) {
   const progressColor = handlers?.progressColor || "#d6a354";
 
   if (_url === url && _ws) {
+    const existingWs = _ws;
+    const mediaEl = existingWs.getMediaElement?.();
+    watchMobileWaveformHeight(container, existingWs);
+    window.queueMicrotask(() => {
+      if (_ws !== existingWs || _url !== url) return;
+      const wsDuration = Number.isFinite(existingWs.getDuration?.()) ? existingWs.getDuration() : 0;
+      const mediaDuration = Number.isFinite(mediaEl?.duration) ? mediaEl.duration : 0;
+      const duration = Math.max(wsDuration, mediaDuration);
+      if (duration > 0) _handlers.current?.onDurationChange?.(duration);
+      if (mediaEl && (mediaSourceMatchesUrl(mediaEl, url) || mediaEl.readyState >= 1 || duration > 0)) {
+        _handlers.current?.onReady?.(buildMobilePlayer(existingWs, mediaEl));
+        _handlers.current?.onPlaybackChange?.(!mediaEl.paused);
+      }
+    });
     return _ws;
   }
 
+  const loadGeneration = ++_loadGeneration;
   _wasPlayingOnHide = false;
   _urlOnHide = null;
   _wasTimeAdvancing = false;
@@ -906,6 +983,7 @@ export function mountMobileEngine(container, url, handlers) {
     _ws.unAll();
     const reuseMediaEl = _ws.getMediaElement?.();
     if (reuseMediaEl) {
+      try { reuseMediaEl.pause(); } catch (_) {}
       _detachNativeListeners = attachNativeListeners(reuseMediaEl, _ws);
     }
   }
@@ -1016,6 +1094,8 @@ export function mountMobileEngine(container, url, handlers) {
     console.log("[MixReview] MobileEngine reuse — calling ws.load() on existing instance");
   }
 
+  const isCurrentLoad = () => _ws === ws && _url === url && _loadGeneration === loadGeneration;
+
   // didSettle: true once onReady or onWaveformUnavailable has been called.
   // Prevents duplicate handler calls if both fallback timer and WaveSurfer
   // events fire in close succession.
@@ -1026,7 +1106,7 @@ export function mountMobileEngine(container, url, handlers) {
   const armFallbackTimer = () => {
     clearTimeout(fallbackTimer);
     fallbackTimer = setTimeout(() => {
-      if (didSettle || _ws !== ws) return;
+      if (didSettle || !isCurrentLoad()) return;
       console.warn("[MixReview] Waveform decode timeout after", WAVEFORM_TIMEOUT_MS, "ms — attempting audio-only fallback");
       activateFallback("timeout");
     }, WAVEFORM_TIMEOUT_MS);
@@ -1043,7 +1123,7 @@ export function mountMobileEngine(container, url, handlers) {
    * Tries to enable playback via WaveSurfer's underlying <audio> element.
    */
   function activateFallback(reason) {
-    if (didSettle || _ws !== ws) return;
+    if (didSettle || !isCurrentLoad()) return;
 
     const mediaEl = ws.getMediaElement?.();
 
@@ -1066,7 +1146,7 @@ export function mountMobileEngine(container, url, handlers) {
     // Case A — WaveSurfer's fetch already completed and it set a blob URL on
     // the media element. The decode step failed or timed out, but the element
     // can play because it has audio data.
-    if ((mediaEl.src || mediaEl.currentSrc) && !mediaEl.error) {
+    if ((mediaEl.src || mediaEl.currentSrc) && !mediaEl.error && mediaSourceMatchesUrl(mediaEl, url)) {
       if (mediaEl.readyState >= 2) {
         // Already HAVE_CURRENT_DATA — can play immediately
         didSettle = true;
@@ -1076,14 +1156,14 @@ export function mountMobileEngine(container, url, handlers) {
         // Media element is still buffering — wait up to 8 s for canplay
         console.log("[MixReview] Fallback: waiting for canplay", { readyState: mediaEl.readyState });
         const giveUp = setTimeout(() => {
-          if (didSettle || _ws !== ws) return;
+          if (didSettle || !isCurrentLoad()) return;
           didSettle = true;
           console.warn("[MixReview] Fallback: media element did not become playable");
           _handlers.current?.onError?.(new Error("Audio loading timeout"));
         }, 8_000);
         mediaEl.addEventListener("canplay", () => {
           clearTimeout(giveUp);
-          if (didSettle || _ws !== ws) return;
+          if (didSettle || !isCurrentLoad()) return;
           didSettle = true;
           clearFallbackTimer();
           doFallbackWithEl(mediaEl, reason);
@@ -1105,13 +1185,17 @@ export function mountMobileEngine(container, url, handlers) {
     // decode attempt may still hold partial network buffers that must be freed
     // before the element accepts a new source assignment cleanly.
     try { mediaEl.pause(); } catch (_) {}
+    try {
+      mediaEl.removeAttribute("src");
+      mediaEl.load();
+    } catch (_) {}
     mediaEl.crossOrigin = "anonymous";  // ensure CORS is set for direct loads too
     mediaEl.preload = isWav ? "metadata" : "auto";
     mediaEl.src = url;
     mediaEl.load(); // explicit pipeline flush — required after src reassignment
 
     const giveUp = setTimeout(() => {
-      if (didSettle || _ws !== ws) return;
+      if (didSettle || !isCurrentLoad()) return;
       if (mediaEl.error) {
         didSettle = true;
         console.warn("[MixReview] Fallback: direct audio load failed", mediaEl.error?.message);
@@ -1124,7 +1208,7 @@ export function mountMobileEngine(container, url, handlers) {
 
     const finishDirectLoad = () => {
       clearTimeout(giveUp);
-      if (didSettle || _ws !== ws) return;
+      if (didSettle || !isCurrentLoad()) return;
       didSettle = true;
       clearFallbackTimer();
       doFallbackWithEl(mediaEl, reason);
@@ -1140,7 +1224,7 @@ export function mountMobileEngine(container, url, handlers) {
 
     mediaEl.addEventListener("error", () => {
       clearTimeout(giveUp);
-      if (didSettle || _ws !== ws) return;
+      if (didSettle || !isCurrentLoad()) return;
       didSettle = true;
       console.warn("[MixReview] Fallback: direct audio load failed", mediaEl.error?.message);
       _handlers.current?.onError?.(new Error("Audio failed to load"));
@@ -1173,7 +1257,7 @@ export function mountMobileEngine(container, url, handlers) {
     // Duration may not be known yet (metadata loading); wire up durationchange
     // so we surface it as soon as it becomes available.
     mediaEl.addEventListener("durationchange", () => {
-      if (_ws !== ws) return;
+      if (!isCurrentLoad()) return;
       const d = mediaEl.duration;
       if (Number.isFinite(d) && d > 0) _handlers.current?.onDurationChange?.(d);
     });
@@ -1182,46 +1266,13 @@ export function mountMobileEngine(container, url, handlers) {
     // / ws.skip() / ws.setTime() all delegate to mediaEl internally, so the
     // native play/pause/timeupdate events still fire and our native listeners
     // keep delivering callbacks correctly.
-    const player = {
-      wavesurfer: ws,
-      mediaElement: mediaEl,
-      play: async () => {
-        try { await ws.play(); }
-        catch (e) { console.warn("[MixReview] ws.play fallback", e.message); try { await mediaEl.play(); } catch (_) {} }
-      },
-      pause: () => {
-          // Synchronous stop priority: halt the media element immediately as the
-          // very first action, bypassing any WaveSurfer async state machine so
-          // the hardware audio output is silenced before anything else runs.
-          try { mediaEl.pause(); } catch (_) {}
-          _wasPlayingOnHide = false; // prevent any pending restore from restarting
-          _isRestoring = false;      // cancel in-flight ctx-resume → play() chain
-          _interruptedWhilePlaying = false; // user-pause disarms interruption recovery
-          _detachGestureRecovery?.();
-          _detachGestureRecovery = null;
-          try { ws.pause(); } catch (_) {}
-        },
-      playPause: async () => {
-        try { await ws.playPause(); }
-        catch (e) {
-          if (mediaEl.paused) { try { await mediaEl.play(); } catch (_) {} } else { mediaEl.pause(); }
-        }
-      },
-      skip: (s) => { try { ws.skip(s); } catch (_) { mediaEl.currentTime = Math.max(0, (mediaEl.currentTime || 0) + s); } },
-      seekToTime: (time) => {
-        const t = Math.max(0, Math.min(time, Number.isFinite(mediaEl.duration) ? mediaEl.duration : 0));
-        try { ws.setTime(t); } catch (_) { mediaEl.currentTime = t; }
-        _handlers.current?.onTimeUpdate?.(t);
-      },
-    };
-
-    _handlers.current?.onWaveformUnavailable?.(player, reason);
+    _handlers.current?.onWaveformUnavailable?.(buildMobilePlayer(ws, mediaEl), reason);
   }
 
   // ── Normal WaveSurfer events ───────────────────────────────────────────
 
   ws.on("ready", () => {
-    if (_ws !== ws) return;
+    if (!isCurrentLoad()) return;
     clearLatePeaksPoll();
     if (didSettle) {
       // A fallback fired before ready arrived. The waveform has now been
@@ -1230,27 +1281,7 @@ export function mountMobileEngine(container, url, handlers) {
       const duration = ws.getDuration();
       const mediaElement = ws.getMediaElement?.();
       _handlers.current?.onDurationChange?.(duration);
-      _handlers.current?.onReady?.({
-        wavesurfer: ws,
-        mediaElement,
-        play: async () => { await ws.play(); },
-        pause: () => {
-          try { mediaElement?.pause(); } catch (_) {}
-          _wasPlayingOnHide = false;
-          _isRestoring = false;
-          _interruptedWhilePlaying = false;
-          _detachGestureRecovery?.();
-          _detachGestureRecovery = null;
-          try { ws.pause(); } catch (_) {}
-        },
-        playPause: async () => { await ws.playPause(); },
-        skip: (s) => ws.skip(s),
-        seekToTime: (time) => {
-          const t = Math.min(Math.max(time, 0), ws.getDuration());
-          ws.setTime(t);
-          _handlers.current?.onTimeUpdate?.(t);
-        },
-      });
+      _handlers.current?.onReady?.(buildMobilePlayer(ws, mediaElement));
       return;
     }
     didSettle = true;
@@ -1274,34 +1305,11 @@ export function mountMobileEngine(container, url, handlers) {
     }
     console.log("[MixReview] WaveSurfer decode success", { duration });
     _handlers.current?.onDurationChange?.(duration);
-    _handlers.current?.onReady?.({
-      wavesurfer: ws,
-      mediaElement,
-      play: async () => { await ws.play(); },
-      pause: () => {
-          // Synchronous stop priority: halt the media element immediately as the
-          // very first action, bypassing any WaveSurfer async state machine so
-          // the hardware audio output is silenced before anything else runs.
-          try { mediaElement?.pause(); } catch (_) {}
-          _wasPlayingOnHide = false;
-          _isRestoring = false;
-          _interruptedWhilePlaying = false; // user-pause disarms interruption recovery
-          _detachGestureRecovery?.();
-          _detachGestureRecovery = null;
-          try { ws.pause(); } catch (_) {}
-        },
-      playPause: async () => { await ws.playPause(); },
-      skip: (s) => ws.skip(s),
-      seekToTime: (time) => {
-        const t = Math.min(Math.max(time, 0), ws.getDuration());
-        ws.setTime(t);
-        _handlers.current?.onTimeUpdate?.(t);
-      },
-    });
+    _handlers.current?.onReady?.(buildMobilePlayer(ws, mediaElement));
   });
 
   ws.on("error", (error) => {
-    if (_ws !== ws) return;
+    if (!isCurrentLoad()) return;
     // AbortError is expected when activateFallback(case B) aborts the stalled
     // fetch intentionally — treat it as informational, not a failure.
     if (error?.name === "AbortError") {
@@ -1332,7 +1340,7 @@ export function mountMobileEngine(container, url, handlers) {
   // AbortErrors are informational only — they are expected when activateFallback
   // (case B) calls ws.abortController.abort() to cancel a stalled fetch.
   function _onLoadError(e) {
-    if (_ws !== ws) return;
+    if (!isCurrentLoad()) return;
     const name = e?.name ?? "";
     const msg  = e?.message ?? String(e);
     if (name === "AbortError") {
@@ -1350,11 +1358,11 @@ export function mountMobileEngine(container, url, handlers) {
     const pollDeadlineMs = Date.now() + 90_000;
     const poll = () => {
       _latePeaksPollTimer = null;
-      if (_ws !== ws || _url !== url) return;
+      if (!isCurrentLoad()) return;
       if (Date.now() >= pollDeadlineMs) return;
 
       resolveMobilePeaks(urls).then((latePeaks) => {
-        if (_ws !== ws || _url !== url) return;
+        if (!isCurrentLoad()) return;
         if (latePeaks) {
           console.log("[MixReview] Late mobile peaks resolved — rendering waveform", {
             numChannels: latePeaks.length,
@@ -1374,7 +1382,7 @@ export function mountMobileEngine(container, url, handlers) {
 
   peaksFetch.then((peaks) => {
     // Guard: URL changed or engine was disposed while peaks were in flight.
-    if (_ws !== ws || _url !== url) return;
+    if (!isCurrentLoad()) return;
     if (peaks) {
       console.log("[MixReview] Loading WaveSurfer with pre-fetched peaks", {
         numChannels: peaks.length,
@@ -1402,6 +1410,7 @@ export function mountMobileEngine(container, url, handlers) {
  * reconnect without requiring a new user gesture.
  */
 export function disposeMobileEngine() {
+  _loadGeneration += 1;
   clearLatePeaksPoll();
   _detachNativeListeners?.();
   _detachNativeListeners = null;

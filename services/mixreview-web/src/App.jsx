@@ -1884,9 +1884,11 @@ export default function App({ onFirstRender } = {}) {
     }
 
     // Pause immediately before state updates so the old audio stops cleanly.
-    // Do NOT null playerRef — the WaveSurfer/<audio> instance is reused for the
-    // next track (iOS retains audio permission when the element stays alive).
+    // Clear the React control ref too: the mobile engine still reuses the same
+    // HTMLAudioElement internally, but the UI must not be able to play the old
+    // controls while the next track is mounting.
     playerRef.current?.pause();
+    playerRef.current = null;
 
     setTracks(nextTracks);
     setActiveTrackId(trackId);

@@ -351,7 +351,7 @@ export function WaveformReview({
         onWaveformUnavailable: (player, reason) => {
           console.log("[WaveformReview] Waveform unavailable — audio-only mode", { reason });
           setIsLoading(false);
-          setLoadError(reason === "timeout" ? "" : "Waveform unavailable — tap ▶ to listen");
+          setLoadError("");
           callbacksRef.current.onReady(player);
         },
         onError: (err) => {
