@@ -38,22 +38,26 @@ function fetchPeaks(peaksUrl, timeoutMs = 3000) {
     .finally(() => window.clearTimeout(timeoutId));
 }
 
+function getWaveformPeakUrls(audioSource) {
+  const urls = [];
+  if (audioSource?.peaksUrl) urls.push(audioSource.peaksUrl);
+  if (audioSource?.key) {
+    urls.push(apiUrl(`/api/audio/playback/${encodeURIComponent(`${audioSource.key}.peaks.json`)}`));
+  }
+  return [...new Set(urls)];
+}
+
 // Try explicit peaksUrl first, then derive from audioSource.key (mirrors the
 // fallback TrackList uses for thumbnail waveforms). When peaks are found,
 // WaveSurfer skips the full decodeAudioData decode — critical for large stems.
 function resolveWaveformPeaks(audioSource) {
-  const explicit = audioSource?.peaksUrl || null;
-  const key = audioSource?.key || null;
-  const derived = key
-    ? apiUrl(`/api/audio/playback/${encodeURIComponent(`${key}.peaks.json`)}`)
-    : null;
+  const urls = getWaveformPeakUrls(audioSource);
+  if (urls.length === 0) return Promise.resolve(null);
 
-  if (!explicit && !derived) return Promise.resolve(null);
-  if (!explicit) return fetchPeaks(derived);
-  if (!derived || derived === explicit) return fetchPeaks(explicit);
-
-  // Explicit URL available — try it, fall back to key-derived on miss.
-  return fetchPeaks(explicit).then((peaks) => peaks ?? fetchPeaks(derived));
+  return urls.reduce(
+    (chain, peaksUrl) => chain.then((peaks) => peaks ?? fetchPeaks(peaksUrl)),
+    Promise.resolve(null),
+  );
 }
 
 
@@ -333,12 +337,13 @@ export function WaveformReview({
       // Mobile: singleton engine — survives React re-renders and comment state changes
       console.log("[WaveformReview] Mobile decode start", { url: playbackUrl.slice(0, 100) });
       const ws = mountMobileEngine(containerRef.current, playbackUrl, {
-        peaksUrl: audioSource?.peaksUrl || null,
+        peaksUrls: getWaveformPeakUrls(audioSource),
         waveColor: resolvedWaveColor,
         progressColor: resolvedProgressColor,
         onReady: (player) => {
           console.log("[WaveformReview] Mobile decode success");
           setIsLoading(false);
+          setLoadError("");
           callbacksRef.current.onReady(player);
         },
         // Called when waveform decode fails/times out but the audio element
@@ -346,7 +351,7 @@ export function WaveformReview({
         onWaveformUnavailable: (player, reason) => {
           console.log("[WaveformReview] Waveform unavailable — audio-only mode", { reason });
           setIsLoading(false);
-          setLoadError("Waveform unavailable — tap ▶ to listen");
+          setLoadError(reason === "timeout" ? "" : "Waveform unavailable — tap ▶ to listen");
           callbacksRef.current.onReady(player);
         },
         onError: (err) => {

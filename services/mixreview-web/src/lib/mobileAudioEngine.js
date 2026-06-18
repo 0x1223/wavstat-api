@@ -7,6 +7,8 @@ import WaveSurfer from "wavesurfer.js";
 // How long to wait for WaveSurfer's waveform decode (fetch + decodeAudioData)
 // before activating the audio-only fallback.
 const WAVEFORM_TIMEOUT_MS = 12_000;
+const PEAKS_FETCH_TIMEOUT_MS = 3_500;
+const peaksCache = new Map();
 
 let _ws = null;
 let _url = null;
@@ -29,6 +31,47 @@ let _mediaDuration = 0;
 let _interruptedWhilePlaying = false; // OS interrupted us while page was visible + playing
 let _detachCtxStateListener  = null;  // cleanup fn for AudioContext statechange
 let _detachGestureRecovery   = null;  // cleanup fn for one-time gesture re-prime fallback
+
+function normalizePeaks(peaks) {
+  if (!Array.isArray(peaks) || peaks.length === 0) return null;
+  return Array.isArray(peaks[0]) ? peaks : [peaks];
+}
+
+function fetchPeaksCandidate(peaksUrl) {
+  if (!peaksUrl) return Promise.resolve(null);
+  if (peaksCache.has(peaksUrl)) return Promise.resolve(peaksCache.get(peaksUrl));
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), PEAKS_FETCH_TIMEOUT_MS);
+
+  return fetch(peaksUrl, { signal: controller.signal })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then(normalizePeaks)
+    .then((peaks) => {
+      if (peaks) peaksCache.set(peaksUrl, peaks);
+      return peaks;
+    })
+    .catch((error) => {
+      if (error?.name !== "AbortError") {
+        console.warn("[MixReview] Peaks fetch failed — trying next candidate:", error.message);
+      }
+      return null;
+    })
+    .finally(() => window.clearTimeout(timeoutId));
+}
+
+function resolveMobilePeaks(peaksUrls) {
+  const urls = [...new Set((peaksUrls || []).filter(Boolean))];
+  if (urls.length === 0) return Promise.resolve(null);
+
+  return urls.reduce(
+    (chain, peaksUrl) => chain.then((peaks) => peaks ?? fetchPeaksCandidate(peaksUrl)),
+    Promise.resolve(null),
+  );
+}
 
 // ── Persistent iOS/Safari keep-alive AudioContext ─────────────────────────
 // Created once inside the first user Play gesture and never closed during normal
@@ -749,10 +792,12 @@ if (typeof document !== "undefined") {
 export function mountMobileEngine(container, url, handlers) {
   _handlers.current = handlers;
 
-  // peaksUrl is an optional property of the handlers/options object.
-  // When present we fetch the pre-generated peaks JSON from R2 and hand it
-  // to WaveSurfer so it can skip client-side audio decoding entirely.
-  const peaksUrl = handlers?.peaksUrl ?? null;
+  // peaksUrls are optional pre-generated waveform JSON candidates from R2.
+  // The component passes explicit peaksUrl plus the key-derived .peaks.json
+  // fallback so mobile gets the same fast path as desktop.
+  const peaksUrls = Array.isArray(handlers?.peaksUrls)
+    ? handlers.peaksUrls
+    : [handlers?.peaksUrl].filter(Boolean);
   const waveColor = handlers?.waveColor || "#6d6457";
   const progressColor = handlers?.progressColor || "#d6a354";
 
@@ -811,24 +856,10 @@ export function mountMobileEngine(container, url, handlers) {
   // ourselves once the fetch settles — passing peaks skips WaveSurfer's
   // full audio blob fetch + decodeAudioData decode cycle.
   //
-  // If peaksUrl is absent, or the fetch fails for any reason, peaksFetch
-  // resolves to null and we fall back to ws.load(url) with no peaks
+  // If peaks are absent, or every candidate fails quickly, peaksFetch resolves
+  // to null and we fall back to ws.load(url) with no peaks
   // (the existing full-decode path), silently.
-  const peaksFetch = peaksUrl
-    ? fetch(peaksUrl)
-        .then((r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.json();
-        })
-        .then((peaks) => {
-          if (!Array.isArray(peaks) || peaks.length === 0) return null;
-          return Array.isArray(peaks[0]) ? peaks : [peaks];
-        })
-        .catch((err) => {
-          console.warn("[MixReview] Peaks fetch failed — falling back to full decode:", err.message);
-          return null;
-        })
-    : Promise.resolve(null);
+  const peaksFetch = resolveMobilePeaks(peaksUrls);
 
   // ── WaveSurfer instance ────────────────────────────────────────────────
   // `url` is intentionally omitted here. WaveSurfer v7 defers its first
@@ -906,11 +937,19 @@ export function mountMobileEngine(container, url, handlers) {
   let didSettle = false;
 
   // ── Fallback timer ─────────────────────────────────────────────────────
-  const fallbackTimer = setTimeout(() => {
-    if (didSettle || _ws !== ws) return;
-    console.warn("[MixReview] Waveform decode timeout after", WAVEFORM_TIMEOUT_MS, "ms — attempting audio-only fallback");
-    activateFallback("timeout");
-  }, WAVEFORM_TIMEOUT_MS);
+  let fallbackTimer = null;
+  const armFallbackTimer = () => {
+    clearTimeout(fallbackTimer);
+    fallbackTimer = setTimeout(() => {
+      if (didSettle || _ws !== ws) return;
+      console.warn("[MixReview] Waveform decode timeout after", WAVEFORM_TIMEOUT_MS, "ms — attempting audio-only fallback");
+      activateFallback("timeout");
+    }, WAVEFORM_TIMEOUT_MS);
+  };
+  const clearFallbackTimer = () => {
+    clearTimeout(fallbackTimer);
+    fallbackTimer = null;
+  };
 
   // ── Audio-only fallback ────────────────────────────────────────────────
 
@@ -926,7 +965,7 @@ export function mountMobileEngine(container, url, handlers) {
     // Hard failure: the media element itself reported a network/decode error.
     if (mediaEl?.error) {
       didSettle = true;
-      clearTimeout(fallbackTimer);
+      clearFallbackTimer();
       console.warn("[MixReview] Media element error — audio unavailable", {
         reason,
         code: mediaEl.error.code,
@@ -938,7 +977,7 @@ export function mountMobileEngine(container, url, handlers) {
 
     if (!mediaEl) {
       didSettle = true;
-      clearTimeout(fallbackTimer);
+      clearFallbackTimer();
       console.warn("[MixReview] Fallback: no media element");
       _handlers.current?.onError?.(new Error("Audio player unavailable"));
       return;
@@ -951,7 +990,7 @@ export function mountMobileEngine(container, url, handlers) {
       if (mediaEl.readyState >= 2) {
         // Already HAVE_CURRENT_DATA — can play immediately
         didSettle = true;
-        clearTimeout(fallbackTimer);
+        clearFallbackTimer();
         doFallbackWithEl(mediaEl, reason);
       } else {
         // Media element is still buffering — wait up to 8 s for canplay
@@ -966,7 +1005,7 @@ export function mountMobileEngine(container, url, handlers) {
           clearTimeout(giveUp);
           if (didSettle || _ws !== ws) return;
           didSettle = true;
-          clearTimeout(fallbackTimer);
+          clearFallbackTimer();
           doFallbackWithEl(mediaEl, reason);
         }, { once: true });
       }
@@ -1002,7 +1041,7 @@ export function mountMobileEngine(container, url, handlers) {
       clearTimeout(giveUp);
       if (didSettle || _ws !== ws) return;
       didSettle = true;
-      clearTimeout(fallbackTimer);
+      clearFallbackTimer();
       doFallbackWithEl(mediaEl, reason);
     }, { once: true });
 
@@ -1092,12 +1131,36 @@ export function mountMobileEngine(container, url, handlers) {
     if (_ws !== ws) return;
     if (didSettle) {
       // A fallback fired before ready arrived. The waveform has now been
-      // rendered (late decode success). Log it but do not call onReady twice.
+      // rendered, so notify React again to clear any temporary audio-only UI.
       console.log("[MixReview] Late waveform decode success after fallback");
+      const duration = ws.getDuration();
+      const mediaElement = ws.getMediaElement?.();
+      _handlers.current?.onDurationChange?.(duration);
+      _handlers.current?.onReady?.({
+        wavesurfer: ws,
+        mediaElement,
+        play: async () => { await ws.play(); },
+        pause: () => {
+          try { mediaElement?.pause(); } catch (_) {}
+          _wasPlayingOnHide = false;
+          _isRestoring = false;
+          _interruptedWhilePlaying = false;
+          _detachGestureRecovery?.();
+          _detachGestureRecovery = null;
+          try { ws.pause(); } catch (_) {}
+        },
+        playPause: async () => { await ws.playPause(); },
+        skip: (s) => ws.skip(s),
+        seekToTime: (time) => {
+          const t = Math.min(Math.max(time, 0), ws.getDuration());
+          ws.setTime(t);
+          _handlers.current?.onTimeUpdate?.(t);
+        },
+      });
       return;
     }
     didSettle = true;
-    clearTimeout(fallbackTimer);
+    clearFallbackTimer();
 
     const duration = ws.getDuration();
     const mediaElement = ws.getMediaElement?.();
@@ -1191,11 +1254,14 @@ export function mountMobileEngine(container, url, handlers) {
     if (_ws !== ws || _url !== url) return;
     if (peaks) {
       console.log("[MixReview] Loading WaveSurfer with pre-fetched peaks", {
-        numPoints: peaks.length,
+        numChannels: peaks.length,
+        numPoints: peaks?.[0]?.length ?? 0,
         url: url.slice(0, 80),
       });
+      armFallbackTimer();
       ws.load(url, peaks).catch(_onLoadError);
     } else {
+      armFallbackTimer();
       ws.load(url).catch(_onLoadError);
     }
   });
