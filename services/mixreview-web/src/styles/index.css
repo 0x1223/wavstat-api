@@ -5443,8 +5443,9 @@ button.stem-toggle-action.solo-btn.active {
   }
 
   .app-shell:not(.setup-shell):not(.admin-shell) .review-layout {
-    --workspace-top-row-height: minmax(min(300px, 34dvh), 1fr);
-    --workspace-bottom-row-height: minmax(250px, 0.82fr);
+    --workspace-top-row-height: minmax(clamp(300px, 34dvh, 420px), 1fr);
+    --workspace-waveform-panel-min: clamp(340px, 42dvh, 520px);
+    --workspace-waveform-stage-min: clamp(180px, 25dvh, 320px);
     align-items: start;
     height: 100%;
     min-height: 0;
@@ -5452,7 +5453,7 @@ button.stem-toggle-action.solo-btn.active {
 
   .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
     display: grid;
-    grid-template-rows: var(--workspace-top-row-height) minmax(0, 1fr) auto;
+    grid-template-rows: var(--workspace-top-row-height) minmax(var(--workspace-waveform-panel-min), 1fr) auto;
     height: 100%;
     min-height: 0;
     overflow: hidden;
@@ -5501,30 +5502,106 @@ button.stem-toggle-action.solo-btn.active {
     overscroll-behavior: contain;
   }
 
-  /* Stereo waveform fit: keep the same desktop/tablet layout, but let the
-     preview row shrink with shorter laptop viewports instead of clipping. */
+  /* Stereo waveform fit: keep the project row intact and give the stereo
+     preview a professional minimum instead of collapsing into a strip. */
   .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) {
-    grid-template-rows: auto auto auto minmax(80px, 1fr);
+    grid-template-rows: auto auto auto minmax(var(--workspace-waveform-stage-min), 1fr);
     gap: clamp(12px, 1.45dvh, 18px);
     padding: clamp(16px, 1.85dvh, 22px);
   }
 
   .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .waveform-stage {
-    min-height: 0;
+    min-height: var(--workspace-waveform-stage-min);
   }
 
   @media (max-height: 820px) {
-    .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
-      grid-template-rows: minmax(0, clamp(150px, 21dvh, 220px)) minmax(0, 1fr) auto;
+    html:has(.app-shell:not(.setup-shell):not(.admin-shell)),
+    body:has(.app-shell:not(.setup-shell):not(.admin-shell)) {
+      height: auto;
+      min-height: 100%;
+      overflow-x: hidden;
+      overflow-y: auto;
     }
 
-    .app-shell.reviewer-mode .review-main {
-      grid-template-rows: minmax(0, clamp(150px, 21dvh, 220px)) minmax(0, 1fr);
+    .app-shell:not(.setup-shell):not(.admin-shell) {
+      height: auto;
+      min-height: 100dvh;
+      overflow: visible;
+      gap: 12px;
+      padding-block: clamp(14px, 2dvh, 18px);
+    }
+
+    .app-shell.reviewer-mode:not(.setup-shell):not(.admin-shell) {
+      grid-template-rows: auto auto auto;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .top-stack {
+      gap: 8px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .topbar {
+      min-height: 76px;
+      padding-block: 14px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .topbar h1 {
+      font-size: clamp(1.55rem, 2.5vw, 2rem);
+      line-height: 1;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .topbar .eyebrow {
+      margin-bottom: 5px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .desktop-session-track-count {
+      margin-top: 5px;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .review-layout {
+      --workspace-top-row-height: clamp(300px, 38dvh, 360px);
+      --workspace-waveform-panel-min: clamp(320px, 42dvh, 400px);
+      --workspace-waveform-stage-min: clamp(180px, 23dvh, 240px);
+      height: auto;
+      min-height: 0;
+      overflow: visible;
+      align-items: start;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-main {
+      grid-template-rows: var(--workspace-top-row-height) minmax(var(--workspace-waveform-panel-min), auto) auto;
+      height: auto;
+      overflow: visible;
+    }
+
+    .app-shell.reviewer-mode:not(.setup-shell):not(.admin-shell) .review-main {
+      grid-template-rows: var(--workspace-top-row-height) minmax(var(--workspace-waveform-panel-min), auto);
+      height: auto;
+      overflow: visible;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell):not(.reviewer-mode) .review-side {
+      grid-template-rows: var(--workspace-top-row-height) minmax(var(--workspace-waveform-panel-min), auto);
+      height: auto;
+      overflow: visible;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .review-side {
+      height: auto;
+      overflow: visible;
+    }
+
+    .app-shell:not(.setup-shell):not(.admin-shell) .track-list-panel {
+      height: var(--workspace-top-row-height);
+      max-height: none;
+      min-height: var(--workspace-top-row-height);
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) {
-      gap: 8px;
-      padding: 12px 16px;
+      height: auto;
+      max-height: none;
+      min-height: var(--workspace-waveform-panel-min);
+      gap: 10px;
+      padding: 14px 16px;
     }
 
     .app-shell:not(.setup-shell):not(.admin-shell) .waveform-panel:not(.stem-player):not(.mobile-stem-stack) .review-console {
