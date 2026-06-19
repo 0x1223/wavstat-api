@@ -37,6 +37,20 @@ private final class KingzPcmPlayer {
   private var packetsSinceLog = 0
   private var lastPacketBytes = 0
 
+  // Live-monitoring lifecycle resync. isActive is true only while the NATIVE PCM engine is the
+  // player (between start() and stop()); in Opus mode the native engine is stopped, so isActive is
+  // false and every resync hook below is a no-op — the Opus/WebRTC audio path is never touched.
+  private var isActive = false
+  private var lifecycleObservers: [NSObjectProtocol] = []
+
+  init() {
+    registerLifecycleObservers()
+  }
+
+  deinit {
+    for token in lifecycleObservers { NotificationCenter.default.removeObserver(token) }
+  }
+
   private var prebufferFrames: Int {
     msToFrames(max(35, min(targetBufferMs, safeBufferMs)))
   }
@@ -134,6 +148,7 @@ private final class KingzPcmPlayer {
     engine = eng
     sourceNode = source
     enqueueLogCount = 0
+    isActive = true
     resetRingLocked()
     let outputs = session.currentRoute.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
     print("[KINGZ IOS PCM] start ok streamSampleRate=\(sampleRate) hardwareSampleRate=\(session.sampleRate) asbd=[\(debugASBD(format))] engineRunning=\(eng.isRunning) route=[\(outputs)]")
@@ -152,6 +167,7 @@ private final class KingzPcmPlayer {
   }
 
   func stop() {
+    isActive = false
     if engine != nil || sourceNode != nil {
       print("[KINGZ IOS PCM] stop")
     }
@@ -175,6 +191,67 @@ private final class KingzPcmPlayer {
     resetRingLocked()
     bufferLock.unlock()
     print("[KINGZ IOS PCM] live-edge flush #\(liveEdgeResetCount) reason=\(reason)")
+  }
+
+  // MARK: lifecycle resync (PCM live-monitoring only)
+  private func registerLifecycleObservers() {
+    let nc = NotificationCenter.default
+    lifecycleObservers.append(nc.addObserver(
+      forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+    ) { [weak self] _ in self?.resyncToLiveEdge(reason: "foreground") })
+    lifecycleObservers.append(nc.addObserver(
+      forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+    ) { [weak self] note in self?.handleInterruption(note) })
+  }
+
+  private func handleInterruption(_ note: Notification) {
+    guard isActive,  // PCM-only; Opus manages its own flutter_webrtc audio session
+      let info = note.userInfo,
+      let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+      let type = AVAudioSession.InterruptionType(rawValue: raw)
+    else { return }
+    switch type {
+    case .began:
+      // iOS deactivates the session + stops the engine; nothing to drain. We re-lock on .ended.
+      print("[KINGZ IOS PCM] interruption began")
+    case .ended:
+      resyncToLiveEdge(reason: "interruption-ended")
+    @unknown default:
+      break
+    }
+  }
+
+  // Re-lock PCM to the newest live frame after a background/interruption. If an interruption stopped
+  // the engine, re-init it (the fresh ring re-prebuffers from the newest frames). Otherwise drop the
+  // OLDEST frames ONLY if we drifted past the live-monitor threshold — a healthy queue is left alone,
+  // so a clean resume has no dropout. Dropping oldest + a 3ms fade keeps the newest target depth =
+  // re-lock to ~live in one faded step. PCM-only (isActive) — never runs in Opus mode.
+  func resyncToLiveEdge(reason: String) {
+    guard isActive else { return }
+    if engine?.isRunning != true {
+      do {
+        try start()
+        print("[KINGZ IOS PCM] live resync reason=\(reason) action=engine-restart")
+      } catch {
+        print("[KINGZ IOS PCM] resync restart failed reason=\(reason) error=\(error.localizedDescription)")
+      }
+      return
+    }
+    bufferLock.lock()
+    let backlog = queuedFrames
+    let drifted = backlog > recoveryTrimThresholdFrames
+    if drifted {
+      trimOldestFramesLocked(max(0, backlog - targetLiveQueueFrames))
+      recoveryTrimCount += 1
+      fadeRemainingFrames = fadeFrames
+    }
+    let kept = queuedFrames
+    bufferLock.unlock()
+    if drifted {
+      print("[KINGZ IOS PCM] live resync reason=\(reason) dropped=\(backlog - kept) keptMs=\(Int((Double(kept) * 1000.0 / sampleRate).rounded()))")
+    } else {
+      print("[KINGZ IOS PCM] resync skipped (queue healthy) reason=\(reason) queuedMs=\(Int((Double(backlog) * 1000.0 / sampleRate).rounded()))")
+    }
   }
 
   func enqueue(_ data: Data) {
