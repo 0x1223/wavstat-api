@@ -465,7 +465,7 @@ function configureMediaSession(){
   if(!("mediaSession" in navigator)) return;
   try{
     navigator.mediaSession.metadata = new MediaMetadata({
-      title:"KINGZ LISTEN",
+      title:"Kingz Listen",
       artist:"LAN Audio Receiver",
       album:"Studio Session"
     });
@@ -483,6 +483,12 @@ function configureMediaSession(){
       if(mediaAudio) mediaAudio.pause();
       navigator.mediaSession.playbackState = "paused";
       document.getElementById("stop-btn").innerHTML = "&#9654; Resume";
+    });
+    // Live monitor (LISTENTO-style): null the skip/seek actions so iOS grays them out, and leave
+    // positionState unset so the card shows LIVE instead of a --:-- scrubber (the audio element is
+    // already a live MediaStream, so there's no seekable timeline).
+    ["previoustrack","nexttrack","seekbackward","seekforward","seekto"].forEach(function(action){
+      try{ navigator.mediaSession.setActionHandler(action, null); }catch(_){}
     });
   }catch(_){}
 }
