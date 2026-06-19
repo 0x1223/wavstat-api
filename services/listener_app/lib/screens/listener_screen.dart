@@ -6,6 +6,7 @@ import 'package:just_audio/just_audio.dart';
 import '../models/listener_playback_state.dart';
 import '../models/realtime_stream_metrics.dart';
 import '../models/stream_telemetry.dart';
+import '../services/now_playing_service.dart';
 import '../models/transport_config.dart';
 import '../services/lan_audio_client.dart';
 import '../widgets/connection_card.dart';
@@ -55,6 +56,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
   );
   final AudioPlayer _audioPlayer = AudioPlayer();
   final LanAudioClient _lanAudioClient = LanAudioClient();
+  final NowPlayingService _nowPlaying = NowPlayingService();
 
   StreamSubscription<LanAudioEvent>? _lanAudioSubscription;
   StreamSubscription<PlayerState>? _playerStateSubscription;
@@ -103,6 +105,14 @@ class _ListenerScreenState extends State<ListenerScreen> {
     _audioPlayer.setVolume(_volume);
     _audioPlayer.setLoopMode(LoopMode.one);
     _lanAudioSubscription = _lanAudioClient.events.listen(_handleLanAudioEvent);
+    _nowPlaying.onRemotePlay = () => unawaited(_play());
+    _nowPlaying.onRemotePause = () => unawaited(_stop());
+    _nowPlaying.onRemoteToggle = () => unawaited(
+          (_status == ListenerStatus.playing ||
+                  _status == ListenerStatus.buffering)
+              ? _stop()
+              : _play(),
+        );
     _playerStateSubscription =
         _audioPlayer.playerStateStream.listen(_handlePlayerState);
     _durationSubscription = _audioPlayer.durationStream.listen((duration) {
@@ -122,6 +132,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     _playerStateSubscription?.cancel();
     _durationSubscription?.cancel();
     _lanAudioClient.dispose();
+    _nowPlaying.dispose();
     _audioPlayer.dispose();
     _serverIpController.dispose();
     _portController.dispose();
@@ -181,6 +192,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
       _playbackState = const ListenerPlaybackState();
       _transportConfig = const TransportConfig();
     });
+    _syncNowPlaying();
   }
 
   Future<void> _play() async {
@@ -212,6 +224,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
         networkStatus: 'Opening audio stream',
       );
     });
+    _syncNowPlaying();
 
     debugPrint('[KINGZ] _play: mode=${_transportConfig.mode}');
     final operation = ++_playbackOperation;
@@ -287,6 +300,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
         networkStatus: 'LAN connected',
       );
     });
+    _syncNowPlaying();
   }
 
   Future<void> _toggleMute() async {
@@ -344,6 +358,11 @@ class _ListenerScreenState extends State<ListenerScreen> {
 
       if (event.durationLabel != null) {
         _durationLabel = event.durationLabel!;
+      }
+
+      if (event.dawPositionSeconds != null) {
+        // Live DAW playhead position (the sender provides no track length); shown as 'Position'.
+        _durationLabel = _formatPosition(event.dawPositionSeconds!);
       }
 
       if (event.connectionState != null) {
@@ -419,6 +438,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
         _status = ListenerStatus.buffering;
       }
     });
+    _syncNowPlaying();
   }
 
   void _setError(String networkStatus) {
@@ -430,6 +450,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
         bufferStatus: 'Stopped',
       );
     });
+    _syncNowPlaying();
   }
 
   StreamTransport _streamTransport = StreamTransport.pcm;
@@ -495,6 +516,33 @@ class _ListenerScreenState extends State<ListenerScreen> {
     final minutes = duration.inMinutes.remainder(60).toString().padLeft(2, '0');
     final seconds = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$minutes:$seconds';
+  }
+
+  // DAW playhead position (seconds since project start). Total minutes:seconds, so a position
+  // past 60 min reads e.g. 90:05 rather than wrapping.
+  String _formatPosition(double seconds) {
+    final total = seconds.isFinite && seconds > 0 ? seconds.round() : 0;
+    final m = (total ~/ 60).toString().padLeft(2, '0');
+    final s = (total % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  // Keep the lock-screen card in sync with playback state. Cleared when disconnected/errored;
+  // otherwise present with isPlaying reflecting whether audio is actually flowing. Deduped in the
+  // service, so it's safe to call on every event.
+  void _syncNowPlaying() {
+    if (_status == ListenerStatus.disconnected ||
+        _status == ListenerStatus.error) {
+      unawaited(_nowPlaying.clear());
+      return;
+    }
+    final playing = _status == ListenerStatus.playing ||
+        _status == ListenerStatus.buffering;
+    unawaited(_nowPlaying.setNowPlaying(
+      title: 'Kingz Listen',
+      subtitle: 'LAN Audio Receiver',
+      isPlaying: playing,
+    ));
   }
 
   String _formatPacketTime(int packetAtMs) {

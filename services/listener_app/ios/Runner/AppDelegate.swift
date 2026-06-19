@@ -1,5 +1,6 @@
 import AVFoundation
 import Flutter
+import MediaPlayer
 import UIKit
 
 // MARK: - KingzPcmPlayer
@@ -543,6 +544,84 @@ private final class KingzPcmPlayer {
   }
 }
 
+// MARK: - NowPlayingController
+// Live lock-screen card: MPNowPlayingInfoCenter (title/subtitle, IsLiveStream=true → "LIVE", no
+// scrubber) + MPRemoteCommandCenter. Play/pause/toggle are forwarded to Dart (the real _play/_stop
+// entry points — no parallel audio path); seek/skip are disabled so they gray out (live stream).
+private final class NowPlayingController {
+  private var channel: FlutterMethodChannel?
+  private var title = "Kingz Listen"
+  private var subtitle = "LAN Audio Receiver"
+  private var isPlaying = false
+
+  func attach(messenger: FlutterBinaryMessenger) {
+    let ch = FlutterMethodChannel(
+      name: "com.kingzbreadent.kingzlisten/nowplaying", binaryMessenger: messenger)
+    channel = ch
+    ch.setMethodCallHandler { [weak self] call, result in
+      guard let self = self else { result(nil); return }
+      switch call.method {
+      case "setNowPlaying":
+        let args = call.arguments as? [String: Any]
+        self.title = (args?["title"] as? String) ?? self.title
+        self.subtitle = (args?["subtitle"] as? String) ?? self.subtitle
+        self.isPlaying = (args?["isPlaying"] as? Bool) ?? self.isPlaying
+        self.updateInfo()
+        result(nil)
+      case "clear":
+        self.clearInfo()
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    configureCommands()
+  }
+
+  private func configureCommands() {
+    let cc = MPRemoteCommandCenter.shared()
+    cc.playCommand.isEnabled = true
+    cc.playCommand.addTarget { [weak self] _ in self?.forward("play"); return .success }
+    cc.pauseCommand.isEnabled = true
+    cc.pauseCommand.addTarget { [weak self] _ in self?.forward("pause"); return .success }
+    cc.togglePlayPauseCommand.isEnabled = true
+    cc.togglePlayPauseCommand.addTarget { [weak self] _ in self?.forward("toggle"); return .success }
+    // Live stream — no seeking/skipping. Disable so the lock-screen buttons gray out.
+    let disabled: [MPRemoteCommand] = [
+      cc.nextTrackCommand, cc.previousTrackCommand,
+      cc.seekForwardCommand, cc.seekBackwardCommand,
+      cc.skipForwardCommand, cc.skipBackwardCommand,
+      cc.changePlaybackPositionCommand,
+    ]
+    for command in disabled { command.isEnabled = false }
+  }
+
+  private func forward(_ command: String) {
+    channel?.invokeMethod("remoteCommand", arguments: command)
+  }
+
+  private func updateInfo() {
+    let info: [String: Any] = [
+      MPMediaItemPropertyTitle: title,
+      MPMediaItemPropertyArtist: subtitle,
+      MPNowPlayingInfoPropertyIsLiveStream: true,
+      MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+    ]
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    if #available(iOS 13.0, *) {
+      MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+    }
+  }
+
+  private func clearInfo() {
+    isPlaying = false
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    if #available(iOS 13.0, *) {
+      MPNowPlayingInfoCenter.default().playbackState = .stopped
+    }
+  }
+}
+
 // MARK: - AppDelegate
 
 @main
@@ -553,6 +632,7 @@ private final class KingzPcmPlayer {
   private static var linkChannel: FlutterMethodChannel?
   private static var pendingURL: String?
   private let pcmPlayer = KingzPcmPlayer()
+  private let nowPlaying = NowPlayingController()
 
   override func application(
     _ application: UIApplication,
@@ -569,6 +649,7 @@ private final class KingzPcmPlayer {
   ) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
+    nowPlaying.attach(messenger: messenger)
 
     // Deep-link channel (existing)
     let linkCh = FlutterMethodChannel(

@@ -78,7 +78,7 @@ class NowListeningCard extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Expanded(
-                  child: _InfoTile(label: 'Duration', value: durationLabel)),
+                  child: _InfoTile(label: 'Position', value: durationLabel)),
               const SizedBox(width: 10),
               Expanded(child: _InfoTile(label: 'Latency', value: latency)),
             ],

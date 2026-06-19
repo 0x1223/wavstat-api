@@ -78,6 +78,7 @@ class LanAudioClient {
   int _reconnectAttempts = 0;
   int _reconnectCount = 0;
   int _lastTransportSyncSequence = 0;
+  int? _lastClientPingSentMs; // local RTT reference (plugin's pong doesn't echo sentAt)
   StreamTelemetry _latestTelemetry = const StreamTelemetry();
   final RealtimeStreamListener _realtimeStreamListener =
       RealtimeStreamListener();
@@ -416,8 +417,13 @@ class LanAudioClient {
     }
 
     if (type == 'pong') {
-      final sentAt = message['sentAt'];
-      if (sentAt is int) {
+      // The plugin replies with a bare {"type":"pong"} and does NOT echo sentAt, so fall back to
+      // our own last client.ping send-time. Pings are 2s apart and the pong returns in ms, so the
+      // last send-time is reliably the one this pong answers. (Still prefer an echoed sentAt if a
+      // future plugin build provides one.)
+      final echoed = message['sentAt'];
+      final sentAt = echoed is int ? echoed : _lastClientPingSentMs;
+      if (sentAt != null) {
         final pingMs = DateTime.now().millisecondsSinceEpoch - sentAt;
         _latestTelemetry = _latestTelemetry.copyWith(latency: '$pingMs ms');
         _events.add(LanAudioEvent(telemetry: _latestTelemetry));
@@ -665,9 +671,11 @@ class LanAudioClient {
   void _startClientPing() {
     _clientPingTimer?.cancel();
     _clientPingTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      final sentAt = DateTime.now().millisecondsSinceEpoch;
+      _lastClientPingSentMs = sentAt;
       _send({
         'type': 'client.ping',
-        'sentAt': DateTime.now().millisecondsSinceEpoch,
+        'sentAt': sentAt,
       });
     });
   }
