@@ -202,6 +202,17 @@ private final class KingzPcmPlayer {
     lifecycleObservers.append(nc.addObserver(
       forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
     ) { [weak self] note in self?.handleInterruption(note) })
+    // Route/config changes (lock-screen activating, headphones (un)plugged, sample-rate/route
+    // reconfig). AVAudioEngineConfigurationChange is posted off the main thread → marshalled to main.
+    lifecycleObservers.append(nc.addObserver(
+      forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main
+    ) { [weak self] _ in self?.handleAudioRouteOrConfigChange(reason: "engine-config-change") })
+    lifecycleObservers.append(nc.addObserver(
+      forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+    ) { [weak self] note in
+      let raw = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
+      self?.handleAudioRouteOrConfigChange(reason: "route-change-reason\(raw)")
+    })
   }
 
   private func handleInterruption(_ note: Notification) {
@@ -252,6 +263,31 @@ private final class KingzPcmPlayer {
     } else {
       print("[KINGZ IOS PCM] resync skipped (queue healthy) reason=\(reason) queuedMs=\(Int((Double(backlog) * 1000.0 / sampleRate).rounded()))")
     }
+  }
+
+  // Route/config-change re-lock (PCM live-monitoring only). Fires on lock-screen route/config
+  // changes, (un)plugging, and AVAudioEngine config changes — the discrete events that leave a stale
+  // queue or a stopped engine and caused the lock-screen distortion. Reuses the committed
+  // resyncToLiveEdge (engine-restart if it was stopped, else conditional trim to the live target).
+  // Guarded by isActive so it NEVER starts playback and NEVER touches the Opus/flutter_webrtc path.
+  private func handleAudioRouteOrConfigChange(reason: String) {
+    let wasActive = isActive
+    let restartRequired = engine?.isRunning != true
+    bufferLock.lock()
+    let beforeFrames = queuedFrames
+    bufferLock.unlock()
+    let beforeMs = Int((Double(beforeFrames) * 1000.0 / sampleRate).rounded())
+    let liveTargetMs = Int((Double(targetLiveQueueFrames) * 1000.0 / sampleRate).rounded())
+    print("[KINGZ IOS PCM] route/config event=\(reason) pcmActive=\(wasActive) queuedMsBefore=\(beforeMs) liveTargetMs=\(liveTargetMs) restartRequired=\(restartRequired) opusUntouched=true")
+    // Resume ONLY if PCM was already the active player; in Opus/idle this is a no-op (Opus owns its
+    // own flutter_webrtc audio session and is never touched here).
+    guard wasActive else { return }
+    resyncToLiveEdge(reason: reason)
+    bufferLock.lock()
+    let afterFrames = queuedFrames
+    bufferLock.unlock()
+    let afterMs = Int((Double(afterFrames) * 1000.0 / sampleRate).rounded())
+    print("[KINGZ IOS PCM] route/config re-lock done event=\(reason) queuedMsAfter=\(afterMs) engineRunning=\(engine?.isRunning == true)")
   }
 
   func enqueue(_ data: Data) {
