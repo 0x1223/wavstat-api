@@ -9,6 +9,8 @@
 
 #include <rtc/rtc.hpp>
 
+#include <opus.h>
+
 #if JUCE_WINDOWS
  #include <winsock2.h>
  #include <ws2tcpip.h>
@@ -32,10 +34,133 @@ static_assert (AudioFifoWorker::maxBytesPerChunk == 3840,
 static_assert (AudioFifoWorker::telemetryBitrateBitsPerSecond == 1536000,
                "Kingz Listen native transmitter must preserve the 1536 kbps Linear PCM baseline.");
 
+// Opus encode/resample state for the audio-track transport (declared as a nested type of
+// NetworkTransmitter, defined out-of-line here). Owned by NetworkTransmitter, touched ONLY on the
+// PcmSenderThread (under clientLock). Resamples the DAW-rate Int16 stream to 48 kHz float (streaming
+// linear interpolation — adequate since Opus is lossy and the receiver's NetEq absorbs residual
+// rate error), frames to 20 ms blocks, and Opus-encodes once per frame; the caller fans each encoded
+// frame out to every client with an open send-only Opus track.
+struct NetworkTransmitter::OpusEncodeState
+{
+    static constexpr int kOutRate      = 48000;
+    static constexpr int kChannels     = 2;
+    static constexpr int kFrameSamples = 960;                       // 20 ms @ 48 kHz, per channel
+    static constexpr int kFrameFloats  = kFrameSamples * kChannels;
+
+    OpusEncoder* encoder = nullptr;
+    int encoderError = OPUS_OK;
+
+    // streaming linear resampler state (interleaved stereo, srcRate -> 48 kHz)
+    double cursor = 0.0;            // fractional input-frame index of the next output, from chunk start
+    float carryL = 0.0f, carryR = 0.0f;  // previous chunk's final frame (index -1 for interpolation)
+    bool haveCarry = false;
+
+    std::vector<float> accum;       // resampled interleaved float @ 48 kHz awaiting framing
+    std::vector<float> scratch;     // current input chunk as interleaved float
+    std::array<unsigned char, 4000> packet {};
+
+    OpusEncodeState()
+    {
+        encoder = opus_encoder_create (kOutRate, kChannels, OPUS_APPLICATION_RESTRICTED_LOWDELAY, &encoderError);
+        if (encoder != nullptr)
+        {
+            opus_encoder_ctl (encoder, OPUS_SET_BITRATE (256000));
+            opus_encoder_ctl (encoder, OPUS_SET_SIGNAL (OPUS_SIGNAL_MUSIC));
+            opus_encoder_ctl (encoder, OPUS_SET_VBR (1));
+        }
+        accum.reserve (static_cast<std::size_t> (kFrameFloats) * 4);
+    }
+
+    ~OpusEncodeState()
+    {
+        if (encoder != nullptr)
+            opus_encoder_destroy (encoder);
+    }
+
+    OpusEncodeState (const OpusEncodeState&) = delete;
+    OpusEncodeState& operator= (const OpusEncodeState&) = delete;
+
+    // Feed one DAW-rate Int16 LE stereo chunk; invoke sendFrame(data,len) for each 20 ms Opus frame.
+    template <typename SendFrame>
+    void process (const std::byte* bytes, std::size_t byteCount, int srcRate, SendFrame&& sendFrame)
+    {
+        if (encoder == nullptr || srcRate <= 0)
+            return;
+
+        const int inFrames = static_cast<int> (byteCount / (kChannels * sizeof (std::int16_t)));
+        if (inFrames <= 0)
+            return;
+
+        scratch.resize (static_cast<std::size_t> (inFrames * kChannels));
+        const auto* pcm = reinterpret_cast<const std::int16_t*> (bytes);
+        for (int i = 0; i < inFrames * kChannels; ++i)
+            scratch[static_cast<std::size_t> (i)] = static_cast<float> (pcm[i]) * (1.0f / 32768.0f);
+
+        const double step = static_cast<double> (srcRate) / static_cast<double> (kOutRate);
+        const float* in = scratch.data();
+        const auto sampleL = [&] (int idx) { return idx < 0 ? carryL : in[2 * idx]; };
+        const auto sampleR = [&] (int idx) { return idx < 0 ? carryR : in[2 * idx + 1]; };
+
+        if (! haveCarry)
+            cursor = 0.0;
+
+        for (;;)
+        {
+            const int i0 = static_cast<int> (std::floor (cursor));
+            const int i1 = i0 + 1;
+            if (i1 > inFrames - 1)
+                break;
+            const float frac = static_cast<float> (cursor - i0);
+            accum.push_back (sampleL (i0) * (1.0f - frac) + sampleL (i1) * frac);
+            accum.push_back (sampleR (i0) * (1.0f - frac) + sampleR (i1) * frac);
+            cursor += step;
+        }
+
+        carryL = in[2 * (inFrames - 1)];
+        carryR = in[2 * (inFrames - 1) + 1];
+        haveCarry = true;
+        cursor -= inFrames;                 // rebase: this chunk's last frame becomes index -1 next call
+        if (cursor < -1.0)
+            cursor = -1.0;
+
+        while (accum.size() >= static_cast<std::size_t> (kFrameFloats))
+        {
+            const auto encoded = opus_encode_float (encoder, accum.data(), kFrameSamples,
+                                                    packet.data(), static_cast<opus_int32> (packet.size()));
+            if (encoded > 0)
+                sendFrame (reinterpret_cast<const std::byte*> (packet.data()),
+                           static_cast<std::size_t> (encoded));
+            accum.erase (accum.begin(), accum.begin() + kFrameFloats);
+        }
+    }
+};
+
 namespace
 {
 constexpr auto websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 constexpr auto KINGZ_LISTEN_PLUGIN = "KINGZ_LISTEN_PLUGIN";
+
+// --- Opus audio-track transport (low-latency mode) ---
+// When the receiver selects the Opus transport it offers a recv-only m=audio line; the plugin
+// answers with a send-only Opus track identified by these in the answer SDP / RTP stream.
+constexpr int opusPayloadType = 111;                  // dynamic RTP payload type for Opus
+constexpr std::uint32_t opusTrackSsrc = 0x4B5A4C69u;  // "KZLi" — stable SSRC for the Opus track
+
+// Extract the mid of the offer's m=audio section so the answer's audio m-line matches it
+// (m-line/mid agreement is what makes the answer acceptable — same discipline as the data channel).
+// Returns empty when the offer has no audio section (PCM mode → no Opus track added).
+juce::String extractOfferAudioMid (const juce::String& sdp)
+{
+    bool inAudioSection = false;
+    for (auto& line : juce::StringArray::fromLines (sdp))
+    {
+        if (line.startsWith ("m="))
+            inAudioSection = line.startsWith ("m=audio");
+        else if (inAudioSection && line.startsWith ("a=mid:"))
+            return line.fromFirstOccurrenceOf ("a=mid:", false, false).trim();
+    }
+    return {};
+}
 
 juce::String base64Encode (const std::array<std::uint8_t, 20>& input)
 {
@@ -797,6 +922,8 @@ struct NetworkTransmitter::ClientConnection final
     std::mutex sendMutex;
     std::shared_ptr<rtc::PeerConnection> peerConnection;
     std::shared_ptr<rtc::DataChannel> pcmChannel;
+    std::shared_ptr<rtc::Track> opusTrack;                       // Opus mode: send-only audio track
+    std::shared_ptr<rtc::RtpPacketizationConfig> opusRtpConfig;  // RTP seq/timestamp state for the track
 };
 
 #if JUCE_WINDOWS
@@ -1359,6 +1486,16 @@ void NetworkTransmitter::upgradeToWebSocket (ClientConnection& client, const juc
     sendRaw (client.socket, response.toRawUTF8(), exactUtf8ByteCount (response));
     client.websocket = true;
     client.textBuffer.clear();
+
+    // Announce the current transport mode immediately so this client offers the right m-lines
+    // on its first WebRTC offer (auto-follow). transport.sync can't carry it — it's gated on an
+    // open pcmChannel, which doesn't exist yet at WS-upgrade time.
+    {
+        auto* modeMsg = new juce::DynamicObject();
+        modeMsg->setProperty ("type", "transport.mode");
+        modeMsg->setProperty ("transport", transportMode.load (std::memory_order_acquire) == 1 ? "opus" : "pcm");
+        sendJson (client, jsonString (juce::var (modeMsg)));
+    }
 }
 
 juce::String NetworkTransmitter::getHeaderValue (const juce::String& request, const juce::String& header)
@@ -1751,6 +1888,37 @@ void NetworkTransmitter::createPeerConnection (const std::shared_ptr<ClientConne
             });
         });
 
+        // --- Opus audio-track transport (low-latency mode), added BEFORE setRemoteDescription ---
+        // If the offer carries an m=audio line, the receiver chose the Opus transport. As the
+        // answerer we add a matching SEND-ONLY Opus track now, so libdatachannel reflects m=audio
+        // (send-only) into the auto-generated answer with the SAME mid as the offer. When there is
+        // no audio m-line (PCM mode / today's clients) this is skipped and the data-channel path is
+        // byte-for-byte unchanged.
+        if (const auto audioMid = extractOfferAudioMid (sdp); audioMid.isNotEmpty())
+        {
+            try
+            {
+                rtc::Description::Audio media (audioMid.toStdString(), rtc::Description::Direction::SendOnly);
+                media.addOpusCodec (opusPayloadType);
+                media.addSSRC (opusTrackSsrc, "kingz-opus");
+
+                auto track = peer->addTrack (media);
+                auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig> (
+                    opusTrackSsrc, "kingz-opus", static_cast<std::uint8_t> (opusPayloadType),
+                    rtc::OpusRtpPacketizer::DefaultClockRate);
+                track->setMediaHandler (std::make_shared<rtc::OpusRtpPacketizer> (rtpConfig));
+
+                client->opusTrack = track;
+                client->opusRtpConfig = rtpConfig;
+                std::cout << "[KINGZ WEBRTC] Opus mode: send-only Opus track added (mid=" << audioMid
+                          << " pt=" << opusPayloadType << " ssrc=" << opusTrackSsrc << ")\n" << std::flush;
+            }
+            catch (const std::exception& opusError)
+            {
+                std::cout << "[KINGZ WEBRTC] Opus track setup FAILED: " << opusError.what() << "\n" << std::flush;
+            }
+        }
+
         // Process the offer. disableAutoNegotiation=false means libdatachannel auto-generates
         // the answer, fires onLocalDescription, and sends it — no setLocalDescription() needed.
         peer->setRemoteDescription (rtc::Description (sdp.toStdString(), "offer"));
@@ -1781,6 +1949,9 @@ void NetworkTransmitter::closePeerConnection (ClientConnection& client)
 
         client.pcmChannel.reset();
     }
+
+    client.opusTrack.reset();
+    client.opusRtpConfig.reset();
 
     if (client.peerConnection != nullptr)
     {
@@ -1866,6 +2037,44 @@ void NetworkTransmitter::broadcastPcmChunk (const AudioFifoWorker::DynamicPcmChu
         }
 
         trySendPcmChunk (*client, chunk);
+    }
+
+    // --- Opus audio-track transport: encode the shared stream once per 20 ms frame and fan it out
+    // to every client with an open send-only Opus track. Skipped (zero cost) when no client is in
+    // Opus mode, so the PCM path above is unaffected. Placed BEFORE the no-PCM-clients early return
+    // below, because in pure-Opus mode there are no open PCM channels. ---
+    bool anyOpusClient = false;
+    for (auto& client : clients)
+        if (client != nullptr && client->opusTrack != nullptr && client->opusTrack->isOpen())
+        {
+            anyOpusClient = true;
+            break;
+        }
+
+    if (anyOpusClient)
+    {
+        if (opusEncode == nullptr)
+            opusEncode = std::make_unique<OpusEncodeState>();
+
+        opusEncode->process (chunk.bytes.data(), chunk.byteCount,
+                             streamSampleRate.load (std::memory_order_acquire),
+                             [this] (const std::byte* data, std::size_t len)
+        {
+            for (auto& opusClient : clients)
+            {
+                if (opusClient == nullptr || opusClient->opusTrack == nullptr
+                    || ! opusClient->opusTrack->isOpen())
+                    continue;
+                if (opusClient->opusRtpConfig != nullptr)
+                    opusClient->opusRtpConfig->timestamp += OpusEncodeState::kFrameSamples;
+                try { opusClient->opusTrack->send (data, len); }
+                catch (const std::exception&) {}
+            }
+        });
+    }
+    else if (opusEncode != nullptr)
+    {
+        opusEncode.reset();  // no Opus clients → drop encoder + resampler state (fresh on next join)
     }
 
     // If no clients have open PCM channels yet, health is perfect
@@ -1992,6 +2201,35 @@ void NetworkTransmitter::maybeBroadcastTransportState()
     response->setProperty ("ppqPosition", static_cast<double> (ppqX1000) / 1000.0);
 
     const auto json = jsonString (juce::var (response));
+    const juce::ScopedLock lock { clientLock };
+
+    for (auto& client : clients)
+    {
+        if (client != nullptr
+            && client->websocket
+            && ! client->closeRequested.load (std::memory_order_acquire))
+        {
+            sendJson (*client, json);
+        }
+    }
+}
+
+void NetworkTransmitter::setTransportMode (int mode)
+{
+    // Source of truth for the broadcast codec. Called from the message thread (editor UI).
+    const int clamped = (mode == 1) ? 1 : 0;
+    const int previous = transportMode.exchange (clamped, std::memory_order_acq_rel);
+    if (previous != clamped)
+        broadcastTransportMode();  // tell already-connected listeners to auto-follow
+}
+
+void NetworkTransmitter::broadcastTransportMode()
+{
+    auto* msg = new juce::DynamicObject();
+    msg->setProperty ("type", "transport.mode");
+    msg->setProperty ("transport", transportMode.load (std::memory_order_acquire) == 1 ? "opus" : "pcm");
+    const auto json = jsonString (juce::var (msg));
+
     const juce::ScopedLock lock { clientLock };
 
     for (auto& client : clients)

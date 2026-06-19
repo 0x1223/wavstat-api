@@ -318,6 +318,11 @@ class _ListenerScreenState extends State<ListenerScreen> {
         _telemetry = event.telemetry!;
       }
 
+      if (event.streamTransport != null) {
+        // Plugin (engineer) dictates the broadcast codec; reflect it on the read-only indicator.
+        _streamTransport = event.streamTransport!;
+      }
+
       if (event.dawTransportPlaying != null) {
         final dawPlaying = event.dawTransportPlaying!;
         _telemetry = _telemetry.copyWith(
@@ -427,6 +432,8 @@ class _ListenerScreenState extends State<ListenerScreen> {
     });
   }
 
+  StreamTransport _streamTransport = StreamTransport.pcm;
+
   void _selectMonitoringMode(MonitoringMode mode) {
     setState(() {
       _transportConfig = _transportConfig.copyWith(mode: mode);
@@ -434,6 +441,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     });
     _lanAudioClient.prepare(mode);
   }
+
 
   void _handlePlayerState(PlayerState playerState) {
     if (!mounted) {
@@ -579,6 +587,36 @@ class _ListenerScreenState extends State<ListenerScreen> {
                               MonitoringModeSelector(
                                 selectedMode: _transportConfig.mode,
                                 onModeSelected: _selectMonitoringMode,
+                              ),
+                              const SizedBox(height: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 6),
+                                    child: Text(
+                                      'Broadcast quality · set by studio',
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ),
+                                  // Read-only indicator: the plugin (engineer) dictates the codec
+                                  // and the app auto-follows via transport.mode — no user input.
+                                  SegmentedButton<StreamTransport>(
+                                    segments: const [
+                                      ButtonSegment(
+                                        value: StreamTransport.pcm,
+                                        label: Text('Raw PCM'),
+                                      ),
+                                      ButtonSegment(
+                                        value: StreamTransport.opus,
+                                        label: Text('Opus'),
+                                      ),
+                                    ],
+                                    selected: {_streamTransport},
+                                    onSelectionChanged: null,
+                                  ),
+                                ],
                               ),
                               const SizedBox(height: 13),
                               TransportControls(

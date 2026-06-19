@@ -60,6 +60,10 @@ juce::String getPlaceholderHtml()
     .latency-warn { color: #f1c84b; }
     .latency-bad { color: #ff6b6b; }
     pre { display: none; margin: 18px 0 0; padding: 12px; border-radius: 8px; background: #151922; color: #d7dce5; text-align: left; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+    .seg-label { margin: 0 0 6px; color: #6f7a89; font-size: 12px; text-align: left; }
+    .seg { display: flex; gap: 6px; margin: 0 0 16px; }
+    .seg-btn { flex: 1; width: auto; margin: 0; padding: 10px 12px; background: #202633; color: #aab2c0; font-weight: 600; transition: background 120ms linear, color 120ms linear; }
+    .seg-btn.active { background: #fff; color: #0c0e12; }
   </style>
 </head>
 <body>
@@ -75,6 +79,11 @@ juce::String getPlaceholderHtml()
     <div class="meter">
       <div class="meter-label"><span>Buffer Health</span><span id="buffer-health-label">100%</span></div>
       <div class="bar"><span id="buffer-health-bar"></span></div>
+    </div>
+    <div class="seg-label">Broadcast Quality</div>
+    <div class="seg" id="transport-seg">
+      <button type="button" id="transport-pcm" class="seg-btn active">Raw PCM</button>
+      <button type="button" id="transport-opus" class="seg-btn">Opus</button>
     </div>
     <button id="connect">Connect</button>
     <button id="toggle">Toggle Monitoring</button>
@@ -149,6 +158,7 @@ juce::String getPlaceholderHtml()
       bar.style.background = health >= 0.75 ? "#52d273" : health >= 0.4 ? "#f1c84b" : "#ff6b6b";
       document.getElementById("buffer-health-label").textContent = Math.round(health * 100) + "%";
       window.__KINGZ_LISTEN_TELEMETRY_REPORT__ = report;
+      if (report.transportMode) reflectTransport(report.transportMode);
     }
 
     // ── WebRTC signaling ──────────────────────────────────────────────────────
@@ -335,6 +345,24 @@ juce::String getPlaceholderHtml()
         .then(function() { openTelemetrySocket(host || "127.0.0.1", port); })
         .catch(function() { openTelemetrySocket(host || "127.0.0.1", port); });
     });
+
+    // ── broadcast-quality (transport) toggle ───────────────────────────────────
+    // Engineer control; the plugin (NetworkTransmitter.transportMode) is the source of truth and
+    // the telemetry report re-syncs this UI. Listeners auto-follow via the transport.mode broadcast.
+    var currentTransport = "pcm";
+    function reflectTransport(mode) {
+      currentTransport = (mode === "opus") ? "opus" : "pcm";
+      var pcmBtn  = document.getElementById("transport-pcm");
+      var opusBtn = document.getElementById("transport-opus");
+      if (pcmBtn)  pcmBtn.classList.toggle("active",  currentTransport === "pcm");
+      if (opusBtn) opusBtn.classList.toggle("active", currentTransport === "opus");
+    }
+    function setTransport(mode) {
+      reflectTransport(mode);  // optimistic; telemetry report confirms
+      sendToNative({ action: "setStreamTransport", source: "web-ui", transport: currentTransport }).catch(console.error);
+    }
+    document.getElementById("transport-pcm").addEventListener("click",  function() { setTransport("pcm"); });
+    document.getElementById("transport-opus").addEventListener("click", function() { setTransport("opus"); });
   </script>
 </body>
 </html>)HTML";

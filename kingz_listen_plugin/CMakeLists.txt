@@ -35,6 +35,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(libdatachannel)
 
+# libopus — Opus encoder for the WebRTC audio-track ("Opus") transport. libdatachannel
+# packetizes Opus into RTP but does NOT encode; the plugin encodes here and feeds
+# OpusRtpPacketizer -> rtc::Track. Static (BUILD_SHARED_LIBS=OFF above); tests/programs off.
+set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "Static libopus for the plugin build" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "Disable libopus tests" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "Disable libopus programs" FORCE)
+FetchContent_Declare(
+    opus
+    GIT_REPOSITORY https://github.com/xiph/opus.git
+    GIT_TAG v1.5.2
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(opus)
+
 juce_set_aax_sdk_path("/Users/kingzbreadentertainment/Downloads/aax-sdk-2-8-0")
 
 juce_add_plugin(KingzListenPlugin
@@ -125,4 +139,12 @@ elseif(TARGET datachannel)
     target_link_libraries(KingzListenPlugin PRIVATE datachannel)
 else()
     message(FATAL_ERROR "libdatachannel target was not generated")
+endif()
+
+if(TARGET opus)
+    target_link_libraries(KingzListenPlugin PRIVATE opus)
+elseif(TARGET Opus::opus)
+    target_link_libraries(KingzListenPlugin PRIVATE Opus::opus)
+else()
+    message(FATAL_ERROR "libopus target was not generated")
 endif()

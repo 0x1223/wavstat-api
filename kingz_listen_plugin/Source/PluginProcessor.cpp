@@ -181,6 +181,14 @@ void KingzListenAudioProcessor::handleUiAction (const juce::var& object)
                  << host << " port=" << port);
             startTelemetryConnection (host, port > 0 ? port : 8082);
         }
+        else if (action == "setStreamTransport")
+        {
+            // Engineer-side broadcast codec selector (LISTENTO parity). The listeners auto-follow
+            // via the transport.mode broadcast; the plugin's WebRTC answer stays reactive to the
+            // offer's m-lines.
+            const auto transport = dynamicObject->getProperty ("transport").toString();
+            networkTransmitter.setTransportMode (transport == "opus" ? 1 : 0);
+        }
         else if (action == "regenerateLocalIpToken")
             monitoringRequested.store (monitoringRequested.load (std::memory_order_relaxed),
                                        std::memory_order_relaxed);
@@ -236,6 +244,8 @@ juce::String KingzListenAudioProcessor::getTelemetryReport() const
                          currentAudioThreadTargetChunkMs.load (std::memory_order_relaxed));
     report->setProperty ("chunkSizeTransitionPending", isTransitioning);
     report->setProperty ("sampleRate", networkTransmitter.streamSampleRate.load (std::memory_order_acquire));
+    report->setProperty ("transportMode",
+                         networkTransmitter.transportMode.load (std::memory_order_acquire) == 1 ? "opus" : "pcm");
     report->setProperty ("channels", AudioFifoWorker::inputChannels);
     report->setProperty ("chunkMs", currentTargetChunkMs);
     report->setProperty ("chunkBytes", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentTargetChunkMs)));

@@ -18,6 +18,24 @@ extension MonitoringModeLabel on MonitoringMode {
       };
 }
 
+/// Wire transport for the live audio stream.
+///  - [pcm]:  bit-exact Int16 over the WebRTC data channel (our own playout engine).
+///  - [opus]: Opus over a WebRTC audio track — NetEq does jitter buffering + clock recovery +
+///            catch-up on the receiver, which is what makes low latency viable on a bursty link.
+enum StreamTransport { pcm, opus }
+
+extension StreamTransportLabel on StreamTransport {
+  String get label => switch (this) {
+        StreamTransport.pcm => 'Raw PCM',
+        StreamTransport.opus => 'Opus',
+      };
+
+  String get wireValue => switch (this) {
+        StreamTransport.pcm => 'pcm',
+        StreamTransport.opus => 'opus',
+      };
+}
+
 class TransportConfig {
   const TransportConfig({
     this.mode = MonitoringMode.balanced,

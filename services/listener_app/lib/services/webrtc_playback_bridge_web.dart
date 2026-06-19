@@ -48,6 +48,11 @@ class WebRtcPlaybackBridge {
   int _streamChannels = 2;
   int _streamBitDepth = 16;
   int _offerGeneration = 0;
+
+  /// API parity with the native bridge. Opus transport is not implemented on the Flutter-web
+  /// receiver (the native app uses the stub; phones use the plugin's :8082 player), so web stays
+  /// PCM — this field exists only so [LanAudioClient] compiles against both bridges.
+  StreamTransport transport = StreamTransport.pcm;
   Timer? _pendingDisconnectedTimer;
   DateTime? _backgroundedAt;
 

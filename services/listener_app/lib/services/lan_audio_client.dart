@@ -29,6 +29,7 @@ class LanAudioEvent {
     this.realtimeMetrics,
     this.playbackState,
     this.transportConfig,
+    this.streamTransport,
     this.streamStatus,
     this.streamUrl,
     this.durationLabel,
@@ -45,6 +46,9 @@ class LanAudioEvent {
   final RealtimeStreamMetrics? realtimeMetrics;
   final ListenerPlaybackState? playbackState;
   final TransportConfig? transportConfig;
+  /// Broadcast codec the plugin currently dictates (LISTENTO-parity auto-follow). The UI shows
+  /// this as a read-only indicator; the client switches transports automatically.
+  final StreamTransport? streamTransport;
   final String? streamStatus;
   final Uri? streamUrl;
   final String? durationLabel;
@@ -88,6 +92,10 @@ class LanAudioClient {
   bool _webRtcActive = false;
   bool _pcmFallbackActive = false;
   bool _pcmFallbackAllowed = false;
+
+  /// Selected wire transport (PCM data channel vs Opus audio track). Set by the UI; applied to the
+  /// WebRTC bridge at the next startListening (renegotiation picks the m-lines). Default PCM.
+  StreamTransport streamTransport = StreamTransport.pcm;
 
   LanAudioClient() {
     _webRtcPlaybackBridge.onTelemetry = _emitPlaybackTelemetry;
@@ -167,6 +175,7 @@ class LanAudioClient {
     final state = _audioEngineService.selectMode(mode);
     _webRtcPlaybackBridge.configureTransport(state.transportConfig);
     _pcmPlaybackBridge.configureTransport(state.transportConfig);
+    _webRtcPlaybackBridge.transport = streamTransport; // PCM data channel vs Opus audio track
     _realtimeStreamListener.startSession();
     await _pcmPlaybackBridge.stop();
     await _webRtcPlaybackBridge.resetToLiveEdge(reason: 'listen-start');
@@ -386,6 +395,11 @@ class LanAudioClient {
       return;
     }
 
+    if (type == 'transport.mode') {
+      _handleTransportModeMessage(message);
+      return;
+    }
+
     if (type == 'webrtc.answer' ||
         type == 'webrtc-answer' ||
         type == 'webrtc.ice-candidate' ||
@@ -537,6 +551,53 @@ class LanAudioClient {
         dawBpm: bpm,
       ),
     );
+  }
+
+  /// LISTENTO-parity auto-follow: the plugin (the engineer) dictates the broadcast codec via a
+  /// `transport.mode` message (announced on connect and re-broadcast on every change). The listener
+  /// adopts it automatically — no manual step. If a playback session is live and the codec actually
+  /// changed, renegotiate invisibly (a brief automatic re-buffer at that instant is unavoidable for
+  /// a codec/transport switch; steady-state and sample-rate changes stay seamless).
+  void _handleTransportModeMessage(Map<String, dynamic> message) {
+    // Auto-follow is native (iOS) only. The Flutter-web bridge has no Opus path and web-over-HTTP
+    // can't host the worklet without HTTPS, so the web receiver stays PCM and ignores the broadcast
+    // (showing "Opus" while playing PCM would be misleading; renegotiating it would just thrash).
+    if (kIsWeb) {
+      return;
+    }
+    final wire = (message['transport'] as String?)?.toLowerCase();
+    final mode = wire == 'opus' ? StreamTransport.opus : StreamTransport.pcm;
+    if (mode == streamTransport) {
+      // Unchanged (e.g. the announce-on-connect echo): still surface so the UI indicator is right.
+      _events.add(LanAudioEvent(streamTransport: streamTransport));
+      return;
+    }
+    debugPrint(
+        '[KINGZ] transport.mode: plugin switched ${streamTransport.wireValue} -> ${mode.wireValue}');
+    streamTransport = mode;
+    // Applied at the next startListening if no session is live; _applyTransportChange re-sets it.
+    _webRtcPlaybackBridge.transport = mode;
+    _events.add(LanAudioEvent(streamTransport: mode));
+    if (_wasListening &&
+        _pcmFallbackAllowed &&
+        !_manualDisconnect &&
+        !_isDisposed) {
+      unawaited(_applyTransportChange());
+    }
+  }
+
+  /// Tear down the live WebRTC session and renegotiate with the new transport's m-lines. An
+  /// explicit stop() first is required so the native PCM engine is stopped when switching to Opus
+  /// (start() only starts the native engine for PCM, never stops it for Opus) and rebuilt cleanly
+  /// the other way.
+  Future<void> _applyTransportChange() async {
+    if (!_wasListening || _manualDisconnect || _isDisposed) {
+      return;
+    }
+    _webRtcPlaybackBridge.transport = streamTransport;
+    _pcmFallbackActive = false;
+    await _webRtcPlaybackBridge.stop();
+    await _restartWebRtcAfterReconnect();
   }
 
   void _handleConnectionLoss() {

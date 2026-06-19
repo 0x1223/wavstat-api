@@ -35,6 +35,7 @@ public:
     int getConnectedClientCount() const noexcept;
     juce::String getLocalLanIpAddress() const;
     void setStreamSampleRate (double sampleRate) noexcept;
+    void setTransportMode (int mode);  // 0 = PCM, 1 = Opus; stores + broadcasts to clients
     void updateTransportSnapshot (bool isPlaying,
                                   juce::int64 hostSamplePosition,
                                   juce::int64 streamWritePosition,
@@ -51,6 +52,11 @@ public:
     std::atomic<int> droppedPacketCount { 0 };
     std::atomic<int> bufferHealthAlert { 0 };
     std::atomic<int> streamSampleRate { AudioFifoWorker::targetSampleRate };
+    // Broadcast stream transport the listeners must follow (LISTENTO parity: the engineer
+    // controls the codec on the plugin, all receivers auto-follow). 0 = raw PCM (data channel),
+    // 1 = Opus (WebRTC audio track). The plugin's WebRTC answer stays reactive to the offer's
+    // m-lines; this value is the source of truth announced to clients so they offer the right mode.
+    std::atomic<int> transportMode { 0 };
     std::atomic<bool> hostTransportPlaying { false };
     std::atomic<juce::int64> hostTransportSamplePosition { 0 };
     std::atomic<juce::int64> streamWriteSamplePosition { 0 };
@@ -122,6 +128,7 @@ private:
     bool trySendPcmChunk (ClientConnection& client, const AudioFifoWorker::DynamicPcmChunk& chunk) noexcept;
     void maybeBroadcastTransportState();
     void maybeBroadcastTransportSync (int chunkFrames);
+    void broadcastTransportMode();  // push current transportMode to every websocket client
     void sendJson (ClientConnection& client, const juce::String& json);
     void sendJson (const std::shared_ptr<ClientConnection>& client, const juce::String& json);
     void sendHttpResponse (ClientConnection& client,
@@ -180,4 +187,11 @@ private:
         NetworkTransmitter& owner;
     };
     std::unique_ptr<PcmSenderThread> pcmSenderThread;
+
+    // Opus audio-track transport (low-latency mode): encode/resample state, lazily created while
+    // >=1 client has an open send-only Opus track. Defined out-of-line in the .cpp; touched only on
+    // the PcmSenderThread. (NetworkTransmitter's ctor/dtor are out-of-line, so the incomplete type
+    // is fine for this member here.)
+    struct OpusEncodeState;
+    std::unique_ptr<OpusEncodeState> opusEncode;
 };

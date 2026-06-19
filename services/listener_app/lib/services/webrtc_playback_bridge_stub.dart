@@ -53,6 +53,10 @@ class WebRtcPlaybackBridge {
   int _streamBitDepth = 16;
   int _offerGeneration = 0;
   int _pcmPacketCount = 0;
+
+  /// Wire transport selected by the client (default PCM = today's behavior). In Opus mode the
+  /// bridge negotiates a recv-only audio track and leaves the native PCM engine off (NetEq plays).
+  StreamTransport transport = StreamTransport.pcm;
   Timer? _disconnectTimer;
   Timer? _legacyOfferFallbackTimer;
   String? _lastOfferSdp;
@@ -105,9 +109,20 @@ class WebRtcPlaybackBridge {
     _peerReady = false;
 
     try {
-      await _pcmPlaybackBridge.start();
-      await resetToLiveEdge(reason: 'webrtc-start');
-      debugPrint('[KINGZ WebRTC] creating peer connection...');
+      if (transport == StreamTransport.pcm) {
+        // PCM mode drives the native AVAudioEngine; Opus mode leaves it off — flutter_webrtc/NetEq
+        // plays the incoming audio track directly.
+        await _pcmPlaybackBridge.start();
+        await resetToLiveEdge(reason: 'webrtc-start');
+      } else {
+        // Opus plays through flutter_webrtc's own audio unit (the native PCM engine stays off). Pin
+        // a .playback session so iOS grants background-audio execution like the native PCM path —
+        // otherwise the app loses background time on minimize, the peer goes Disconnected, and audio
+        // stops. (recvonly => .playback, matching AppDelegate's KingzPcmPlayer.)
+        await _configureAppleAudioForOpus();
+      }
+      debugPrint(
+          '[KINGZ WebRTC] creating peer connection... (transport=${transport.wireValue})');
       await _createPeer();
       _peerReady =
           true; // CRITICAL: mark peer as ready BEFORE processing queued messages
@@ -317,6 +332,24 @@ class WebRtcPlaybackBridge {
   }
 
   /// Stop the WebRTC peer connection and playback.
+  /// Pin flutter_webrtc's iOS audio session to .playback (recv-only) so Opus survives backgrounding
+  /// like the native PCM path. No-op off iOS (Helper checks the platform internally).
+  Future<void> _configureAppleAudioForOpus() async {
+    try {
+      await Helper.setAppleAudioConfiguration(
+        AppleAudioConfiguration(
+          appleAudioCategory: AppleAudioCategory.playback,
+          appleAudioCategoryOptions: const {},
+          appleAudioMode: AppleAudioMode.default_,
+        ),
+      );
+      debugPrint(
+          '[KINGZ WebRTC] Opus apple audio session = .playback (background-capable)');
+    } catch (e) {
+      debugPrint('[KINGZ WebRTC] setAppleAudioConfiguration failed: $e');
+    }
+  }
+
   Future<void> stop() async {
     _active = false;
     _peerReady = false;
@@ -384,29 +417,65 @@ class WebRtcPlaybackBridge {
     final peer = _peer!;
     final generation = _offerGeneration;
 
-    // Create data channel BEFORE creating offer so the offer contains m=application.
-    // CRITICAL: The offerer's locally-created channel never fires onDataChannel on the
-    // offerer side — that callback is for answerer-initiated channels only. We must
-    // capture the returned channel and attach PCM handlers immediately.
-    try {
-      debugPrint(
-          '[KINGZ WebRTC] creating kingz-pcm data channel (pre-negotiation)...');
-      final dataChannelInit = RTCDataChannelInit()
-        ..ordered = false
-        ..binaryType = 'binary'
-        ..protocol = 'audio/L16;rate=48000;channels=2'
-        // flutter_webrtc 0.9.x always serializes an id, and iOS then treats it
-        // as an explicit SCTP stream id. The plugin answer uses DTLS active,
-        // making this Flutter offerer the passive side, which must use odd ids.
-        ..id = 1;
-      final localDc =
-          await peer.createDataChannel('kingz-pcm', dataChannelInit);
-      _attachPcmDataChannel(localDc, generation);
-      debugPrint(
-          '[KINGZ WebRTC] kingz-pcm data channel created and handlers attached');
-    } catch (error) {
-      debugPrint(
-          '[KINGZ WebRTC] WARNING: failed to pre-create data channel: $error');
+    // PCM transport: create the kingz-pcm data channel BEFORE the offer (so it carries
+    // m=application). Opus transport: instead add a recv-only audio transceiver BEFORE the offer
+    // (so it carries m=audio); the plugin answers with a send-only Opus track that plays via
+    // flutter_webrtc's audio device (NetEq jitter buffer + clock recovery + catch-up).
+    if (transport == StreamTransport.pcm) {
+      // CRITICAL: The offerer's locally-created channel never fires onDataChannel on the
+      // offerer side — that callback is for answerer-initiated channels only. We must
+      // capture the returned channel and attach PCM handlers immediately.
+      try {
+        debugPrint(
+            '[KINGZ WebRTC] creating kingz-pcm data channel (pre-negotiation)...');
+        final dataChannelInit = RTCDataChannelInit()
+          ..ordered = false
+          ..binaryType = 'binary'
+          ..protocol = 'audio/L16;rate=48000;channels=2'
+          // flutter_webrtc 0.9.x always serializes an id, and iOS then treats it
+          // as an explicit SCTP stream id. The plugin answer uses DTLS active,
+          // making this Flutter offerer the passive side, which must use odd ids.
+          ..id = 1;
+        final localDc =
+            await peer.createDataChannel('kingz-pcm', dataChannelInit);
+        _attachPcmDataChannel(localDc, generation);
+        debugPrint(
+            '[KINGZ WebRTC] kingz-pcm data channel created and handlers attached');
+      } catch (error) {
+        debugPrint(
+            '[KINGZ WebRTC] WARNING: failed to pre-create data channel: $error');
+      }
+    } else {
+      try {
+        debugPrint('[KINGZ WebRTC] adding recv-only audio transceiver (Opus)...');
+        peer.onTrack = (RTCTrackEvent event) {
+          if (generation != _offerGeneration || !_active) {
+            return;
+          }
+          debugPrint(
+              '[KINGZ WebRTC] onTrack: kind=${event.track.kind} streams=${event.streams.length}');
+          if (event.track.kind == 'audio') {
+            // Re-assert .playback now that WebRTC's audio unit is live, so its session config
+            // doesn't settle on a non-background category.
+            unawaited(_configureAppleAudioForOpus());
+            _updateTelemetry(
+                outputActive: true, stateOverride: 'native-webrtc-opus');
+            if (!_playbackStartedSignaled) {
+              _playbackStartedSignaled = true;
+              onPlaybackStarted?.call();
+            }
+          }
+        };
+        await peer.addTransceiver(
+          kind: RTCRtpMediaType.RTCRtpMediaTypeAudio,
+          init:
+              RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly),
+        );
+        debugPrint('[KINGZ WebRTC] recv-only audio transceiver added (Opus)');
+      } catch (error) {
+        debugPrint(
+            '[KINGZ WebRTC] WARNING: failed to add audio transceiver: $error');
+      }
     }
 
     peer.onIceCandidate = (RTCIceCandidate candidate) {
