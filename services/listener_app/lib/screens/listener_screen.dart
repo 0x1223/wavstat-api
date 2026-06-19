@@ -337,6 +337,11 @@ class _ListenerScreenState extends State<ListenerScreen> {
         _streamTransport = event.streamTransport!;
       }
 
+      if (event.streamName != null) {
+        // Engineer-set broadcast name; feeds the lock-screen card title.
+        _streamName = event.streamName!;
+      }
+
       if (event.dawTransportPlaying != null) {
         final dawPlaying = event.dawTransportPlaying!;
         _telemetry = _telemetry.copyWith(
@@ -454,6 +459,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
   }
 
   StreamTransport _streamTransport = StreamTransport.pcm;
+  String _streamName = 'Kingz Listen'; // engineer-set broadcast name (inherited from the plugin)
 
   void _selectMonitoringMode(MonitoringMode mode) {
     setState(() {
@@ -539,7 +545,7 @@ class _ListenerScreenState extends State<ListenerScreen> {
     final playing = _status == ListenerStatus.playing ||
         _status == ListenerStatus.buffering;
     unawaited(_nowPlaying.setNowPlaying(
-      title: 'Kingz Listen',
+      title: _streamName,
       subtitle: 'LAN Audio Receiver',
       isPlaying: playing,
     ));

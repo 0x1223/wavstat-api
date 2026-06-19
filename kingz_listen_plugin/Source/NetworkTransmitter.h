@@ -36,6 +36,8 @@ public:
     juce::String getLocalLanIpAddress() const;
     void setStreamSampleRate (double sampleRate) noexcept;
     void setTransportMode (int mode);  // 0 = PCM, 1 = Opus; stores + broadcasts to clients
+    void setStreamName (const juce::String& name);  // editable display name; stores + broadcasts
+    juce::String getStreamName() const;
     void updateTransportSnapshot (bool isPlaying,
                                   juce::int64 hostSamplePosition,
                                   juce::int64 streamWritePosition,
@@ -129,6 +131,7 @@ private:
     void maybeBroadcastTransportState();
     void maybeBroadcastTransportSync (int chunkFrames);
     void broadcastTransportMode();  // push current transportMode to every websocket client
+    void broadcastStreamName();     // push current streamName to every websocket client
     void sendJson (ClientConnection& client, const juce::String& json);
     void sendJson (const std::shared_ptr<ClientConnection>& client, const juce::String& json);
     void sendHttpResponse (ClientConnection& client,
@@ -153,6 +156,8 @@ private:
     std::shared_ptr<ClientConnection> externalSignalingClient;
     juce::CriticalSection clientLock;
     juce::CriticalSection externalSignalingLock;
+    juce::String streamName { "Kingz Listen" };  // editable broadcast display name (LISTENTO parity)
+    mutable juce::CriticalSection streamNameLock;
     std::function<void (const juce::String&)> externalSignalingSender;
     NativeSocket listener = invalidSocket;
     std::atomic<bool> shouldListen { false };

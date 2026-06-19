@@ -189,6 +189,11 @@ void KingzListenAudioProcessor::handleUiAction (const juce::var& object)
             const auto transport = dynamicObject->getProperty ("transport").toString();
             networkTransmitter.setTransportMode (transport == "opus" ? 1 : 0);
         }
+        else if (action == "setStreamName")
+        {
+            // Engineer-editable broadcast display name; receivers (app + web) inherit it.
+            networkTransmitter.setStreamName (dynamicObject->getProperty ("name").toString());
+        }
         else if (action == "regenerateLocalIpToken")
             monitoringRequested.store (monitoringRequested.load (std::memory_order_relaxed),
                                        std::memory_order_relaxed);
@@ -246,6 +251,7 @@ juce::String KingzListenAudioProcessor::getTelemetryReport() const
     report->setProperty ("sampleRate", networkTransmitter.streamSampleRate.load (std::memory_order_acquire));
     report->setProperty ("transportMode",
                          networkTransmitter.transportMode.load (std::memory_order_acquire) == 1 ? "opus" : "pcm");
+    report->setProperty ("streamName", networkTransmitter.getStreamName());
     report->setProperty ("channels", AudioFifoWorker::inputChannels);
     report->setProperty ("chunkMs", currentTargetChunkMs);
     report->setProperty ("chunkBytes", static_cast<int> (AudioFifoWorker::bytesForChunkMs (currentTargetChunkMs)));

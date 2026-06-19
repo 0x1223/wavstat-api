@@ -30,6 +30,7 @@ class LanAudioEvent {
     this.playbackState,
     this.transportConfig,
     this.streamTransport,
+    this.streamName,
     this.streamStatus,
     this.streamUrl,
     this.durationLabel,
@@ -49,6 +50,9 @@ class LanAudioEvent {
   /// Broadcast codec the plugin currently dictates (LISTENTO-parity auto-follow). The UI shows
   /// this as a read-only indicator; the client switches transports automatically.
   final StreamTransport? streamTransport;
+  /// Engineer-set broadcast display name (LISTENTO-parity), inherited from the plugin's
+  /// {type:"stream.name"} broadcast. Feeds the Now Playing card title.
+  final String? streamName;
   final String? streamStatus;
   final Uri? streamUrl;
   final String? durationLabel;
@@ -398,6 +402,15 @@ class LanAudioClient {
 
     if (type == 'transport.mode') {
       _handleTransportModeMessage(message);
+      return;
+    }
+
+    if (type == 'stream.name') {
+      // Engineer-set display name, broadcast on connect and on change. Surface it for the card.
+      final name = (message['name'] as String?)?.trim();
+      if (name != null && name.isNotEmpty) {
+        _events.add(LanAudioEvent(streamName: name));
+      }
       return;
     }
 

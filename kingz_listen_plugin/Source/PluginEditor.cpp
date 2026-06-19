@@ -80,6 +80,8 @@ juce::String getPlaceholderHtml()
       <div class="meter-label"><span>Buffer Health</span><span id="buffer-health-label">100%</span></div>
       <div class="bar"><span id="buffer-health-bar"></span></div>
     </div>
+    <div class="seg-label">Stream Name</div>
+    <input id="stream-name" placeholder="Kingz Listen" style="margin-bottom:16px;">
     <div class="seg-label">Broadcast Quality</div>
     <div class="seg" id="transport-seg">
       <button type="button" id="transport-pcm" class="seg-btn active">Raw PCM</button>
@@ -93,6 +95,7 @@ juce::String getPlaceholderHtml()
     // ── global state ──────────────────────────────────────────────────────────
     var studioIpInput   = document.getElementById("studio-ip");
     var studioPortInput = document.getElementById("studio-port");
+    var streamNameInput = document.getElementById("stream-name");
     var connectionFieldsEdited = false;
     var nativePromiseId = 1;
     var nativePromises  = {};
@@ -159,6 +162,7 @@ juce::String getPlaceholderHtml()
       document.getElementById("buffer-health-label").textContent = Math.round(health * 100) + "%";
       window.__KINGZ_LISTEN_TELEMETRY_REPORT__ = report;
       if (report.transportMode) reflectTransport(report.transportMode);
+      if (report.streamName) reflectStreamName(report.streamName);
     }
 
     // ── WebRTC signaling ──────────────────────────────────────────────────────
@@ -363,6 +367,20 @@ juce::String getPlaceholderHtml()
     }
     document.getElementById("transport-pcm").addEventListener("click",  function() { setTransport("pcm"); });
     document.getElementById("transport-opus").addEventListener("click", function() { setTransport("opus"); });
+
+    // ── stream name (engineer-editable broadcast name) ─────────────────────────
+    // Source of truth is the plugin; the telemetry report re-syncs this field (without clobbering
+    // while the engineer is typing). Committing broadcasts to all receivers (app + web).
+    function reflectStreamName(name) {
+      if (document.activeElement === streamNameInput) return;
+      if (streamNameInput.value !== name) streamNameInput.value = name;
+    }
+    function commitStreamName() {
+      var v = (streamNameInput.value || "").trim();
+      sendToNative({ action: "setStreamName", source: "web-ui", name: v }).catch(console.error);
+    }
+    streamNameInput.addEventListener("change", commitStreamName);
+    streamNameInput.addEventListener("keydown", function(e) { if (e.key === "Enter") streamNameInput.blur(); });
   </script>
 </body>
 </html>)HTML";

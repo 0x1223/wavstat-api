@@ -412,6 +412,7 @@ var audioCtx      = null;
 var gainNode      = null;
 var mediaDest     = null;
 var mediaAudio    = null;
+var streamName    = "Kingz Listen";  // inherited from the plugin via {type:"stream.name"}
 var nextPlayTime  = 0;
 var muted         = false;
 var stopped       = false;
@@ -465,7 +466,7 @@ function configureMediaSession(){
   if(!("mediaSession" in navigator)) return;
   try{
     navigator.mediaSession.metadata = new MediaMetadata({
-      title:"Kingz Listen",
+      title: streamName,
       artist:"LAN Audio Receiver",
       album:"Studio Session"
     });
@@ -688,6 +689,10 @@ function openSocket(h, p){
     if(msg.type === "telemetry.report"){
       var lat = Number(msg.latencyMs || 0);
       if(lat > 0) document.getElementById("stat-latency").textContent = lat.toFixed(0) + " ms";
+    }
+    if(msg.type === "stream.name"){
+      if(msg.name){ streamName = msg.name; configureMediaSession(); }
+      return;
     }
     if(msg.type === "webrtc.data-channel-open" || msg.type === "webrtc-data-channel-open"){
       updateStreamFormat(msg);
@@ -1502,6 +1507,15 @@ void NetworkTransmitter::upgradeToWebSocket (ClientConnection& client, const juc
         modeMsg->setProperty ("transport", transportMode.load (std::memory_order_acquire) == 1 ? "opus" : "pcm");
         sendJson (client, jsonString (juce::var (modeMsg)));
     }
+
+    // Announce the current display name so a receiver joining mid-session (app + web) inherits the
+    // engineer's current name immediately, not the default. (Re-broadcast on change in setStreamName.)
+    {
+        auto* nameMsg = new juce::DynamicObject();
+        nameMsg->setProperty ("type", "stream.name");
+        nameMsg->setProperty ("name", getStreamName());
+        sendJson (client, jsonString (juce::var (nameMsg)));
+    }
 }
 
 juce::String NetworkTransmitter::getHeaderValue (const juce::String& request, const juce::String& header)
@@ -2234,6 +2248,51 @@ void NetworkTransmitter::broadcastTransportMode()
     auto* msg = new juce::DynamicObject();
     msg->setProperty ("type", "transport.mode");
     msg->setProperty ("transport", transportMode.load (std::memory_order_acquire) == 1 ? "opus" : "pcm");
+    const auto json = jsonString (juce::var (msg));
+
+    const juce::ScopedLock lock { clientLock };
+
+    for (auto& client : clients)
+    {
+        if (client != nullptr
+            && client->websocket
+            && ! client->closeRequested.load (std::memory_order_acquire))
+        {
+            sendJson (*client, json);
+        }
+    }
+}
+
+juce::String NetworkTransmitter::getStreamName() const
+{
+    const juce::ScopedLock lock { streamNameLock };
+    return streamName;
+}
+
+void NetworkTransmitter::setStreamName (const juce::String& name)
+{
+    // Source of truth for the broadcast display name (LISTENTO parity). Called from the message
+    // thread (editor UI). Blank falls back to the default.
+    const auto trimmed = name.trim();
+    const auto finalName = trimmed.isNotEmpty() ? trimmed : juce::String ("Kingz Listen");
+    bool changed = false;
+    {
+        const juce::ScopedLock lock { streamNameLock };
+        if (streamName != finalName)
+        {
+            streamName = finalName;
+            changed = true;
+        }
+    }
+    if (changed)
+        broadcastStreamName();  // tell already-connected receivers to inherit the new name
+}
+
+void NetworkTransmitter::broadcastStreamName()
+{
+    auto* msg = new juce::DynamicObject();
+    msg->setProperty ("type", "stream.name");
+    msg->setProperty ("name", getStreamName());
     const auto json = jsonString (juce::var (msg));
 
     const juce::ScopedLock lock { clientLock };
