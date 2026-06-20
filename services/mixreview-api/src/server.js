@@ -82,19 +82,32 @@ if (isProduction && !hasR2Config) {
 
 // Maximum time to wait for any single R2 SDK call.
 // Prevents indefinite hangs when R2 is unreachable from the Railway container.
-const R2_TIMEOUT_MS      = 8_000;   // normal reads / writes
-const R2_LONG_TIMEOUT_MS = 60_000;  // large-file reads (peaks generation, transcode)
+const R2_TIMEOUT_MS                 = 8_000;   // normal reads
+const R2_WRITE_TIMEOUT_MS           = 30_000;  // session/index writes
+const R2_PLAYBACK_CONNECT_TIMEOUT_MS = 20_000; // playback/range response headers
+const R2_LONG_TIMEOUT_MS            = 60_000;  // large-file reads (peaks generation, transcode)
+const MAX_PEAK_REPAIRS_PER_SESSION_READ = 8;
 
 // sendR2 — wraps r2Client.send() with a hard AbortController timeout so no
 // R2 operation can stall the Node.js event loop indefinitely.
 function sendR2(command, timeoutMs = R2_TIMEOUT_MS) {
   if (!r2Client) throw new Error("R2 client is not configured.");
   const controller = new AbortController();
-  const timeoutId = setTimeout(
-    () => controller.abort(new Error(`R2 timeout after ${timeoutMs}ms — ${command.constructor.name}`)),
-    timeoutMs,
-  );
+  let didTimeout = false;
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, timeoutMs);
   return r2Client.send(command, { abortSignal: controller.signal })
+    .catch((error) => {
+      if (didTimeout || error?.name === "AbortError") {
+        const timeoutError = new Error(`R2 timeout after ${timeoutMs}ms — ${command.constructor.name}`);
+        timeoutError.name = "R2TimeoutError";
+        timeoutError.cause = error;
+        throw timeoutError;
+      }
+      throw error;
+    })
     .finally(() => clearTimeout(timeoutId));
 }
 
@@ -539,34 +552,90 @@ function queueMissingPeakRepairs(session, req) {
 
   const apiBaseUrl = `${req.protocol}://${req.get("host")}`;
   const tracks = Array.isArray(session.tracks) ? session.tracks : [];
+  const repairCandidates = [];
 
-  tracks.forEach((track) => {
+  for (const track of tracks) {
     const versions = Array.isArray(track.versions) ? track.versions : [];
     const version = versions.find((candidate) => candidate.id === track.activeVersionId) || versions[0];
     const audio = version?.audioMetadata;
-    if (!version?.id || !audio?.key) return;
+    if (!version?.id || !audio?.key) continue;
 
     const peaksKey = `${audio.key}.peaks.json`;
-    if (audio.peaksUrl && verifiedPeakObjectKeys.has(peaksKey)) return;
+    if (audio.peaksUrl && verifiedPeakObjectKeys.has(peaksKey)) continue;
     const repairId = `${session.id}:${track.id}:${version.id}:${audio.key}`;
-    if (pendingPeakRepairKeys.has(repairId)) return;
-    pendingPeakRepairKeys.add(repairId);
+    if (pendingPeakRepairKeys.has(repairId)) continue;
+    repairCandidates.push({
+      sessionId: session.id,
+      trackId: track.id,
+      versionId: version.id,
+      audioKey: audio.key,
+      peaksKey,
+      priority: audio.peaksUrl ? 1 : 0,
+    });
+  }
 
-    peakRepairChain = peakRepairChain
-      .catch(() => {})
-      .then(async () => {
-        const peaksUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(peaksKey)}`;
-        if (await r2ObjectExists(peaksKey)) {
-          if (!audio.peaksUrl) {
-            await patchSessionAudioMetadata(session.id, track.id, version.id, { peaksUrl });
-          }
-          return;
-        }
-        await generateAndStoreSessionPeaksFromR2(audio.key, peaksKey, apiBaseUrl, session.id, track.id, version.id);
-      })
-      .catch((err) => console.error("[MixReview] Missing peaks repair failed", { key: audio.key, error: err.message }))
-      .finally(() => pendingPeakRepairKeys.delete(repairId));
+  repairCandidates
+    .sort((a, b) => a.priority - b.priority)
+    .slice(0, MAX_PEAK_REPAIRS_PER_SESSION_READ)
+    .forEach((candidate) => {
+      queuePeakRepairJob({ ...candidate, apiBaseUrl });
+    });
+}
+
+function parseSessionAudioObjectKey(objectKey) {
+  const match = String(objectKey || "").match(/^sessions\/([^/]+)\/tracks\/([^/]+)\/versions\/([^/]+)\//);
+  if (!match) return null;
+  return {
+    sessionId: sanitizeSessionId(match[1]),
+    trackId: match[2],
+    versionId: match[3],
+  };
+}
+
+function queuePeakRepairFromPeaksKey(peaksKey, req) {
+  if (!hasR2Config || !peaksKey?.endsWith(".peaks.json")) return false;
+  const audioKey = peaksKey.slice(0, -".peaks.json".length);
+  const parsed = parseSessionAudioObjectKey(audioKey);
+  if (!parsed?.sessionId || !parsed.trackId || !parsed.versionId) return false;
+
+  return queuePeakRepairJob({
+    ...parsed,
+    audioKey,
+    peaksKey,
+    apiBaseUrl: `${req.protocol}://${req.get("host")}`,
+    skipExistingCheck: true,
   });
+}
+
+function queuePeakRepairJob({
+  sessionId,
+  trackId,
+  versionId,
+  audioKey,
+  peaksKey,
+  apiBaseUrl,
+  skipExistingCheck = false,
+}) {
+  if (!hasR2Config || !sessionId || !trackId || !versionId || !audioKey || !peaksKey || !apiBaseUrl) return false;
+
+  const repairId = `${sessionId}:${trackId}:${versionId}:${audioKey}`;
+  if (pendingPeakRepairKeys.has(repairId)) return false;
+  pendingPeakRepairKeys.add(repairId);
+
+  peakRepairChain = peakRepairChain
+    .catch(() => {})
+    .then(async () => {
+      const peaksUrl = `${apiBaseUrl}/api/audio/playback/${encodeURIComponent(peaksKey)}`;
+      if (!skipExistingCheck && await r2ObjectExists(peaksKey)) {
+        await patchSessionAudioMetadata(sessionId, trackId, versionId, { peaksUrl });
+        return;
+      }
+      await generateAndStoreSessionPeaksFromR2(audioKey, peaksKey, apiBaseUrl, sessionId, trackId, versionId);
+    })
+    .catch((err) => console.error("[MixReview] Missing peaks repair failed", { key: audioKey, error: err.message }))
+    .finally(() => pendingPeakRepairKeys.delete(repairId));
+
+  return true;
 }
 
 // generatePeaksWithFfmpeg — decodes any audio format to mono f32le PCM via
@@ -725,14 +794,13 @@ async function streamAudioPlayback(req, res, next) {
       return res.redirect(302, `/uploads/${objectKey}`);
     }
 
-    // Abort the R2 connection attempt if it doesn't respond within R2_TIMEOUT_MS.
+    // Abort the R2 connection attempt if it doesn't respond promptly.
     // Once send() resolves (headers received) the timer is cleared so the body
     // stream is not cut short — the timeout only guards the initial connection.
     const r2Controller = new AbortController();
-    const r2TimeoutId = setTimeout(
-      () => r2Controller.abort(new Error("R2 connection timeout")),
-      R2_TIMEOUT_MS,
-    );
+    const r2TimeoutId = setTimeout(() => {
+      r2Controller.abort();
+    }, R2_PLAYBACK_CONNECT_TIMEOUT_MS);
     let response;
     try {
       response = await r2Client.send(
@@ -776,6 +844,9 @@ async function streamAudioPlayback(req, res, next) {
     response.Body.pipe(res);
   } catch (error) {
     if (error?.name === "NoSuchKey" || error?.$metadata?.httpStatusCode === 404) {
+      if (objectKey.endsWith(".peaks.json")) {
+        queuePeakRepairFromPeaksKey(objectKey, req);
+      }
       return res.status(404).json({ error: "Audio object not found." });
     }
     if (error?.name === "AbortError" || error?.message?.includes("timeout")) {
@@ -1769,6 +1840,7 @@ async function writeDatabase(database) {
         Body: body,
         ContentType: "application/json"
       }),
+      R2_WRITE_TIMEOUT_MS,
     );
   }
 }
@@ -1895,6 +1967,7 @@ async function writeSessionDocument(sessionId, session) {
         Body: body,
         ContentType: "application/json"
       }),
+      R2_WRITE_TIMEOUT_MS,
     );
   }
 
