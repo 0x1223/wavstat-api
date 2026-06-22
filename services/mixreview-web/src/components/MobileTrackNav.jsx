@@ -76,12 +76,13 @@ export function MobileTrackNav({
 
   const effectiveAlbums = Array.isArray(albums) && albums.length > 0 ? albums : null;
   const trackMap        = Object.fromEntries(tracks.map((t) => [t.id, t]));
-  const multiAlbum      = effectiveAlbums && effectiveAlbums.length > 1;
+  const multiAlbum      = Boolean(effectiveAlbums && effectiveAlbums.length > 1);
 
   // Resolve selected album, falling back to the first one
   const selectedAlbum =
     (effectiveAlbums || []).find((a) => a.id === selectedAlbumId) ||
     (effectiveAlbums || [])[0];
+  const hasProjectContext = Boolean(selectedAlbum);
 
   const isStemProject = selectedAlbum?.type === "stem_project";
 
@@ -126,6 +127,13 @@ export function MobileTrackNav({
     (a) => a.id === selectedAlbum?.id
   );
   const albumCount = (effectiveAlbums || []).length;
+  const canOpenProjectDropdown = multiAlbum && albumCount > 1;
+
+  useEffect(() => {
+    if (!canOpenProjectDropdown && dropdownOpen) {
+      setDropdownOpen(false);
+    }
+  }, [canOpenProjectDropdown, dropdownOpen]);
 
   // Close dropdown on outside tap
   useEffect(() => {
@@ -144,14 +152,19 @@ export function MobileTrackNav({
     <nav className="mobile-track-nav" aria-label="Track selector">
 
       {/* ── Project switcher ──────────────────────────────────────────────── */}
-      {multiAlbum && (
+      {hasProjectContext && (
         <div className="mobile-project-selector" ref={selectorRef}>
           <button
             type="button"
             className="mobile-project-selector-btn"
-            onClick={() => setDropdownOpen((v) => !v)}
-            aria-haspopup="listbox"
-            aria-expanded={dropdownOpen}
+            onClick={() => {
+              if (canOpenProjectDropdown) {
+                setDropdownOpen((v) => !v);
+              }
+            }}
+            aria-haspopup={canOpenProjectDropdown ? "listbox" : undefined}
+            aria-expanded={canOpenProjectDropdown ? dropdownOpen : undefined}
+            aria-disabled={canOpenProjectDropdown ? undefined : "true"}
           >
             <span className="mobile-project-selector-eyebrow">Project</span>
             <span className="mobile-project-selector-name">
@@ -173,15 +186,17 @@ export function MobileTrackNav({
                 {currentAlbumIndex + 1}&thinsp;/&thinsp;{albumCount}
               </span>
             )}
-            <span
-              className={`mobile-project-chevron${dropdownOpen ? " open" : ""}`}
-              aria-hidden="true"
-            >
-              ▾
-            </span>
+            {canOpenProjectDropdown && (
+              <span
+                className={`mobile-project-chevron${dropdownOpen ? " open" : ""}`}
+                aria-hidden="true"
+              >
+                ▾
+              </span>
+            )}
           </button>
 
-          {dropdownOpen && (
+          {canOpenProjectDropdown && dropdownOpen && (
             <div className="mobile-project-dropdown" role="listbox">
               {effectiveAlbums.map((album) => {
                 const isActive = album.id === selectedAlbum?.id;
